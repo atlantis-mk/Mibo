@@ -103,6 +103,52 @@ func TestProbeFileDoesNotReconcileWithoutDurationData(t *testing.T) {
 	}
 }
 
+func TestProbeFileMarksAmbiguousFallbackForReview(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tempRoot := t.TempDir()
+	newPath := filepath.Join(tempRoot, "Renamed.Movie.2024.mkv")
+	if err := os.WriteFile(newPath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write media file: %v", err)
+	}
+
+	db, libraryRecord, probeSvc := newReconcileHarness(t, tempRoot, "7200.2")
+	seed := seedFallbackReconcileData(t, ctx, db, libraryRecord.ID, filepath.Join(tempRoot, "MovieA.2024.mkv"), newPath)
+	otherDeletedAt := time.Now().UTC().Add(-time.Minute)
+	otherItem := database.MediaItem{LibraryID: libraryRecord.ID, Type: "movie", Title: "MovieB", SourcePath: filepath.Join(tempRoot, "MovieB.2024.mkv"), MatchStatus: "matched", Status: "missing", DeletedAt: &otherDeletedAt}
+	if err := db.WithContext(ctx).Create(&otherItem).Error; err != nil {
+		t.Fatalf("create other item: %v", err)
+	}
+	otherFile := database.MediaFile{LibraryID: libraryRecord.ID, MediaItemID: &otherItem.ID, StoragePath: otherItem.SourcePath, SizeBytes: 4096, Fingerprint: "other-fingerprint", ProbeStatus: probe.StatusReady, DurationSeconds: float64Ptr(7200.1), IdentitySource: "provider_evidence", IdentityStatus: "provisional", ReviewStatus: "pending", DeletedAt: &otherDeletedAt}
+	if err := db.WithContext(ctx).Create(&otherFile).Error; err != nil {
+		t.Fatalf("create other file: %v", err)
+	}
+
+	if err := probeSvc.ProbeFile(ctx, seed.newFile.ID); err != nil {
+		t.Fatalf("probe file: %v", err)
+	}
+
+	var newFile database.MediaFile
+	if err := db.WithContext(ctx).First(&newFile, seed.newFile.ID).Error; err != nil {
+		t.Fatalf("reload new file: %v", err)
+	}
+	if newFile.ReviewStatus != "review_needed" {
+		t.Fatalf("expected ambiguous fallback to require review, got %q", newFile.ReviewStatus)
+	}
+	if newFile.MediaItemID == nil || *newFile.MediaItemID != seed.newItem.ID {
+		t.Fatalf("expected ambiguous fallback to stay on provisional item %d, got %#v", seed.newItem.ID, newFile.MediaItemID)
+	}
+
+	var progress database.PlaybackProgress
+	if err := db.WithContext(ctx).First(&progress, seed.progress.ID).Error; err != nil {
+		t.Fatalf("reload progress: %v", err)
+	}
+	if progress.MediaFileID == nil || *progress.MediaFileID != seed.oldFile.ID {
+		t.Fatalf("expected prior progress to stay on original file %d, got %#v", seed.oldFile.ID, progress.MediaFileID)
+	}
+}
+
 type reconcileSeed struct {
 	oldItem  database.MediaItem
 	newItem  database.MediaItem
