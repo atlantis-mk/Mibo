@@ -13,7 +13,7 @@ This roadmap turns Mibo from a working prototype into a stable media platform by
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Access & Platform Boundary** - Users enter the app through a stable authenticated boundary that hides storage-provider details. Completed 2026-04-21.
-- [ ] **Phase 2: Library & Async Sync Foundation** - Admins connect storage and run scans as background work instead of blocking requests.
+- [x] **Phase 2: Library & Async Sync Foundation** - Admins connect storage and run scans as background work instead of blocking requests. Completed 2026-04-22.
 - [x] **Phase 3: Semantic Catalog & Discovery** - Users browse a semantic media catalog rather than raw files. Completed 2026-04-21.
 - [ ] **Phase 4: Playback Entry & Unified Progress** - Users can start playback and resume consistently across clients.
 - [ ] **Phase 5: Playback Decision Intelligence** - Playback selection becomes capability-aware with direct-play-first behavior.
@@ -42,11 +42,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. An administrator can create a library, bind it to a source and root path, and save that configuration successfully.
   3. When an administrator triggers a scan, the app shows that work is queued and processed asynchronously rather than hanging the request.
   4. Scheduled refreshes can be configured so library updates continue happening without manual rescans.
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Backend async scan settings, scheduled refresh, and jobs filtering contracts
-- [ ] 02-02-PLAN.md — Web admin source/library flow, status badges, jobs monitoring, and refresh controls
+- [x] 02-01-PLAN.md — Backend async scan settings, scheduled refresh, and jobs filtering contracts
+- [x] 02-02-PLAN.md — Web admin source/library flow, status badges, jobs monitoring, and refresh controls
+- [x] 02-03-PLAN.md — Close the auth-boundary verification gap for admin source/library/scan/jobs endpoints
 
 ### Phase 3: Semantic Catalog & Discovery
 **Goal**: Users can explore a durable media catalog organized as movies and shows with useful metadata and library-aware discovery.
@@ -68,7 +69,13 @@ Plans:
   1. A user can open a media detail page, request playback, and receive a playback entry that works for the current client.
   2. A user's in-progress playback position is saved durably while watching.
   3. The same user can leave playback on one client and resume from the saved position on another client through the same API model.
-**Plans**: TBD
+**Plans**: 4 plans
+ 
+Plans:
+- [x] 04-01-PLAN.md — Backend playback auth and canonical progress merge semantics
+- [ ] 04-02-PLAN.md — Frontend playback route intent contract and controller seam
+- [ ] 04-03-PLAN.md — Home/detail/playback UI wiring for resume and restart behavior
+- [ ] 04-04-PLAN.md — Manual end-to-end playback/progress verification
 **UI hint**: yes
 
 ### Phase 5: Playback Decision Intelligence
@@ -99,8 +106,8 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
-| 2. Library & Async Sync Foundation | 1/1 | Ready to execute | - |
+| 2. Library & Async Sync Foundation | 3/3 | Complete | 2026-04-22 |
 | 3. Semantic Catalog & Discovery | 3/3 | Complete | 2026-04-21 |
-| 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
+| 4. Playback Entry & Unified Progress | 1/4 | In progress | 2026-04-21 |
 | 5. Playback Decision Intelligence | 0/TBD | Not started | - |
 | 6. Stable Identity & Incremental Refresh | 0/TBD | Not started | - |

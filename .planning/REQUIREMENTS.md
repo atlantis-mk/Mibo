@@ -18,10 +18,10 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 
 ### Libraries
 
-- [ ] **LIBR-01**: 管理员可以添加基于本地磁盘、NAS 或云盘接入的媒体源
-- [ ] **LIBR-02**: 管理员可以创建媒体库并将其绑定到指定媒体源和根路径
-- [ ] **LIBR-03**: 管理员可以手动触发媒体库扫描并看到任务被异步处理
-- [ ] **LIBR-04**: 管理员可以为媒体库配置定时刷新，使新增内容能够按计划进入系统
+- [x] **LIBR-01**: 管理员可以添加基于本地磁盘、NAS 或云盘接入的媒体源
+- [x] **LIBR-02**: 管理员可以创建媒体库并将其绑定到指定媒体源和根路径
+- [x] **LIBR-03**: 管理员可以手动触发媒体库扫描并看到任务被异步处理
+- [x] **LIBR-04**: 管理员可以为媒体库配置定时刷新，使新增内容能够按计划进入系统
 
 ### Catalog
 
@@ -35,18 +35,18 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 **: 用户可以看到带海报、简介和基础详情的媒体条目，而不是仅看到原始文件名
 - [x] **CATA-05
 **: 用户可以按媒体库浏览、筛选、搜索并进入媒体详情页
-- [ ] **CATA-06**: 系统可以把扫描、识别、元数据匹配和 `ffprobe` 补全拆分为可重试的后台任务，而不是在单次请求中完成
+- [x] **CATA-06**: 系统可以把扫描、识别、元数据匹配和 `ffprobe` 补全拆分为可重试的后台任务，而不是在单次请求中完成
 
 ### Playback
 
-- [ ] **PLAY-01**: 用户可以从媒体详情页请求播放，并获得对当前客户端可用的播放入口
+- [x] **PLAY-01**: 用户可以从媒体详情页请求播放，并获得对当前客户端可用的播放入口
 - [ ] **PLAY-02**: 系统在可行时优先提供直链播放，在不可行时提供明确的回退路径
 - [ ] **PLAY-03**: 系统可以利用 `ffprobe` 产生的媒体信息提升播放决策质量
 
 ### Progress
 
-- [ ] **PROG-01**: 用户在播放过程中上报的进度会被持久化，并在下次继续观看时可恢复
-- [ ] **PROG-02**: 同一用户的播放进度可以通过统一 API 在 Web、移动端和 TV 端之间同步
+- [x] **PROG-01**: 用户在播放过程中上报的进度会被持久化，并在下次继续观看时可恢复
+- [x] **PROG-02**: 同一用户的播放进度可以通过统一 API 在 Web、移动端和 TV 端之间同步
 
 ### Sync
 
@@ -95,21 +95,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ACCS-01 | Phase 1 | Complete |
 | ACCS-02 | Phase 1 | Complete |
 | ACCS-03 | Phase 1 | Complete |
-| LIBR-01 | Phase 2 | Pending |
-| LIBR-02 | Phase 2 | Pending |
-| LIBR-03 | Phase 2 | Pending |
-| LIBR-04 | Phase 2 | Pending |
+| LIBR-01 | Phase 2 | Complete |
+| LIBR-02 | Phase 2 | Complete |
+| LIBR-03 | Phase 2 | Complete |
+| LIBR-04 | Phase 2 | Complete |
 | CATA-01 | Phase 1 | Complete |
 | CATA-02 | Phase 3 | Pending |
 | CATA-03 | Phase 3 | Complete |
 | CATA-04 | Phase 3 | Complete |
 | CATA-05 | Phase 3 | Pending |
-| CATA-06 | Phase 2 | Pending |
-| PLAY-01 | Phase 4 | Pending |
+| CATA-06 | Phase 2 | Complete |
+| PLAY-01 | Phase 4 | Complete |
 | PLAY-02 | Phase 5 | Pending |
 | PLAY-03 | Phase 5 | Pending |
-| PROG-01 | Phase 4 | Pending |
-| PROG-02 | Phase 4 | Pending |
+| PROG-01 | Phase 4 | Complete |
+| PROG-02 | Phase 4 | Complete |
 | SYNC-01 | Phase 6 | Pending |
 | SYNC-02 | Phase 6 | Pending |
 | SYNC-03 | Phase 6 | Pending |
@@ -121,4 +121,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-04-21*
-*Last updated: 2026-04-21 after phase 1 completion*
+*Last updated: 2026-04-22 after phase 2 completion*
