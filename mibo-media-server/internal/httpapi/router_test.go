@@ -309,7 +309,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc).RunOnce(ctx)
+	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc).RunOnce(ctx)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/libraries/1/items", nil)
@@ -715,7 +715,7 @@ func TestAuthAndProgressEndpoints(t *testing.T) {
 	if _, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"}); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc).RunOnce(ctx)
+	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc).RunOnce(ctx)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"username":"alice","password":"password123"}`))
@@ -906,7 +906,7 @@ func TestRecentlyAddedEndpoint(t *testing.T) {
 	if _, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"}); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc).RunOnce(ctx)
+	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc).RunOnce(ctx)
 
 	var items []database.MediaItem
 	if err := db.WithContext(ctx).Order("id asc").Find(&items).Error; err != nil {
