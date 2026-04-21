@@ -114,6 +114,8 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/libraries/{id}/scan", router.handleQueueLibraryScan)
 	mux.HandleFunc("GET /api/v1/libraries/{id}/items", router.handleListLibraryItems)
 	mux.HandleFunc("GET /api/v1/media-items/{id}", router.handleGetMediaItem)
+	mux.HandleFunc("GET /api/v1/tv/{tmdb_id}/seasons", router.handleListTVSeasons)
+	mux.HandleFunc("GET /api/v1/tv/{tmdb_id}/seasons/{n}/episodes", router.handleListTVSeasonEpisodes)
 	mux.HandleFunc("GET /api/v1/media-items/{id}/progress", router.handleGetMediaItemProgress)
 	mux.HandleFunc("POST /api/v1/media-items/{id}/metadata/apply", router.handleApplyMediaItemMetadata)
 	mux.HandleFunc("POST /api/v1/media-items/{id}/metadata/search", router.handleSearchMediaItemMetadata)
@@ -786,6 +788,53 @@ func (r *Router) handleGetMediaItem(w http.ResponseWriter, req *http.Request) {
 	writeJSON(req.Context(), w, http.StatusOK, item)
 }
 
+func (r *Router) handleListTVSeasons(w http.ResponseWriter, req *http.Request) {
+	if r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("metadata service unavailable"))
+		return
+	}
+
+	tmdbID, err := parseIntPathValue(req, "tmdb_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	seasons, err := r.metadata.ListTVSeasons(req.Context(), tmdbID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	writeJSON(req.Context(), w, http.StatusOK, seasons)
+}
+
+func (r *Router) handleListTVSeasonEpisodes(w http.ResponseWriter, req *http.Request) {
+	if r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("metadata service unavailable"))
+		return
+	}
+
+	tmdbID, err := parseIntPathValue(req, "tmdb_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	seasonNumber, err := parseIntPathValue(req, "n")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	episodes, err := r.metadata.ListSeasonEpisodes(req.Context(), tmdbID, seasonNumber)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	writeJSON(req.Context(), w, http.StatusOK, episodes)
+}
+
 func (r *Router) handleGetMediaItemProgress(w http.ResponseWriter, req *http.Request) {
 	user, err := r.requireUser(req)
 	if err != nil {
@@ -1256,6 +1305,20 @@ func parseUintPathValue(req *http.Request, key string) (uint, error) {
 	}
 
 	return uint(parsed), nil
+}
+
+func parseIntPathValue(req *http.Request, key string) (int, error) {
+	value := req.PathValue(key)
+	if value == "" {
+		return 0, fmt.Errorf("missing path parameter %q", key)
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid path parameter %q", key)
+	}
+
+	return parsed, nil
 }
 
 func parseOptionalUintQuery(req *http.Request, key string) (uint, error) {
