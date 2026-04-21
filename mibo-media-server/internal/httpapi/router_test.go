@@ -1301,6 +1301,69 @@ func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
 	})
 }
 
+func TestAdminScanAndJobsEndpointsRequireAuth(t *testing.T) {
+	router, db, _, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mediaRoot := filepath.Join(storageRoot, "jobs-media")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create media root: %v", err)
+	}
+
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{
+		Provider: "local",
+		Name:     "Jobs Source",
+		RootPath: mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Jobs Library",
+		Type:          "movies",
+		MediaSourceID: source.ID,
+		RootPath:      mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	failedJob := database.Job{
+		Kind:         "sync_library",
+		Status:       jobs.StatusFailed,
+		PayloadJSON:  `{"library_id":1}`,
+		ErrorMessage: "boom",
+		AvailableAt:  time.Now().UTC(),
+	}
+	if err := db.WithContext(ctx).Create(&failedJob).Error; err != nil {
+		t.Fatalf("create failed job: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "queue library scan", method: http.MethodPost, path: fmt.Sprintf("/api/v1/libraries/%d/scan", createdLibrary.ID)},
+		{name: "list jobs", method: http.MethodGet, path: "/api/v1/jobs"},
+		{name: "retry job", method: http.MethodPost, path: fmt.Sprintf("/api/v1/jobs/%d/retry", failedJob.ID)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("expected unauthorized status, got %d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestDeleteLibraryEndpoint(t *testing.T) {
 	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
