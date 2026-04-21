@@ -505,6 +505,11 @@ func (r *Router) handleHomeDiscovery(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleCreateMediaSource(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	var input library.CreateMediaSourceInput
 	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -590,6 +595,11 @@ func (r *Router) handleTestTemporaryOpenList(w http.ResponseWriter, req *http.Re
 }
 
 func (r *Router) handleUpdateMediaSource(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	sourceID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -618,6 +628,11 @@ func (r *Router) handleUpdateMediaSource(w http.ResponseWriter, req *http.Reques
 }
 
 func (r *Router) handleListMediaSources(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	sources, err := r.library.ListMediaSourceViews(req.Context())
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
@@ -628,6 +643,11 @@ func (r *Router) handleListMediaSources(w http.ResponseWriter, req *http.Request
 }
 
 func (r *Router) handleDeleteMediaSource(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	sourceID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -668,6 +688,11 @@ func (r *Router) handleBrowseMediaSource(w http.ResponseWriter, req *http.Reques
 }
 
 func (r *Router) handleCreateLibrary(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	var input library.CreateLibraryInput
 	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -687,6 +712,11 @@ func (r *Router) handleCreateLibrary(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleListLibraries(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	libraries, err := r.library.ListLibraries(req.Context())
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
@@ -713,6 +743,11 @@ func (r *Router) handleGetLibrary(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleDeleteLibrary(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	libraryID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)

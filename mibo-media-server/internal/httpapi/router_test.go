@@ -1194,7 +1194,7 @@ func TestHomeDiscoveryEndpoint(t *testing.T) {
 }
 
 func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
-	router, _, _, librarySvc, storageRoot := newDeleteTestRouter(t)
+	router, _, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1252,6 +1252,53 @@ func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
 			}
 		})
 	}
+
+	authHeader := createAuthHeader(t, ctx, authSvc)
+
+	t.Run("authenticated source and library setup still succeeds", func(t *testing.T) {
+		createSourceRecorder := httptest.NewRecorder()
+		createSourceRequest := httptest.NewRequest(http.MethodPost, "/api/v1/media-sources", strings.NewReader(fmt.Sprintf(`{"provider":"local","name":"Authed Source","root_path":%q}`, mediaRoot)))
+		createSourceRequest.Header.Set("Authorization", authHeader)
+		createSourceRequest.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(createSourceRecorder, createSourceRequest)
+		if createSourceRecorder.Code != http.StatusCreated {
+			t.Fatalf("create source status: %d body=%s", createSourceRecorder.Code, createSourceRecorder.Body.String())
+		}
+
+		var createSourceBody struct {
+			Data library.MediaSourceView `json:"data"`
+		}
+		if err := json.Unmarshal(createSourceRecorder.Body.Bytes(), &createSourceBody); err != nil {
+			t.Fatalf("decode create source response: %v", err)
+		}
+
+		createLibraryRecorder := httptest.NewRecorder()
+		createLibraryRequest := httptest.NewRequest(http.MethodPost, "/api/v1/libraries", strings.NewReader(fmt.Sprintf(`{"name":"Authed Library","type":"movies","media_source_id":%d,"root_path":%q}`, createSourceBody.Data.ID, mediaRoot)))
+		createLibraryRequest.Header.Set("Authorization", authHeader)
+		createLibraryRequest.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(createLibraryRecorder, createLibraryRequest)
+		if createLibraryRecorder.Code != http.StatusCreated {
+			t.Fatalf("create library status: %d body=%s", createLibraryRecorder.Code, createLibraryRecorder.Body.String())
+		}
+
+		listLibrariesRecorder := httptest.NewRecorder()
+		listLibrariesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/libraries", nil)
+		listLibrariesRequest.Header.Set("Authorization", authHeader)
+		router.ServeHTTP(listLibrariesRecorder, listLibrariesRequest)
+		if listLibrariesRecorder.Code != http.StatusOK {
+			t.Fatalf("list libraries status: %d body=%s", listLibrariesRecorder.Code, listLibrariesRecorder.Body.String())
+		}
+
+		var listLibrariesBody struct {
+			Data []library.LibraryDetail `json:"data"`
+		}
+		if err := json.Unmarshal(listLibrariesRecorder.Body.Bytes(), &listLibrariesBody); err != nil {
+			t.Fatalf("decode list libraries response: %v", err)
+		}
+		if len(listLibrariesBody.Data) == 0 {
+			t.Fatal("expected authenticated library list to include created library")
+		}
+	})
 }
 
 func TestDeleteLibraryEndpoint(t *testing.T) {
@@ -1289,6 +1336,7 @@ func TestDeleteLibraryEndpoint(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v1/libraries/%d", record.ID), nil)
+	request.Header.Set("Authorization", createAuthHeader(t, ctx, authSvc))
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("delete library status: %d body=%s", recorder.Code, recorder.Body.String())
@@ -1350,6 +1398,7 @@ func TestDeleteMediaSourceEndpointCascadesLibraries(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v1/media-sources/%d", source.ID), nil)
+	request.Header.Set("Authorization", createAuthHeader(t, ctx, authSvc))
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("delete source status: %d body=%s", recorder.Code, recorder.Body.String())
@@ -1787,6 +1836,7 @@ func TestUpdateMediaSourcePreservesOpenListPasswordWhenBlank(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/api/v1/media-sources/%d", source.ID), strings.NewReader(fmt.Sprintf(`{"name":"Updated","root_path":"/media/new","config":{"openlist":{"base_url":"%s","username":"admin","password":""}}}`, openList.URL)))
+	request.Header.Set("Authorization", createAuthHeader(t, ctx, authSvc))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
