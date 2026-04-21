@@ -135,8 +135,10 @@ func (r *Runner) runOnce(ctx context.Context) {
 
 func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 	switch job.Kind {
-	case "sync_library":
+	case library.JobKindSyncLibrary:
 		return r.library.RunSyncLibrary(ctx, job)
+	case library.JobKindTargetedRefresh:
+		return r.library.RunTargetedRefresh(ctx, job)
 	case "match_media_item":
 		var payload struct {
 			MediaItemID uint `json:"media_item_id"`

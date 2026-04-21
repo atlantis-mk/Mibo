@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -55,6 +56,17 @@ type CreateLibraryInput struct {
 	MediaSourceID uint   `json:"media_source_id"`
 	RootPath      string `json:"root_path"`
 }
+
+type targetedRefreshPayload struct {
+	LibraryID uint   `json:"library_id"`
+	RootPath  string `json:"root_path"`
+	Reason    string `json:"reason"`
+}
+
+const (
+	JobKindSyncLibrary     = "sync_library"
+	JobKindTargetedRefresh = "targeted_refresh"
+)
 
 func NewService(cfg config.Config, db *gorm.DB, registry *providers.Registry, jobs *jobs.Service) *Service {
 	return &Service{cfg: cfg, db: db, storage: registry, jobs: jobs}
@@ -280,6 +292,32 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 	return library, job, nil
 }
 
+func (s *Service) QueueTargetedRefresh(ctx context.Context, libraryID uint, rootPath, reason string) (database.Job, error) {
+	record, _, provider, err := s.providerForLibrary(ctx, libraryID)
+	if err != nil {
+		return database.Job{}, err
+	}
+	if s.jobs == nil {
+		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	}
+
+	normalizedReason := strings.TrimSpace(strings.ToLower(reason))
+	if normalizedReason == "" {
+		normalizedReason = "manual"
+	}
+	targetRoot, err := scopedRefreshRoot(provider.Name(), record.RootPath, rootPath)
+	if err != nil {
+		return database.Job{}, err
+	}
+
+	jobKey := fmt.Sprintf("targeted-refresh:%d:%s:%s", record.ID, targetRoot, normalizedReason)
+	return s.jobs.EnqueueUnique(ctx, JobKindTargetedRefresh, jobKey, targetedRefreshPayload{
+		LibraryID: record.ID,
+		RootPath:  targetRoot,
+		Reason:    normalizedReason,
+	})
+}
+
 func (s *Service) providerForSource(ctx context.Context, sourceID uint) (database.MediaSource, storage.Provider, error) {
 	var source database.MediaSource
 	if err := s.db.WithContext(ctx).First(&source, sourceID).Error; err != nil {
@@ -480,4 +518,32 @@ func normalizePathForProvider(providerName, input string) string {
 		return trimmed
 	}
 	return normalizePath(input)
+}
+
+func scopedRefreshRoot(providerName, libraryRoot, requestedRoot string) (string, error) {
+	normalizedLibraryRoot := normalizePathForProvider(providerName, libraryRoot)
+	normalizedRequestedRoot := normalizePathForProvider(providerName, requestedRoot)
+	if strings.TrimSpace(requestedRoot) == "" || normalizedRequestedRoot == "/" {
+		normalizedRequestedRoot = normalizedLibraryRoot
+	}
+
+	if strings.EqualFold(strings.TrimSpace(providerName), "local") {
+		libraryClean := filepath.Clean(normalizedLibraryRoot)
+		requestedClean := filepath.Clean(normalizedRequestedRoot)
+		rel, err := filepath.Rel(libraryClean, requestedClean)
+		if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+			return "", fmt.Errorf("targeted refresh path %s is outside library root %s", requestedClean, libraryClean)
+		}
+		return requestedClean, nil
+	}
+
+	libraryClean := strings.TrimRight(normalizedLibraryRoot, "/")
+	if libraryClean == "" {
+		libraryClean = "/"
+	}
+	requestedClean := normalizePath(normalizedRequestedRoot)
+	if libraryClean != "/" && requestedClean != libraryClean && !strings.HasPrefix(requestedClean, libraryClean+"/") {
+		return "", fmt.Errorf("targeted refresh path %s is outside library root %s", requestedClean, normalizedLibraryRoot)
+	}
+	return requestedClean, nil
 }

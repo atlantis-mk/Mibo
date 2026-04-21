@@ -69,13 +69,18 @@ type SyncResult struct {
 	MediaFilesUpserted int `json:"media_files_upserted"`
 }
 
+type scanMode struct {
+	partial  bool
+	rootPath string
+}
+
 func (s *Service) QueueLibraryScan(ctx context.Context, libraryID uint) (database.Job, error) {
 	var record database.Library
 	if err := s.db.WithContext(ctx).First(&record, libraryID).Error; err != nil {
 		return database.Job{}, err
 	}
 
-	return s.jobs.EnqueueUnique(ctx, "sync_library", fmt.Sprintf("scan-library-%d", record.ID), map[string]any{
+	return s.jobs.EnqueueUnique(ctx, JobKindSyncLibrary, fmt.Sprintf("scan-library-%d", record.ID), map[string]any{
 		"library_id": record.ID,
 		"root_path":  record.RootPath,
 	})
@@ -120,7 +125,45 @@ func (s *Service) RunSyncLibrary(ctx context.Context, job database.Job) error {
 	return nil
 }
 
+func (s *Service) RunTargetedRefresh(ctx context.Context, job database.Job) error {
+	var payload targetedRefreshPayload
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		return fmt.Errorf("decode targeted_refresh payload: %w", err)
+	}
+
+	record, _, provider, err := s.providerForLibrary(ctx, payload.LibraryID)
+	if err != nil {
+		return err
+	}
+
+	rootPath, err := scopedRefreshRoot(provider.Name(), record.RootPath, payload.RootPath)
+	if err != nil {
+		return err
+	}
+
+	if err := s.updateLibraryStatus(ctx, record.ID, "syncing"); err != nil {
+		return err
+	}
+
+	result, err := s.scanLibraryWithMode(ctx, provider, record, rootPath, scanMode{partial: true, rootPath: rootPath})
+	if err != nil {
+		_ = s.updateLibraryStatus(ctx, record.ID, "error")
+		return err
+	}
+
+	if err := s.updateLibraryStatus(ctx, record.ID, "active"); err != nil {
+		return err
+	}
+
+	_ = result
+	return nil
+}
+
 func (s *Service) scanLibrary(ctx context.Context, provider storage.Provider, library database.Library, rootPath string) (SyncResult, error) {
+	return s.scanLibraryWithMode(ctx, provider, library, rootPath, scanMode{})
+}
+
+func (s *Service) scanLibraryWithMode(ctx context.Context, provider storage.Provider, library database.Library, rootPath string, mode scanMode) (SyncResult, error) {
 	resolved, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: rootPath})
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("resolve library root: %w", err)
@@ -137,11 +180,21 @@ func (s *Service) scanLibrary(ctx context.Context, provider storage.Provider, li
 		return SyncResult{}, err
 	}
 
-	if err := s.cleanupMissingFiles(ctx, library.ID, seenFiles); err != nil {
-		return SyncResult{}, err
-	}
-	if err := s.cleanupMissingItems(ctx, library.ID, seenItems); err != nil {
-		return SyncResult{}, err
+	if mode.partial {
+		// T-06-09: partial refreshes only reconcile missing rows inside the targeted subtree.
+		if err := s.cleanupMissingFilesInScope(ctx, library.ID, mode.rootPath, seenFiles); err != nil {
+			return SyncResult{}, err
+		}
+		if err := s.cleanupMissingItemsInScope(ctx, library.ID, mode.rootPath, seenItems); err != nil {
+			return SyncResult{}, err
+		}
+	} else {
+		if err := s.cleanupMissingFiles(ctx, library.ID, seenFiles); err != nil {
+			return SyncResult{}, err
+		}
+		if err := s.cleanupMissingItems(ctx, library.ID, seenItems); err != nil {
+			return SyncResult{}, err
+		}
 	}
 
 	return result, nil
@@ -355,6 +408,12 @@ func (s *Service) cleanupMissingFiles(ctx context.Context, libraryID uint, seen 
 	})
 }
 
+func (s *Service) cleanupMissingFilesInScope(ctx context.Context, libraryID uint, rootPath string, seen map[string]struct{}) error {
+	return markMissingRecordsInScope(ctx, s.db, &database.MediaFile{}, libraryID, "storage_path", rootPath, seen, map[string]any{
+		"deleted_at": time.Now().UTC(),
+	})
+}
+
 func (s *Service) stageFallbackCandidate(ctx context.Context, libraryID uint, storagePath string) error {
 	return s.db.WithContext(ctx).
 		Model(&database.MediaFile{}).
@@ -364,6 +423,13 @@ func (s *Service) stageFallbackCandidate(ctx context.Context, libraryID uint, st
 
 func (s *Service) cleanupMissingItems(ctx context.Context, libraryID uint, seen map[string]struct{}) error {
 	return markMissingRecords(ctx, s.db, &database.MediaItem{}, "library_id = ?", libraryID, "source_path", seen, map[string]any{
+		"deleted_at": time.Now().UTC(),
+		"status":     "missing",
+	})
+}
+
+func (s *Service) cleanupMissingItemsInScope(ctx context.Context, libraryID uint, rootPath string, seen map[string]struct{}) error {
+	return markMissingRecordsInScope(ctx, s.db, &database.MediaItem{}, libraryID, "source_path", rootPath, seen, map[string]any{
 		"deleted_at": time.Now().UTC(),
 		"status":     "missing",
 	})
@@ -383,6 +449,38 @@ func markMissingRecords(ctx context.Context, db *gorm.DB, model any, baseQuery s
 	}
 
 	return query.Updates(updates).Error
+}
+
+func markMissingRecordsInScope(ctx context.Context, db *gorm.DB, model any, libraryID uint, pathColumn string, rootPath string, seen map[string]struct{}, updates map[string]any) error {
+	query := db.WithContext(ctx).
+		Model(model).
+		Where("library_id = ? AND deleted_at IS NULL", libraryID)
+	query = applyScopedPathFilter(query, pathColumn, rootPath)
+
+	if len(seen) > 0 {
+		paths := make([]string, 0, len(seen))
+		for itemPath := range seen {
+			paths = append(paths, itemPath)
+		}
+		query = query.Where(pathColumn+" NOT IN ?", paths)
+	}
+
+	return query.Updates(updates).Error
+}
+
+func applyScopedPathFilter(query *gorm.DB, pathColumn string, rootPath string) *gorm.DB {
+	normalizedRoot := strings.TrimSpace(rootPath)
+	if normalizedRoot == "" || normalizedRoot == "/" {
+		return query
+	}
+	trimmedRoot := strings.TrimRight(normalizedRoot, "/")
+	if trimmedRoot == "" {
+		trimmedRoot = "/"
+	}
+	if trimmedRoot == "/" {
+		return query
+	}
+	return query.Where("("+pathColumn+" = ? OR "+pathColumn+" LIKE ?)", trimmedRoot, trimmedRoot+"/%")
 }
 
 func classifyMediaFile(libraryType string, object storage.Object) classifiedMedia {
