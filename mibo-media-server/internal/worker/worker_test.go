@@ -280,6 +280,77 @@ func TestPartialSyncDoesNotSoftDeleteUnseenLibraryRows(t *testing.T) {
 	}
 }
 
+func TestRunOnceProcessesTargetedRefreshJob(t *testing.T) {
+	t.Parallel()
+
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	movieDir := filepath.Join(mediaRoot, "Movies")
+	showDir := filepath.Join(movieDir, "ShowB")
+	if err := os.MkdirAll(showDir, 0o755); err != nil {
+		t.Fatalf("create media dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "MovieA.2024.mkv"), []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write movie file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(showDir, "ShowB.S01E02.mkv"), []byte("episode"), 0o644); err != nil {
+		t.Fatalf("write episode file: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ffprobePath := writeFakeFFprobe(t)
+	cfg := config.Config{
+		Local:   config.LocalStorageConfig{RootPath: mediaRoot},
+		FFprobe: config.FFprobeConfig{Enabled: true, Path: ffprobePath, Timeout: 2 * time.Second},
+		Worker:  config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond},
+	}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, metadata.NewService(db, cfg.Metadata, settingsSvc), probe.NewService(db, registry, cfg.FFprobe), settingsSvc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	runner.RunOnce(ctx)
+
+	if err := os.WriteFile(filepath.Join(showDir, "ShowB.S01E03.mkv"), []byte("episode-2"), 0o644); err != nil {
+		t.Fatalf("write new episode: %v", err)
+	}
+	targetedJob, err := librarySvc.QueueTargetedRefresh(ctx, record.ID, showDir, "storage_event")
+	if err != nil {
+		t.Fatalf("queue targeted refresh: %v", err)
+	}
+	runner.RunOnce(ctx)
+
+	var storedJob database.Job
+	if err := db.WithContext(ctx).First(&storedJob, targetedJob.ID).Error; err != nil {
+		t.Fatalf("reload targeted job: %v", err)
+	}
+	if storedJob.Status != jobs.StatusCompleted {
+		t.Fatalf("expected targeted refresh job completed, got %q", storedJob.Status)
+	}
+
+	var episodeCount int64
+	if err := db.WithContext(ctx).Model(&database.MediaFile{}).Where("library_id = ? AND deleted_at IS NULL AND storage_path LIKE ?", record.ID, filepath.Join(showDir, "%")).Count(&episodeCount).Error; err != nil {
+		t.Fatalf("count episode files: %v", err)
+	}
+	if episodeCount != 2 {
+		t.Fatalf("expected targeted refresh to scan subtree files, got %d", episodeCount)
+	}
+}
+
 func newTMDBTestServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
