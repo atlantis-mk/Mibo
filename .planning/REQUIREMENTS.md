@@ -31,7 +31,8 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 **: 系统可以在扫描后把媒体文件写入可追踪的 `media_files` 目录索引
 - [x] **CATA-03
 **: 系统可以把识别出的内容组织为稳定的电影、剧集、季、集语义结构
-- [ ] **CATA-04**: 用户可以看到带海报、简介和基础详情的媒体条目，而不是仅看到原始文件名
+- [x] **CATA-04
+**: 用户可以看到带海报、简介和基础详情的媒体条目，而不是仅看到原始文件名
 - [x] **CATA-05
 **: 用户可以按媒体库浏览、筛选、搜索并进入媒体详情页
 - [ ] **CATA-06**: 系统可以把扫描、识别、元数据匹配和 `ffprobe` 补全拆分为可重试的后台任务，而不是在单次请求中完成
@@ -100,8 +101,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIBR-04 | Phase 2 | Pending |
 | CATA-01 | Phase 1 | Complete |
 | CATA-02 | Phase 3 | Pending |
-| CATA-03 | Phase 3 | Pending |
-| CATA-04 | Phase 3 | Pending |
+| CATA-03 | Phase 3 | Complete |
+| CATA-04 | Phase 3 | Complete |
 | CATA-05 | Phase 3 | Pending |
 | CATA-06 | Phase 2 | Pending |
 | PLAY-01 | Phase 4 | Pending |

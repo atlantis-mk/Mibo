@@ -96,7 +96,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 |-------|----------------|--------|-----------|
 | 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
 | 2. Library & Async Sync Foundation | 1/1 | Ready to execute | - |
-| 3. Semantic Catalog & Discovery | 1/3 | In Progress | - |
+| 3. Semantic Catalog & Discovery | 2/3 | In Progress | - |
 | 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
 | 5. Playback Decision Intelligence | 0/TBD | Not started | - |
 | 6. Stable Identity & Incremental Refresh | 0/TBD | Not started | - |
