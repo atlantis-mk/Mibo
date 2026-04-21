@@ -90,6 +90,45 @@ func TestReadyz(t *testing.T) {
 	}
 }
 
+func TestStorageEventEndpointRequiresAuth(t *testing.T) {
+	t.Parallel()
+
+	router, _, _, _, libraryID, moviePath := newStorageEventTestRouter(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"update","path":%q}`, libraryID, moviePath)))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestStorageEventEndpointEnqueuesTargetedRefresh(t *testing.T) {
+	t.Parallel()
+
+	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"update","path":%q}`, libraryID, moviePath)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var queuedJob database.Job
+	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
+		t.Fatalf("load queued job: %v", err)
+	}
+	if queuedJob.Kind != library.JobKindTargetedRefresh {
+		t.Fatalf("expected targeted refresh job, got %q", queuedJob.Kind)
+	}
+}
+
 func TestSetupStatus(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -2775,6 +2814,49 @@ func createAuthHeader(t *testing.T, ctx context.Context, authSvc *auth.Service) 
 		t.Fatalf("login auth user: %v", err)
 	}
 	return fmt.Sprintf("Bearer %s", loginResult.Token)
+}
+
+func newStorageEventTestRouter(t *testing.T) (http.Handler, *gorm.DB, *auth.Service, *library.Service, uint, string) {
+	t.Helper()
+
+	mediaRoot := filepath.Join(t.TempDir(), "storage-events-root")
+	movieDir := filepath.Join(mediaRoot, "Movies")
+	if err := os.MkdirAll(movieDir, 0o755); err != nil {
+		t.Fatalf("create movie dir: %v", err)
+	}
+	moviePath := filepath.Join(movieDir, "MovieA.2024.mkv")
+	if err := os.WriteFile(moviePath, []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write movie file: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Driver: "sqlite"},
+		Storage:  config.StorageConfig{Provider: "local"},
+		Local:    config.LocalStorageConfig{RootPath: mediaRoot},
+	}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc)
+
+	ctx := context.Background()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	return router, db, authSvc, librarySvc, record.ID, moviePath
 }
 
 func intPtr(value int) *int {
