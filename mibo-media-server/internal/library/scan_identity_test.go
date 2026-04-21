@@ -97,6 +97,50 @@ func TestOpenListAdapterPreservesIdentityEvidence(t *testing.T) {
 	}
 }
 
+func TestRunSyncLibraryCreatesFallbackCandidateWithoutPathRebind(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, svc, libraryRecord := newIdentityScanService(t)
+	provider := &stableIdentityProvider{objects: [][]storage.Object{
+		{{Name: "MovieA.2024.mkv", Path: "/library/MovieA.2024.mkv", Size: 2048, Provider: "alist", HashInfo: map[string]string{"sha256": "old"}, Modified: timePtr(time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))}},
+		{{Name: "MovieA.2024.mkv", Path: "/library/MovieA.2024.mkv", Size: 4096, Provider: "alist", HashInfo: map[string]string{"sha256": "new"}, Modified: timePtr(time.Date(2026, 4, 22, 11, 0, 0, 0, time.UTC))}},
+	}}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+
+	var files []database.MediaFile
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("id asc").Find(&files).Error; err != nil {
+		t.Fatalf("list media files: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected deleted candidate plus provisional replacement, got %d rows", len(files))
+	}
+	if files[0].DeletedAt == nil {
+		t.Fatalf("expected original file row to be soft deleted when only path matched")
+	}
+	if files[0].MediaItemID == nil {
+		t.Fatalf("expected deleted candidate to keep prior media item for later reconciliation")
+	}
+	if files[1].DeletedAt != nil {
+		t.Fatalf("expected new fallback candidate to stay active, got deleted_at=%v", files[1].DeletedAt)
+	}
+	if files[1].MediaItemID != nil {
+		t.Fatalf("expected fallback candidate to remain detached from playback continuity, got media_item_id=%v", *files[1].MediaItemID)
+	}
+	if files[1].IdentityStatus != mediaFileIdentityStatusProvisional {
+		t.Fatalf("expected provisional identity status, got %q", files[1].IdentityStatus)
+	}
+	if files[1].ReviewStatus != mediaFileReviewStatusPending {
+		t.Fatalf("expected pending review status, got %q", files[1].ReviewStatus)
+	}
+}
+
 type stableIdentityProvider struct {
 	mu      sync.Mutex
 	objects [][]storage.Object
