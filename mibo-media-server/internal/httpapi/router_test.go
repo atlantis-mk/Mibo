@@ -361,6 +361,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 	if itemBody.Data.Title != "MovieA" || len(itemBody.Data.Files) != 1 || len(itemBody.Data.Genres) != 1 || itemBody.Data.Files[0].VideoCodec != "h264" {
 		t.Fatalf("unexpected item detail: %#v", itemBody.Data)
 	}
+	login := registerAndLoginRouterUser(t, ctx, authSvc, "playback-test-user")
 	if len(itemBody.Data.Cast) != 1 || itemBody.Data.Cast[0].AvatarURL != tmdb.URL+"/images/actor-a.jpg" || itemBody.Data.Cast[0].Role != "Lead" {
 		t.Fatalf("unexpected cast detail: %#v", itemBody.Data.Cast)
 	}
@@ -376,6 +377,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-items/1/playback", nil)
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", login.Token))
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {

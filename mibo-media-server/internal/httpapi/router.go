@@ -989,6 +989,11 @@ func (r *Router) handleApplyMediaItemMetadata(w http.ResponseWriter, req *http.R
 }
 
 func (r *Router) handleGetPlaybackSource(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	mediaItemID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
