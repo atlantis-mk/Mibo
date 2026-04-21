@@ -248,8 +248,11 @@ func (s *Service) upsertMediaItem(ctx context.Context, libraryID uint, classifie
 }
 
 func (s *Service) upsertMediaFile(ctx context.Context, libraryID, mediaItemID uint, object storage.Object) (database.MediaFile, bool, error) {
+	fingerprint := buildFingerprint(object)
 	var file database.MediaFile
-	err := s.matchMediaFileForScan(ctx, libraryID, object, &file)
+	attachMediaItem := true
+	retirePathMatches := false
+	err := s.matchMediaFileForScan(ctx, libraryID, object, fingerprint, &file, &attachMediaItem, &retirePathMatches)
 	created := false
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -258,11 +261,19 @@ func (s *Service) upsertMediaFile(ctx context.Context, libraryID, mediaItemID ui
 		file = database.MediaFile{LibraryID: libraryID}
 		created = true
 	}
+	if created && retirePathMatches {
+		if err := s.stageFallbackCandidate(ctx, libraryID, object.Path); err != nil {
+			return database.MediaFile{}, false, err
+		}
+	}
 
-	fingerprint := buildFingerprint(object)
-	baseChanged := created || file.MediaItemID == nil || *file.MediaItemID != mediaItemID || file.Fingerprint != fingerprint
+	baseChanged := created || attachMediaItemChanged(file.MediaItemID, attachMediaItem, mediaItemID) || file.Fingerprint != fingerprint
 	file.StoragePath = object.Path
-	file.MediaItemID = &mediaItemID
+	if attachMediaItem {
+		file.MediaItemID = &mediaItemID
+	} else {
+		file.MediaItemID = nil
+	}
 	applyObjectIdentityEvidence(&file, object)
 	file.Container = strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), ".")
 	file.SizeBytes = object.Size
@@ -291,9 +302,10 @@ func (s *Service) upsertMediaFile(ctx context.Context, libraryID, mediaItemID ui
 	return file, false, nil
 }
 
-func (s *Service) matchMediaFileForScan(ctx context.Context, libraryID uint, object storage.Object, out *database.MediaFile) error {
+func (s *Service) matchMediaFileForScan(ctx context.Context, libraryID uint, object storage.Object, fingerprint string, out *database.MediaFile, attachMediaItem *bool, retirePathMatches *bool) error {
 	query := s.db.WithContext(ctx)
 	if identity := strings.TrimSpace(object.StableIdentity); identity != "" {
+		// D-01: exact stable identity is the only scan-time continuity match that may survive a path change.
 		err := query.
 			Where("library_id = ? AND stable_identity_key = ? AND deleted_at IS NULL", libraryID, identity).
 			First(out).Error
@@ -302,16 +314,48 @@ func (s *Service) matchMediaFileForScan(ctx context.Context, libraryID uint, obj
 		}
 	}
 
-	return query.
-		Where("library_id = ? AND storage_path = ?", libraryID, object.Path).
-		First(out).Error
+	var pathMatch database.MediaFile
+	err := query.
+		Where("library_id = ? AND storage_path = ? AND deleted_at IS NULL", libraryID, object.Path).
+		Order("id desc").
+		First(&pathMatch).Error
+	if err != nil {
+		if attachMediaItem != nil {
+			*attachMediaItem = true
+		}
+		return err
+	}
+
+	if pathMatch.Fingerprint == fingerprint {
+		if attachMediaItem != nil {
+			*attachMediaItem = pathMatch.MediaItemID != nil
+		}
+		*out = pathMatch
+		return nil
+	}
+
+	// D-02: without exact stable identity, path is a locator only. A changed object at the same path becomes
+	// a provisional fallback candidate instead of reusing the existing continuity-bound media file row.
+	if attachMediaItem != nil {
+		*attachMediaItem = false
+	}
+	if retirePathMatches != nil {
+		*retirePathMatches = true
+	}
+	return gorm.ErrRecordNotFound
 }
 
 func (s *Service) cleanupMissingFiles(ctx context.Context, libraryID uint, seen map[string]struct{}) error {
 	return markMissingRecords(ctx, s.db, &database.MediaFile{}, "library_id = ?", libraryID, "storage_path", seen, map[string]any{
-		"deleted_at":    time.Now().UTC(),
-		"media_item_id": nil,
+		"deleted_at": time.Now().UTC(),
 	})
+}
+
+func (s *Service) stageFallbackCandidate(ctx context.Context, libraryID uint, storagePath string) error {
+	return s.db.WithContext(ctx).
+		Model(&database.MediaFile{}).
+		Where("library_id = ? AND storage_path = ? AND deleted_at IS NULL", libraryID, storagePath).
+		Update("deleted_at", time.Now().UTC()).Error
 }
 
 func (s *Service) cleanupMissingItems(ctx context.Context, libraryID uint, seen map[string]struct{}) error {
@@ -471,6 +515,16 @@ func marshalObjectHashInfo(input map[string]string) string {
 		return ""
 	}
 	return string(encoded)
+}
+
+func attachMediaItemChanged(current *uint, attachMediaItem bool, mediaItemID uint) bool {
+	if !attachMediaItem {
+		return current != nil
+	}
+	if current == nil {
+		return true
+	}
+	return *current != mediaItemID
 }
 
 func isVideoFile(itemPath string) bool {
