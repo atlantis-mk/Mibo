@@ -84,12 +84,33 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| ACCS-01 | Phase 1 | Pending |
+| ACCS-02 | Phase 1 | Pending |
+| ACCS-03 | Phase 1 | Pending |
+| LIBR-01 | Phase 2 | Pending |
+| LIBR-02 | Phase 2 | Pending |
+| LIBR-03 | Phase 2 | Pending |
+| LIBR-04 | Phase 2 | Pending |
+| CATA-01 | Phase 1 | Pending |
+| CATA-02 | Phase 3 | Pending |
+| CATA-03 | Phase 3 | Pending |
+| CATA-04 | Phase 3 | Pending |
+| CATA-05 | Phase 3 | Pending |
+| CATA-06 | Phase 2 | Pending |
+| PLAY-01 | Phase 4 | Pending |
+| PLAY-02 | Phase 5 | Pending |
+| PLAY-03 | Phase 5 | Pending |
+| PROG-01 | Phase 4 | Pending |
+| PROG-02 | Phase 4 | Pending |
+| SYNC-01 | Phase 6 | Pending |
+| SYNC-02 | Phase 6 | Pending |
+| SYNC-03 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 20 total
-- Mapped to phases: 0
-- Unmapped: 20 ⚠️
+- Mapped to phases: 20
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-21*
-*Last updated: 2026-04-21 after initial definition*
+*Last updated: 2026-04-21 after roadmap creation*
