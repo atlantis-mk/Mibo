@@ -45,6 +45,7 @@ const (
 
 	mediaFileReviewStatusNone    = "none"
 	mediaFileReviewStatusPending = "pending"
+	mediaFileReviewStatusNeeded  = "review_needed"
 
 	fallbackDurationToleranceSeconds = 2.0
 )
@@ -565,8 +566,23 @@ func ReconcileProvisionalMediaFile(ctx context.Context, db *gorm.DB, mediaFileID
 			matches = append(matches, candidate)
 		}
 	}
-	if len(matches) != 1 {
-		return nil
+	if len(matches) == 0 {
+		return db.WithContext(ctx).
+			Model(&database.MediaFile{}).
+			Where("id = ?", file.ID).
+			Updates(map[string]any{
+				"review_status": mediaFileReviewStatusPending,
+				"review_reason": "no_high_confidence_match",
+			}).Error
+	}
+	if len(matches) > 1 {
+		return db.WithContext(ctx).
+			Model(&database.MediaFile{}).
+			Where("id = ?", file.ID).
+			Updates(map[string]any{
+				"review_status": mediaFileReviewStatusNeeded,
+				"review_reason": "ambiguous_size_duration_match",
+			}).Error
 	}
 
 	target := matches[0]
