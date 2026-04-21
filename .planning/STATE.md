@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 04-04-PLAN.md
-last_updated: "2026-04-21T21:20:15.757Z"
-last_activity: 2026-04-21 -- Completed 04-04 manual playback verification
+status: ready_to_execute
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-04-22T06:12:00.000Z"
+last_activity: 2026-04-22 -- Completed Phase 05 playback decision intelligence
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
+  completed_phases: 5
+  total_plans: 14
+  completed_plans: 14
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Phase 04 — playback-entry-&-unified-progress
+**Current focus:** Phase 06 — stable-identity-incremental-refresh
 
 ## Current Position
 
-Phase: 4
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-04-21 -- Completed 04-04 manual playback verification
+Phase: 5
+Plan: 2 of 2
+Status: Complete
+Last activity: 2026-04-22 -- Completed Phase 05 playback decision intelligence
 
 Progress: [██████████] 100%
 
@@ -86,6 +86,8 @@ Recent decisions affecting current work:
 - Route home continue-watching directly into the standalone playback page instead of reopening detail first.
 - Only show explicit restart on detail surfaces when unfinished canonical progress exists; watched items default to fresh playback.
 - [Phase 4]: Accepted the shipped Phase 4 playback UX after browser verification confirmed detail resume, explicit restart, direct continue-watching recovery, and watched-to-start-over defaults.
+- [Phase 5]: Require explicit `client_profile` playback requests and return direct, fallback, or unplayable decisions with reasons.
+- [Phase 5]: Keep the web playback page on the existing route while presenting fallback and unplayable results truthfully.
 
 ### Pending Todos
 
@@ -106,8 +108,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-04-21T21:20:15.753Z
-Stopped at: Completed 04-04-PLAN.md
+Last session: 2026-04-22T06:12:00.000Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None
 
-**Planned Phase:** 04 (playback-entry-&-unified-progress)
+**Planned Phase:** 06 (stable-identity-incremental-refresh)

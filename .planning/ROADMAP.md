@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Library & Async Sync Foundation** - Admins connect storage and run scans as background work instead of blocking requests. Completed 2026-04-22.
 - [x] **Phase 3: Semantic Catalog & Discovery** - Users browse a semantic media catalog rather than raw files. Completed 2026-04-21.
 - [x] **Phase 4: Playback Entry & Unified Progress** - Users can start playback and resume consistently across clients. (completed 2026-04-21)
-- [ ] **Phase 5: Playback Decision Intelligence** - Playback selection becomes capability-aware with direct-play-first behavior.
+- [x] **Phase 5: Playback Decision Intelligence** - Playback selection becomes capability-aware with direct-play-first behavior. Completed 2026-04-22.
 - [ ] **Phase 6: Stable Identity & Incremental Refresh** - Libraries stay fresh and resilient when files change over time.
 
 ## Phase Details
@@ -86,7 +86,11 @@ Plans:
   1. When a client can direct play a title, the playback response prefers a direct path.
   2. When direct play is not viable, the playback response provides a clear fallback path instead of failing ambiguously.
   3. Playback choices improve when richer stream facts are available from probe data.
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [x] 05-01-PLAN.md — Backend explicit client-profile playback contract, probe-aware decision engine, and per-request HLS fallback
+- [x] 05-02-PLAN.md — Web typed playback contract consumption and decision-aware playback page behavior
 
 ### Phase 6: Stable Identity & Incremental Refresh
 **Goal**: Libraries remain accurate over time as files move, rename, or change, without relying on full rescans for every update.
@@ -109,5 +113,5 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 2. Library & Async Sync Foundation | 3/3 | Complete | 2026-04-22 |
 | 3. Semantic Catalog & Discovery | 3/3 | Complete | 2026-04-21 |
 | 4. Playback Entry & Unified Progress | 4/4 | Complete   | 2026-04-21 |
-| 5. Playback Decision Intelligence | 0/TBD | Not started | - |
+| 5. Playback Decision Intelligence | 2/2 | Complete | 2026-04-22 |
 | 6. Stable Identity & Incremental Refresh | 0/TBD | Not started | - |
