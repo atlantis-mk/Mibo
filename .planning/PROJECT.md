@@ -14,6 +14,8 @@ Mibo 是一个家庭媒体系统，当前由 `web/` 前端、`mibo-media-server/
 
 - ✓ 用户可以完成系统初始化并进入应用主流程 — existing
 - ✓ 用户可以登录并使用基于会话的鉴权访问受保护接口 — existing
+- ✓ Web 客户端通过 `mibo-media-server` 的稳定 API 边界进入系统，而不是暴露 OpenList 产品入口 — Phase 1
+- ✓ 应用入口已形成硬门禁 + 软门禁的双阶段 setup 体验 — Phase 1
 - ✓ 用户可以配置媒体源与媒体库，并触发后台同步任务 — existing
 - ✓ 系统可以扫描存储中的媒体文件并落库为媒体项与文件记录 — existing
 - ✓ 系统可以为媒体项生成播放地址，并支持基础播放进度回写 — existing
@@ -21,7 +23,7 @@ Mibo 是一个家庭媒体系统，当前由 `web/` 前端、`mibo-media-server/
 
 ### Active
 
-- [ ] 以 `mibo-media-server` 作为媒体业务核心，明确与 OpenList 的稳定边界
+- [ ] 在 Phase 1 之后继续以 `mibo-media-server` 作为媒体业务核心，扩展而不打破与 OpenList 的稳定边界
 - [ ] 将扫描、识别、`ffprobe`、转码等慢任务继续沉淀到 Worker 路径，避免阻塞在线请求
 - [ ] 完善媒体语义模型，稳定支撑 `media_items / series / seasons / episodes` 等结构
 - [ ] 强化播放链路，形成“优先直链，必要时转码兜底”的统一能力
@@ -78,4 +80,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-21 after initialization*
+*Last updated: 2026-04-21 after Phase 1 completion*

@@ -12,7 +12,7 @@ This roadmap turns Mibo from a working prototype into a stable media platform by
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Access & Platform Boundary** - Users enter the app through a stable authenticated boundary that hides storage-provider details.
+- [x] **Phase 1: Access & Platform Boundary** - Users enter the app through a stable authenticated boundary that hides storage-provider details. Completed 2026-04-21.
 - [ ] **Phase 2: Library & Async Sync Foundation** - Admins connect storage and run scans as background work instead of blocking requests.
 - [ ] **Phase 3: Semantic Catalog & Discovery** - Users browse a semantic media catalog rather than raw files.
 - [ ] **Phase 4: Playback Entry & Unified Progress** - Users can start playback and resume consistently across clients.
@@ -94,7 +94,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Access & Platform Boundary | 0/2 | Planned | - |
+| 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
 | 2. Library & Async Sync Foundation | 0/TBD | Not started | - |
 | 3. Semantic Catalog & Discovery | 0/TBD | Not started | - |
 | 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
