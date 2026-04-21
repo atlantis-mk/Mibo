@@ -9,8 +9,10 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 
 ### Access
 
-- [ ] **ACCS-01**: 管理员可以完成初始化配置并进入可用的媒体系统主流程
-- [ ] **ACCS-02**: 用户可以登录并在后续请求中保持已认证会话
+- [x] **ACCS-01
+**: 管理员可以完成初始化配置并进入可用的媒体系统主流程
+- [x] **ACCS-02
+**: 用户可以登录并在后续请求中保持已认证会话
 - [ ] **ACCS-03**: 用户可以通过稳定的 HTTP API 访问同一套媒体能力，供 Web 现在使用并为移动端、TV 端预留兼容性
 
 ### Libraries

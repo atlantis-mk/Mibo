@@ -30,7 +30,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. A user can sign in once and continue using protected media APIs through a persistent authenticated session.
   3. Web clients can use one stable HTTP media API shape that is suitable to keep for later mobile and TV clients.
   4. Client-visible media APIs stay media-centric and do not expose OpenList-specific concepts or payloads.
-**Plans**: TBD
+**Plans**: 2 (`01-PLAN-01`, `01-PLAN-02`)
 **UI hint**: yes
 
 ### Phase 2: Library & Async Sync Foundation
@@ -94,7 +94,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Access & Platform Boundary | 0/TBD | Not started | - |
+| 1. Access & Platform Boundary | 0/2 | Planned | - |
 | 2. Library & Async Sync Foundation | 0/TBD | Not started | - |
 | 3. Semantic Catalog & Discovery | 0/TBD | Not started | - |
 | 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
