@@ -55,17 +55,20 @@ completed: 2026-04-22
 
 - **Completed:** 2026-04-22
 - **Tasks:** 4
-- **Primary source commit:** `web@efc001a`
+- **Primary source commits:** `web@efc001a`, `web@41f8814`, `web@7554073`, `web@66f4271`, `root@e0d05c9`, `web@6beeac8`, `web@17a08fb`
 
 ## Accomplishments
 
 - Wired home discovery to use `continue_watching`, `recently_played`, and one `latest_by_library` rail per library.
 - Added route-backed browse filters for `全部 / 电影 / 剧集`, `年份`, and `排序` with dedicated empty states.
-- Upgraded media detail to load TV seasons and episode grids while preserving movie playback and progress controls.
+- Upgraded media detail to load TV seasons and episode grids while preserving movie playback and progress controls on both in-shell and standalone `/media/$mediaItemId` routes.
 
 ## Task Commits
 
-1. **Task 1-4 recovery implementation** - `web@efc001a` (feat)
+1. **Task 1 recovery implementation** - `web@efc001a` (feat)
+2. **Task 2 browse-context hardening** - `web@41f8814`, `web@7554073`, `web@66f4271` (fix)
+3. **Task 3 episode-detail routing** - `root@e0d05c9`, `web@6beeac8` (fix)
+4. **Task 4 search and standalone-detail completion** - `web@17a08fb` (fix)
 
 ## Files Created/Modified
 
@@ -75,12 +78,13 @@ completed: 2026-04-22
 - `web/src/features/app/components/media-detail-panel.tsx` - season selector and episode grid for TV detail.
 - `web/src/features/app/components/browse-app-shell.tsx` - wires the updated browse and detail surfaces together.
 - `web/src/components/setup-wizard.tsx`, `web/src/features/app/pages/playback-page.tsx`, `web/src/features/app/pages/settings-page.tsx`, `web/src/router.tsx` - align route navigation with the new required search contract.
+- `mibo-media-server/internal/metadata/service.go`, `mibo-media-server/internal/httpapi/router.go` - expose episode `media_item_id` mapping so episode cards can open the correct detail route.
 
 ## Decisions Made
 
 - Kept filters in route search state so returning from detail preserves library and browse context.
 - Distinguished `还没有媒体库`, `这个媒体库还没开始扫描`, `没有发现可展示的内容`, and `没有匹配的内容` instead of reusing one generic empty state.
-- Used episode-local detail context in the panel while keeping route changes item-based.
+- Routed episode-card selection through `/media/$mediaItemId` when a backing episode item exists, falling back to preview-only focus only when no mapping exists.
 
 ## Deviations from Plan
 
@@ -94,7 +98,7 @@ completed: 2026-04-22
 - **Verification:** `cd web && pnpm typecheck`, `cd web && pnpm build`
 - **Committed in:** `web@efc001a`
 
-**2. [Rule 3 - Blocking] Collapsed the frontend wave into one recovery commit in the nested web repo**
+**2. [Rule 3 - Blocking] Collapsed the initial frontend wave into one recovery commit in the nested web repo**
 - **Found during:** Plan recovery and commit finalization
 - **Issue:** The failed executor had already spread the Phase 3 frontend implementation across a large, coherent nested-repo worktree, so reconstructing clean per-task commits from the dirty state would have risked dropping required files.
 - **Fix:** Recorded the complete, verified Phase 3 frontend wave as one recovery commit in `web/` and documented the consolidation here.
@@ -102,9 +106,17 @@ completed: 2026-04-22
 - **Verification:** `cd web && pnpm typecheck`, `cd web && pnpm build`
 - **Committed in:** `web@efc001a`
 
+**3. [Rule 2 - Missing Critical] Added episode-to-media-item mapping and follow-up UI fixes after review/verification surfaced remaining gaps**
+- **Found during:** phase review and verifier re-checks
+- **Issue:** Remaining gaps showed that episode cards needed real media-item routing, standalone detail had to reuse the season-first surface, and browse search needed user-visible wiring with search-aware empty states.
+- **Fix:** Extended the TV episode contract with optional `media_item_id`, routed episode-card clicks through `/media/$mediaItemId`, reused `MediaDetailPanel` on standalone detail pages, and wired `itemsQuery` into the browse UI and filtered-empty handling.
+- **Files modified:** `mibo-media-server/internal/metadata/service.go`, `mibo-media-server/internal/httpapi/router.go`, `web/src/lib/mibo-api.ts`, `web/src/features/app/components/media-detail-panel.tsx`, `web/src/features/app/components/browse-app-shell.tsx`, `web/src/features/app/components/browse-panel.tsx`, `web/src/features/app/hooks/use-app-controller.ts`
+- **Verification:** `cd mibo-media-server && go test ./...`, `cd web && pnpm typecheck`, `cd web && pnpm build`
+- **Committed in:** `root@e0d05c9`, `web@6beeac8`, `web@17a08fb`
+
 ---
 
-**Total deviations:** 2 auto-fixed (2 blocking)
+**Total deviations:** 3 auto-fixed (2 blocking, 1 missing critical)
 **Impact on plan:** Product scope is intact; the deviation is limited to recovery/commit shape after the executor failed to finish cleanly.
 
 ## Issues Encountered
@@ -117,11 +129,11 @@ None.
 
 ## Next Phase Readiness
 
-- Phase 3 browse and detail flows now sit on the new backend contracts and are ready for phase-level verification.
+- Automated verification is complete; remaining work is limited to human UI validation captured in `03-HUMAN-UAT.md`.
 
 ## Self-Check: PASSED
 
 - Verified `.planning/phases/03-semantic-catalog-discovery/03-03-SUMMARY.md` exists.
-- Verified `web@efc001a` exists.
+- Verified the final source commit chain exists in both repos.
 - Verified `cd web && pnpm typecheck` passes.
 - Verified `cd web && pnpm build` passes.
