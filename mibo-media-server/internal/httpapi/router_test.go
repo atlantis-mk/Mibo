@@ -2353,3 +2353,140 @@ func assertDeletedCount(t *testing.T, ctx context.Context, db *gorm.DB, model an
 		t.Fatalf("unexpected count for %T with %q: got %d want %d", model, query, count, want)
 	}
 }
+
+func TestTVMetadataEndpoints(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/tv/777":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":   777,
+				"name": "Show A",
+				"seasons": []map[string]any{{
+					"id":            701,
+					"season_number": 1,
+					"name":          "Season 1",
+					"overview":      "Season overview",
+					"poster_path":   "/season-1.jpg",
+				}},
+				"credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}},
+				"images":  map[string]any{"logos": []map[string]any{}},
+			})
+		case "/tv/777/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":            701,
+				"season_number": 1,
+				"name":          "Season 1",
+				"overview":      "Season overview",
+				"poster_path":   "/season-1.jpg",
+				"episodes": []map[string]any{{
+					"id":             1001,
+					"season_number":  1,
+					"episode_number": 1,
+					"name":           "Pilot",
+					"overview":       "Episode overview",
+					"still_path":     "/pilot-still.jpg",
+					"runtime":        48,
+				}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	storageRoot := t.TempDir()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Driver: "sqlite"},
+		Storage:  config.StorageConfig{Provider: "local"},
+		Local:    config.LocalStorageConfig{RootPath: storageRoot},
+		Metadata: config.MetadataConfig{
+			TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second},
+		},
+	}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	if _, err := settingsSvc.UpdateMetadataSettings(context.Background(), settings.UpdateMetadataSettingsInput{
+		TMDB: settings.MetadataProviderInput{
+			APIKey:       "router-tv-key",
+			BaseURL:      tmdb.URL,
+			ImageBaseURL: tmdb.URL + "/images",
+			Language:     "en-US",
+			Timeout:      "1s",
+		},
+	}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc)
+
+	t.Run("list seasons", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/tv/777/seasons", nil)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("seasons status: %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data []struct {
+				SeasonNumber int    `json:"season_number"`
+				Name         string `json:"name"`
+				Overview     string `json:"overview"`
+				PosterURL    string `json:"poster_url"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode seasons response: %v", err)
+		}
+		if len(body.Data) != 1 || body.Data[0].SeasonNumber != 1 || body.Data[0].Name != "Season 1" {
+			t.Fatalf("unexpected seasons payload: %#v", body.Data)
+		}
+		if body.Data[0].PosterURL != tmdb.URL+"/images/season-1.jpg" {
+			t.Fatalf("unexpected poster url: %q", body.Data[0].PosterURL)
+		}
+	})
+
+	t.Run("list episodes", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/tv/777/seasons/1/episodes", nil)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("episodes status: %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data []struct {
+				SeasonNumber   int    `json:"season_number"`
+				EpisodeNumber  int    `json:"episode_number"`
+				Name           string `json:"name"`
+				Overview       string `json:"overview"`
+				StillURL       string `json:"still_url"`
+				RuntimeSeconds *int   `json:"runtime_seconds"`
+				PayloadJSON    string `json:"payload_json"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode episodes response: %v", err)
+		}
+		if len(body.Data) != 1 || body.Data[0].EpisodeNumber != 1 || body.Data[0].Name != "Pilot" {
+			t.Fatalf("unexpected episodes payload: %#v", body.Data)
+		}
+		if body.Data[0].StillURL != tmdb.URL+"/images/pilot-still.jpg" {
+			t.Fatalf("unexpected still url: %q", body.Data[0].StillURL)
+		}
+		if body.Data[0].RuntimeSeconds == nil || *body.Data[0].RuntimeSeconds != 2880 {
+			t.Fatalf("unexpected runtime seconds: %#v", body.Data[0].RuntimeSeconds)
+		}
+		if body.Data[0].PayloadJSON != "" {
+			t.Fatalf("expected sanitized payload without raw tmdb json, got %#v", body.Data[0])
+		}
+	})
+}

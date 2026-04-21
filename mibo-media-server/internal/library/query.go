@@ -98,10 +98,13 @@ type LibraryDetail struct {
 
 type MediaItemDetail struct {
 	database.MediaItem
-	Genres    []string          `json:"genres"`
-	Cast      []PersonDetail    `json:"cast"`
-	Directors []PersonDetail    `json:"directors"`
-	Files     []MediaFileDetail `json:"files"`
+	SeriesTMDBID        *int              `json:"series_tmdb_id,omitempty"`
+	SeriesTitleDisplay  string            `json:"series_title_display"`
+	DefaultSeasonNumber *int              `json:"default_season_number,omitempty"`
+	Genres              []string          `json:"genres"`
+	Cast                []PersonDetail    `json:"cast"`
+	Directors           []PersonDetail    `json:"directors"`
+	Files               []MediaFileDetail `json:"files"`
 }
 
 type MediaFileDetail struct {
@@ -532,12 +535,42 @@ func (s *Service) GetMediaItem(ctx context.Context, mediaItemID uint) (MediaItem
 	}
 
 	return MediaItemDetail{
-		MediaItem: item,
-		Genres:    genres,
-		Cast:      cast,
-		Directors: directors,
-		Files:     parsedFiles,
+		MediaItem:           item,
+		SeriesTMDBID:        tmdbSeriesIDFromExternalID(item.ExternalID),
+		SeriesTitleDisplay:  seriesTitleDisplay(item),
+		DefaultSeasonNumber: defaultSeasonNumber(item),
+		Genres:              genres,
+		Cast:                cast,
+		Directors:           directors,
+		Files:               parsedFiles,
 	}, nil
+}
+
+func tmdbSeriesIDFromExternalID(value string) *int {
+	parts := strings.SplitN(strings.TrimSpace(value), ":", 2)
+	if len(parts) != 2 || parts[0] != "tv" {
+		return nil
+	}
+	id, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || id <= 0 {
+		return nil
+	}
+	return &id
+}
+
+func seriesTitleDisplay(item database.MediaItem) string {
+	if seriesTitle := strings.TrimSpace(item.SeriesTitle); seriesTitle != "" {
+		return seriesTitle
+	}
+	return strings.TrimSpace(item.Title)
+}
+
+func defaultSeasonNumber(item database.MediaItem) *int {
+	if item.SeasonNumber != nil && *item.SeasonNumber >= 0 {
+		season := *item.SeasonNumber
+		return &season
+	}
+	return nil
 }
 
 func buildMediaFileDetails(files []database.MediaFile) ([]MediaFileDetail, error) {
