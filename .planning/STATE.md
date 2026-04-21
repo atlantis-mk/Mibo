@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-04-21T23:13:28.260Z"
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-04-21T23:14:42.121Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 13
-  completed_plans: 17
+  completed_plans: 18
   percent: 100
 ---
 
@@ -68,6 +68,7 @@ Progress: [██████████] 100%
 | Phase 06 P01 | 11min | 2 tasks | 5 files |
 | Phase 06 P02 | 8min | 2 tasks | 3 files |
 | Phase 06 P03 | 14min | 2 tasks | 4 files |
+| Phase 06 P04 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,8 @@ Recent decisions affecting current work:
 - Multiple qualifying fallback matches are quarantined with review-needed status instead of guessing.
 - Deduplicate targeted refresh jobs by normalized library-scoped root path plus refresh reason.
 - Partial refreshes reuse the scan engine but only soft-delete missing rows inside the requested subtree.
+- Validate every provided storage-event path against the selected library root before choosing targeted refresh or full-sync fallback.
+- Unsupported but in-root events fall back to sync_library; out-of-root payloads are rejected instead of triggering work.
 
 ### Pending Todos
 
@@ -117,8 +120,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-04-21T23:13:28.256Z
-Stopped at: Completed 06-03-PLAN.md
+Last session: 2026-04-21T23:14:42.116Z
+Stopped at: Completed 06-04-PLAN.md
 Resume file: None
 
 **Planned Phase:** 06 (stable-identity-incremental-refresh) — 4 plans — 2026-04-21T22:35:29.851Z

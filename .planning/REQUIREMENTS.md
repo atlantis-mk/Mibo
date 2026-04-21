@@ -54,7 +54,8 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 **: 系统具备稳定文件身份能力，使重命名、移动或重挂载不会轻易造成重复媒体或进度丢失
 - [x] **SYNC-02
 **: 系统在全量扫描之外支持增量刷新能力，以减少日常更新成本
-- [ ] **SYNC-03**: 系统可以接收存储变更事件并把它们转换为安全的增量扫描或重同步任务
+- [x] **SYNC-03
+**: 系统可以接收存储变更事件并把它们转换为安全的增量扫描或重同步任务
 
 ## v2 Requirements
 
