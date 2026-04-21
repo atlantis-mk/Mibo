@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -112,6 +113,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/libraries/{id}", router.handleGetLibrary)
 	mux.HandleFunc("DELETE /api/v1/libraries/{id}", router.handleDeleteLibrary)
 	mux.HandleFunc("POST /api/v1/libraries/{id}/scan", router.handleQueueLibraryScan)
+	mux.HandleFunc("POST /api/v1/storage-events", router.handleStorageEvent)
 	mux.HandleFunc("GET /api/v1/libraries/{id}/items", router.handleListLibraryItems)
 	mux.HandleFunc("GET /api/v1/media-items/{id}", router.handleGetMediaItem)
 	mux.HandleFunc("GET /api/v1/tv/{tmdb_id}/seasons", router.handleListTVSeasons)
@@ -787,6 +789,103 @@ func (r *Router) handleQueueLibraryScan(w http.ResponseWriter, req *http.Request
 	writeJSON(req.Context(), w, http.StatusAccepted, job)
 }
 
+func (r *Router) handleStorageEvent(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
+	var input struct {
+		LibraryID uint   `json:"library_id"`
+		Kind      string `json:"kind"`
+		Path      string `json:"path"`
+		OldPath   string `json:"old_path"`
+	}
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	if input.LibraryID == 0 {
+		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("library_id is required"))
+		return
+	}
+
+	eventRoot, fallbackToFullSync, err := normalizeStorageEventRoot(strings.TrimSpace(strings.ToLower(input.Kind)), input.Path, input.OldPath)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	var job database.Job
+	if fallbackToFullSync {
+		job, err = r.library.QueueLibraryScan(req.Context(), input.LibraryID)
+	} else {
+		job, err = r.library.QueueTargetedRefresh(req.Context(), input.LibraryID, eventRoot, "storage_event")
+	}
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	writeJSON(req.Context(), w, http.StatusAccepted, job)
+}
+
+func normalizeStorageEventRoot(kind string, currentPath string, oldPath string) (string, bool, error) {
+	cleanCurrent := strings.TrimSpace(currentPath)
+	cleanOld := strings.TrimSpace(oldPath)
+	switch kind {
+	case "create", "update", "delete":
+		if cleanCurrent == "" {
+			return "", false, fmt.Errorf("path is required")
+		}
+		return targetedEventRoot(cleanCurrent), false, nil
+	case "move", "rename":
+		if cleanCurrent == "" || cleanOld == "" {
+			return "", true, nil
+		}
+		return targetedEventRoot(commonAncestorPath(cleanOld, cleanCurrent)), false, nil
+	case "":
+		return "", false, fmt.Errorf("kind is required")
+	default:
+		return "", true, nil
+	}
+}
+
+func commonAncestorPath(left string, right string) string {
+	leftClean := filepath.Clean(strings.TrimSpace(left))
+	rightClean := filepath.Clean(strings.TrimSpace(right))
+	leftParts := strings.Split(leftClean, string(filepath.Separator))
+	rightParts := strings.Split(rightClean, string(filepath.Separator))
+	shared := make([]string, 0, min(len(leftParts), len(rightParts)))
+	for idx := 0; idx < len(leftParts) && idx < len(rightParts); idx++ {
+		if leftParts[idx] != rightParts[idx] {
+			break
+		}
+		shared = append(shared, leftParts[idx])
+	}
+	if len(shared) == 0 {
+		return string(filepath.Separator)
+	}
+	joined := filepath.Join(shared...)
+	if strings.HasPrefix(strings.TrimSpace(left), "/") || strings.HasPrefix(strings.TrimSpace(right), "/") {
+		if !strings.HasPrefix(joined, string(filepath.Separator)) {
+			joined = string(filepath.Separator) + joined
+		}
+	}
+	return joined
+}
+
+func targetedEventRoot(value string) string {
+	clean := filepath.Clean(strings.TrimSpace(value))
+	if clean == "." || clean == "" {
+		return clean
+	}
+	if ext := filepath.Ext(clean); ext != "" {
+		return filepath.Dir(clean)
+	}
+	return clean
+}
+
 func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request) {
 	libraryID, err := parseUintPathValue(req, "id")
 	if err != nil {
@@ -1012,9 +1111,9 @@ func (r *Router) handleGetPlaybackSource(w http.ResponseWriter, req *http.Reques
 	}
 
 	source, err := r.playback.GetPlaybackSource(req.Context(), playback.PlaybackRequest{
-		MediaItemID:     mediaItemID,
-		PreferredFileID: preferredFileID,
-		ClientProfile:   clientProfile,
+		MediaItemID:      mediaItemID,
+		PreferredFileID:  preferredFileID,
+		ClientProfile:    clientProfile,
 		AllowHLSFallback: r.hls.Enabled(),
 	})
 	if err != nil {
