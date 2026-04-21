@@ -61,6 +61,14 @@ type MediaFile struct {
 	LibraryID          uint       `gorm:"not null;index" json:"library_id"`
 	MediaItemID        *uint      `gorm:"index" json:"media_item_id,omitempty"`
 	StoragePath        string     `gorm:"size:1024;not null" json:"storage_path"`
+	StableIdentityKey  string     `gorm:"size:512;index:idx_media_file_stable_identity" json:"stable_identity_key"`
+	IdentitySource     string     `gorm:"size:64;not null;default:none;index" json:"identity_source"`
+	IdentityStatus     string     `gorm:"size:64;not null;default:provisional;index" json:"identity_status"`
+	ProviderName       string     `gorm:"size:255" json:"provider_name"`
+	ProviderHashesJSON string     `gorm:"type:text" json:"provider_hashes_json"`
+	ReplacedByID       *uint      `gorm:"index" json:"replaced_by_id,omitempty"`
+	ReviewStatus       string     `gorm:"size:64;not null;default:none;index" json:"review_status"`
+	ReviewReason       string     `gorm:"size:255" json:"review_reason"`
 	Container          string     `gorm:"size:64" json:"container"`
 	SizeBytes          int64      `gorm:"not null;default:0" json:"size_bytes"`
 	Fingerprint        string     `gorm:"size:255" json:"fingerprint"`

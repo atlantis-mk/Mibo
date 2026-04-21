@@ -34,6 +34,18 @@ var videoExtensions = map[string]struct{}{
 	".webm": {},
 }
 
+const (
+	mediaFileIdentitySourceNone             = "none"
+	mediaFileIdentitySourceStableIdentity   = "stable_identity"
+	mediaFileIdentitySourceProviderEvidence = "provider_evidence"
+
+	mediaFileIdentityStatusExact       = "exact"
+	mediaFileIdentityStatusProvisional = "provisional"
+
+	mediaFileReviewStatusNone    = "none"
+	mediaFileReviewStatusPending = "pending"
+)
+
 type classifiedMedia struct {
 	Type          string
 	Title         string
@@ -237,25 +249,26 @@ func (s *Service) upsertMediaItem(ctx context.Context, libraryID uint, classifie
 
 func (s *Service) upsertMediaFile(ctx context.Context, libraryID, mediaItemID uint, object storage.Object) (database.MediaFile, bool, error) {
 	var file database.MediaFile
-	err := s.db.WithContext(ctx).
-		Where("library_id = ? AND storage_path = ?", libraryID, object.Path).
-		First(&file).Error
+	err := s.matchMediaFileForScan(ctx, libraryID, object, &file)
 	created := false
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return database.MediaFile{}, false, err
 		}
-		file = database.MediaFile{LibraryID: libraryID, StoragePath: object.Path}
+		file = database.MediaFile{LibraryID: libraryID}
 		created = true
 	}
 
 	fingerprint := buildFingerprint(object)
 	baseChanged := created || file.MediaItemID == nil || *file.MediaItemID != mediaItemID || file.Fingerprint != fingerprint
+	file.StoragePath = object.Path
 	file.MediaItemID = &mediaItemID
+	applyObjectIdentityEvidence(&file, object)
 	file.Container = strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), ".")
 	file.SizeBytes = object.Size
 	file.LastModifiedAt = object.Modified
 	file.Fingerprint = fingerprint
+	file.ReplacedByID = nil
 	file.DeletedAt = nil
 	if baseChanged {
 		resetMediaFileProbe(&file)
@@ -276,6 +289,22 @@ func (s *Service) upsertMediaFile(ctx context.Context, libraryID, mediaItemID ui
 		return database.MediaFile{}, false, err
 	}
 	return file, false, nil
+}
+
+func (s *Service) matchMediaFileForScan(ctx context.Context, libraryID uint, object storage.Object, out *database.MediaFile) error {
+	query := s.db.WithContext(ctx)
+	if identity := strings.TrimSpace(object.StableIdentity); identity != "" {
+		err := query.
+			Where("library_id = ? AND stable_identity_key = ? AND deleted_at IS NULL", libraryID, identity).
+			First(out).Error
+		if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+
+	return query.
+		Where("library_id = ? AND storage_path = ?", libraryID, object.Path).
+		First(out).Error
 }
 
 func (s *Service) cleanupMissingFiles(ctx context.Context, libraryID uint, seen map[string]struct{}) error {
@@ -370,11 +399,78 @@ func (s *Service) listAllDirectoryObjects(ctx context.Context, provider storage.
 }
 
 func buildFingerprint(object storage.Object) string {
-	parts := []string{object.Path, strconv.FormatInt(object.Size, 10)}
+	parts := []string{strconv.FormatInt(object.Size, 10)}
+	if identity := strings.TrimSpace(object.StableIdentity); identity != "" {
+		parts = append(parts, "stable="+identity)
+	}
+	if provider := strings.TrimSpace(object.Provider); provider != "" {
+		parts = append(parts, "provider="+provider)
+	}
+	if hashInfo := marshalObjectHashInfo(object.HashInfo); hashInfo != "" {
+		parts = append(parts, "hashes="+hashInfo)
+	}
 	if object.Modified != nil {
 		parts = append(parts, object.Modified.UTC().Format(time.RFC3339Nano))
 	}
 	return strings.Join(parts, ":")
+}
+
+func applyObjectIdentityEvidence(file *database.MediaFile, object storage.Object) {
+	if file == nil {
+		return
+	}
+
+	file.StableIdentityKey = strings.TrimSpace(object.StableIdentity)
+	file.ProviderName = strings.TrimSpace(object.Provider)
+	file.ProviderHashesJSON = marshalObjectHashInfo(object.HashInfo)
+	file.ReviewReason = ""
+	if file.StableIdentityKey != "" {
+		file.IdentitySource = mediaFileIdentitySourceStableIdentity
+		file.IdentityStatus = mediaFileIdentityStatusExact
+		file.ReviewStatus = mediaFileReviewStatusNone
+		return
+	}
+	if file.ProviderName != "" || file.ProviderHashesJSON != "" {
+		file.IdentitySource = mediaFileIdentitySourceProviderEvidence
+		file.IdentityStatus = mediaFileIdentityStatusProvisional
+		file.ReviewStatus = mediaFileReviewStatusPending
+		file.ReviewReason = "awaiting_high_confidence_reconciliation"
+		return
+	}
+	file.IdentitySource = mediaFileIdentitySourceNone
+	file.IdentityStatus = mediaFileIdentityStatusProvisional
+	file.ReviewStatus = mediaFileReviewStatusPending
+	file.ReviewReason = "stable_identity_missing"
+}
+
+func marshalObjectHashInfo(input map[string]string) string {
+	if len(input) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(input))
+	normalized := make(map[string]string, len(input))
+	for key, value := range input {
+		trimmedKey := strings.TrimSpace(key)
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedKey == "" || trimmedValue == "" {
+			continue
+		}
+		normalized[trimmedKey] = trimmedValue
+		keys = append(keys, trimmedKey)
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	ordered := make(map[string]string, len(keys))
+	for _, key := range keys {
+		ordered[key] = normalized[key]
+	}
+	encoded, err := json.Marshal(ordered)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func isVideoFile(itemPath string) bool {

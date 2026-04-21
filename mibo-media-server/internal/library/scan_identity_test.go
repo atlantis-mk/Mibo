@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	openliststorage "github.com/atlan/mibo-media-server/internal/storage/openlist"
-	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
 )
@@ -23,60 +23,17 @@ import (
 func TestRunSyncLibraryUsesStableIdentityEvidence(t *testing.T) {
 	t.Parallel()
 
-	serverState := &identityServerState{}
-	openList := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		var body struct {
-			Path string `json:"path"`
-		}
-		_ = json.NewDecoder(req.Body).Decode(&body)
-
-		switch req.URL.Path {
-		case "/api/fs/get":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"code":    http.StatusOK,
-				"message": "success",
-				"data": map[string]any{
-					"name":     pathBase(body.Path),
-					"is_dir":   body.Path == "/library",
-					"size":     0,
-					"provider": "alist",
-				},
-			})
-		case "/api/fs/list":
-			filePath := serverState.currentPath()
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"code":    http.StatusOK,
-				"message": "success",
-				"data": map[string]any{
-					"provider": "alist",
-					"content": []map[string]any{{
-						"name":      pathBase(filePath),
-						"is_dir":    false,
-						"size":      2048,
-						"modified":  time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC),
-						"hash_info": map[string]string{"sha256": "abc123"},
-					}},
-				},
-			})
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer openList.Close()
-
 	ctx := context.Background()
-	db, svc, libraryRecord := newIdentityScanService(t, openList.URL)
+	db, svc, libraryRecord := newIdentityScanService(t)
+	provider := &stableIdentityProvider{objects: [][]storage.Object{
+		{{Name: "MovieA.2024.mkv", Path: "/library/MovieA.2024.mkv", Size: 2048, StableIdentity: "provider-object-1", Modified: timePtr(time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))}},
+		{{Name: "Renamed.Movie.2024.mkv", Path: "/library/Renamed.Movie.2024.mkv", Size: 2048, StableIdentity: "provider-object-1", Modified: timePtr(time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))}},
+	}}
 
-	firstJob := database.Job{PayloadJSON: `{"library_id":1,"root_path":"/library"}`}
-	if err := svc.RunSyncLibrary(ctx, firstJob); err != nil {
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
-
-	serverState.renameTo("/library/Renamed.Movie.2024.mkv")
-	secondJob := database.Job{PayloadJSON: `{"library_id":1,"root_path":"/library"}`}
-	if err := svc.RunSyncLibrary(ctx, secondJob); err != nil {
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 
@@ -140,27 +97,62 @@ func TestOpenListAdapterPreservesIdentityEvidence(t *testing.T) {
 	}
 }
 
-type identityServerState struct {
-	mu       sync.Mutex
-	filePath string
+type stableIdentityProvider struct {
+	mu      sync.Mutex
+	objects [][]storage.Object
+	round   int
 }
 
-func (s *identityServerState) currentPath() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.filePath == "" {
-		s.filePath = "/library/MovieA.2024.mkv"
+func (p *stableIdentityProvider) Name() string {
+	return "stable-test"
+}
+
+func (p *stableIdentityProvider) List(_ context.Context, req storage.ListRequest) ([]storage.Object, error) {
+	if strings.TrimSpace(req.Path) != "/library" {
+		return nil, nil
 	}
-	return s.filePath
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	index := p.round
+	if index >= len(p.objects) {
+		index = len(p.objects) - 1
+	}
+	objects := make([]storage.Object, len(p.objects[index]))
+	copy(objects, p.objects[index])
+	p.round++
+	return objects, nil
 }
 
-func (s *identityServerState) renameTo(next string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.filePath = next
+func (p *stableIdentityProvider) Get(_ context.Context, req storage.GetRequest) (storage.Object, error) {
+	if strings.TrimSpace(req.Path) == "/library" {
+		return storage.Object{Name: "library", Path: "/library", IsDir: true}, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, round := range p.objects {
+		for _, object := range round {
+			if object.Path == req.Path {
+				return object, nil
+			}
+		}
+	}
+	return storage.Object{}, nil
 }
 
-func newIdentityScanService(t *testing.T, openListURL string) (*gorm.DB, *Service, database.Library) {
+func (p *stableIdentityProvider) Link(context.Context, storage.LinkRequest) (storage.LinkResult, error) {
+	return storage.LinkResult{}, storage.ErrNotImplemented
+}
+
+func (p *stableIdentityProvider) ResolveStorage(ctx context.Context, req storage.ResolveStorageRequest) (storage.ResolvedStorage, error) {
+	object, _ := p.Get(ctx, storage.GetRequest{Path: req.Path})
+	return storage.ResolvedStorage{Provider: p.Name(), Path: req.Path, Object: object}, nil
+}
+
+func (p *stableIdentityProvider) Capabilities(context.Context) (storage.Capabilities, error) {
+	return storage.Capabilities{CanList: true, CanGet: true}, nil
+}
+
+func newIdentityScanService(t *testing.T) (*gorm.DB, *Service, database.Library) {
 	t.Helper()
 
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -168,22 +160,19 @@ func newIdentityScanService(t *testing.T, openListURL string) (*gorm.DB, *Servic
 		t.Fatalf("open database: %v", err)
 	}
 
-	cfg := config.Config{OpenList: config.OpenListConfig{BaseURL: openListURL, RootPath: "/library", Timeout: time.Second}}
-	registry := providers.NewRegistry(cfg)
-	jobsSvc := jobs.NewService(db)
-	svc := NewService(cfg, db, registry, jobsSvc)
+	svc := NewService(config.Config{}, db, nil, jobs.NewService(db))
 
 	ctx := context.Background()
-	source, err := svc.CreateMediaSource(ctx, CreateMediaSourceInput{Provider: "openlist", Name: "Test Source", RootPath: "/library"})
-	if err != nil {
-		t.Fatalf("create source: %v", err)
-	}
-	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: "Identity", Type: "movies", MediaSourceID: source.ID, RootPath: "/library"})
-	if err != nil {
+	libraryRecord := database.Library{Name: "Identity", Type: "movies", RootPath: "/library", Status: "active"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
 		t.Fatalf("create library: %v", err)
 	}
 
 	return db, svc, libraryRecord
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }
 
 func pathBase(value string) string {
