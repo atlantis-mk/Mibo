@@ -42,7 +42,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. An administrator can create a library, bind it to a source and root path, and save that configuration successfully.
   3. When an administrator triggers a scan, the app shows that work is queued and processed asynchronously rather than hanging the request.
   4. Scheduled refreshes can be configured so library updates continue happening without manual rescans.
-**Plans**: 1 (`02-PLAN-01`)
+**Plans**: 2 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Backend async scan settings, scheduled refresh, and jobs filtering contracts
+- [ ] 02-02-PLAN.md — Web admin source/library flow, status badges, jobs monitoring, and refresh controls
 
 ### Phase 3: Semantic Catalog & Discovery
 **Goal**: Users can explore a durable media catalog organized as movies and shows with useful metadata and library-aware discovery.
