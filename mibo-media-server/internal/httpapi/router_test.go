@@ -1193,6 +1193,67 @@ func TestHomeDiscoveryEndpoint(t *testing.T) {
 	}
 }
 
+func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
+	router, _, _, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mediaRoot := filepath.Join(storageRoot, "admin-media")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create media root: %v", err)
+	}
+
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{
+		Provider: "local",
+		Name:     "Existing Source",
+		RootPath: mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Existing Library",
+		Type:          "movies",
+		MediaSourceID: source.ID,
+		RootPath:      mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "create media source", method: http.MethodPost, path: "/api/v1/media-sources", body: fmt.Sprintf(`{"provider":"local","name":"New Source","root_path":%q}`, filepath.Join(storageRoot, "new-source"))},
+		{name: "update media source", method: http.MethodPatch, path: fmt.Sprintf("/api/v1/media-sources/%d", source.ID), body: fmt.Sprintf(`{"name":"Updated Source","root_path":%q}`, mediaRoot)},
+		{name: "list media sources", method: http.MethodGet, path: "/api/v1/media-sources"},
+		{name: "delete media source", method: http.MethodDelete, path: fmt.Sprintf("/api/v1/media-sources/%d", source.ID)},
+		{name: "create library", method: http.MethodPost, path: "/api/v1/libraries", body: fmt.Sprintf(`{"name":"New Library","type":"movies","media_source_id":%d,"root_path":%q}`, source.ID, mediaRoot)},
+		{name: "list libraries", method: http.MethodGet, path: "/api/v1/libraries"},
+		{name: "delete library", method: http.MethodDelete, path: fmt.Sprintf("/api/v1/libraries/%d", createdLibrary.ID)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			if tt.body != "" {
+				request.Header.Set("Content-Type", "application/json")
+			}
+
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("expected unauthorized status, got %d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestDeleteLibraryEndpoint(t *testing.T) {
 	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
