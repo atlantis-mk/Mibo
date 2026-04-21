@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_execute
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-04-22T06:12:00.000Z"
-last_activity: 2026-04-22 -- Completed Phase 05 playback decision intelligence
+status: verifying
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-04-21T22:49:24.339Z"
+last_activity: 2026-04-21
 progress:
   total_phases: 6
-  completed_phases: 5
-  total_plans: 14
-  completed_plans: 14
+  completed_phases: 3
+  total_plans: 13
+  completed_plans: 15
   percent: 100
 ---
 
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-04-22)
 
 Phase: 5
 Plan: 2 of 2
-Status: Complete
-Last activity: 2026-04-22 -- Completed Phase 05 playback decision intelligence
+Status: Phase complete — ready for verification
+Last activity: 2026-04-21
 
 Progress: [██████████] 100%
 
@@ -65,6 +65,7 @@ Progress: [██████████] 100%
 | Phase 04 P02 | 4 min | 2 tasks | 4 files |
 | Phase 04 P03 | 8 min | 2 tasks | 5 files |
 | Phase 04 P04 | 8min | 1 tasks | 4 files |
+| Phase 06 P01 | 11min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Recent decisions affecting current work:
 - [Phase 4]: Accepted the shipped Phase 4 playback UX after browser verification confirmed detail resume, explicit restart, direct continue-watching recovery, and watched-to-start-over defaults.
 - [Phase 5]: Require explicit `client_profile` playback requests and return direct, fallback, or unplayable decisions with reasons.
 - [Phase 5]: Keep the web playback page on the existing route while presenting fallback and unplayable results truthfully.
+- Trust exact stable identity for scan-time continuity, but treat path as a locator only when the underlying object changes without stable identity.
+- Keep deleted media-file candidates linked to their prior media item so later size+duration reconciliation can safely reclaim continuity.
 
 ### Pending Todos
 
@@ -108,8 +111,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-04-22T06:12:00.000Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-04-21T22:49:24.334Z
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
 
-**Planned Phase:** 06 (stable-identity-incremental-refresh)
+**Planned Phase:** 06 (stable-identity-incremental-refresh) — 4 plans — 2026-04-21T22:35:29.851Z

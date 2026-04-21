@@ -100,7 +100,13 @@ Plans:
   1. Renaming, moving, or remounting files does not easily create duplicate media entries or lose the user's playback progress.
   2. Routine library changes can be picked up through incremental refresh instead of requiring a full scan every time.
   3. Storage change events can safely trigger targeted refresh or resync work.
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Stable identity evidence contract and scan ingestion that stops path-first primary matching
+- [ ] 06-02-PLAN.md — Conservative size+duration fallback reconciliation with ambiguity quarantine
+- [ ] 06-03-PLAN.md — Targeted incremental refresh jobs and subtree-safe partial scan behavior
+- [ ] 06-04-PLAN.md — Authenticated storage-event intake that enqueues safe refresh work
 
 ## Progress
 
