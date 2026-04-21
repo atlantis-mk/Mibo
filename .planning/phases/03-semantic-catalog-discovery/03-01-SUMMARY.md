@@ -95,8 +95,18 @@ Each task was committed atomically:
 
 ---
 
-**Total deviations:** 1 auto-fixed (1 blocking)
-**Impact on plan:** No product scope change; only commit routing changed to match the workspace's actual git layout.
+**2. [Rule 3 - Blocking] Repaired planning metadata manually after `state.advance-plan` could not parse `STATE.md` placeholders**
+- **Found during:** Plan metadata update
+- **Issue:** The existing `STATE.md` still contained placeholder tokens like `--phase` / `--name`, so `gsd-sdk query state.advance-plan` failed to parse the current position.
+- **Fix:** Used the other state handlers that still succeeded, then manually corrected `STATE.md` and `ROADMAP.md` so plan progress reflects Phase 03 Plan 01 completion.
+- **Files modified:** `.planning/STATE.md`, `.planning/ROADMAP.md`
+- **Verification:** Re-read both files and confirmed Phase 03 now shows plan 1 complete and plan 2 next.
+- **Committed in:** `6a90b3d`
+
+---
+
+**Total deviations:** 2 auto-fixed (2 blocking)
+**Impact on plan:** No product scope change; deviations were limited to commit routing and metadata repair needed to finish execution cleanly.
 
 ## Issues Encountered
 
