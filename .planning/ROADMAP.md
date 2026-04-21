@@ -42,7 +42,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. An administrator can create a library, bind it to a source and root path, and save that configuration successfully.
   3. When an administrator triggers a scan, the app shows that work is queued and processed asynchronously rather than hanging the request.
   4. Scheduled refreshes can be configured so library updates continue happening without manual rescans.
-**Plans**: TBD
+**Plans**: 1 (`02-PLAN-01`)
 
 ### Phase 3: Semantic Catalog & Discovery
 **Goal**: Users can explore a durable media catalog organized as movies and shows with useful metadata and library-aware discovery.
@@ -95,7 +95,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
-| 2. Library & Async Sync Foundation | 0/TBD | Not started | - |
+| 2. Library & Async Sync Foundation | 1/1 | Ready to execute | - |
 | 3. Semantic Catalog & Discovery | 0/TBD | Not started | - |
 | 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
 | 5. Playback Decision Intelligence | 0/TBD | Not started | - |
