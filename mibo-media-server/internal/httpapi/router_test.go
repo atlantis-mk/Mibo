@@ -966,6 +966,233 @@ func TestRecentlyAddedEndpoint(t *testing.T) {
 	}
 }
 
+func TestCatalogBrowseFilters(t *testing.T) {
+	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mediaRoot := filepath.Join(storageRoot, "catalog")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create catalog root: %v", err)
+	}
+
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{
+		Provider: "local",
+		Name:     "Catalog Source",
+		RootPath: mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	libraryRecord, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Catalog Library",
+		Type:          "shows",
+		MediaSourceID: source.ID,
+		RootPath:      mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.Library{}).Where("id = ?", libraryRecord.ID).Update("status", "active").Error; err != nil {
+		t.Fatalf("activate library: %v", err)
+	}
+
+	login := registerAndLoginRouterUser(t, ctx, authSvc, "catalog-user")
+	year2024 := 2024
+	year2023 := 2023
+	createdAt := time.Now().UTC()
+
+	items := []database.MediaItem{
+		{LibraryID: libraryRecord.ID, Type: "movie", Title: "Movie 2023", Year: &year2023, SourcePath: filepath.Join(mediaRoot, "movie-2023.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-4 * time.Hour), UpdatedAt: createdAt.Add(-4 * time.Hour)},
+		{LibraryID: libraryRecord.ID, Type: "movie", Title: "Movie 2024", Year: &year2024, SourcePath: filepath.Join(mediaRoot, "movie-2024.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-3 * time.Hour), UpdatedAt: createdAt.Add(-3 * time.Hour)},
+		{LibraryID: libraryRecord.ID, Type: "episode", Title: "Pilot", SeriesTitle: "Show One", ExternalID: "tmdb:show-1", Year: &year2024, SeasonNumber: intPtr(1), EpisodeNumber: intPtr(1), SourcePath: filepath.Join(mediaRoot, "show-one-s01e01.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-2 * time.Hour), UpdatedAt: createdAt.Add(-2 * time.Hour)},
+		{LibraryID: libraryRecord.ID, Type: "episode", Title: "Episode Two", SeriesTitle: "Show One", ExternalID: "tmdb:show-1", Year: &year2024, SeasonNumber: intPtr(1), EpisodeNumber: intPtr(2), SourcePath: filepath.Join(mediaRoot, "show-one-s01e02.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-1 * time.Hour), UpdatedAt: createdAt.Add(-1 * time.Hour)},
+	}
+	for idx := range items {
+		if err := db.WithContext(ctx).Create(&items[idx]).Error; err != nil {
+			t.Fatalf("create media item %d: %v", idx, err)
+		}
+	}
+
+	progressRecord := database.PlaybackProgress{
+		UserID:          login.User.ID,
+		MediaItemID:     items[2].ID,
+		PositionSeconds: 120,
+		Watched:         true,
+		LastPlayedAt:    timePtr(createdAt),
+	}
+	if err := db.WithContext(ctx).Create(&progressRecord).Error; err != nil {
+		t.Fatalf("create progress: %v", err)
+	}
+
+	t.Run("filters movies by year", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/libraries/%d/items?type=movie&year=2024&sort=year", libraryRecord.ID), nil)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("list filtered items status: %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data []database.MediaItem `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode filtered response: %v", err)
+		}
+		if len(body.Data) != 1 || body.Data[0].Title != "Movie 2024" {
+			t.Fatalf("unexpected filtered movies: %#v", body.Data)
+		}
+	})
+
+	t.Run("groups shows into one discovery row", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/libraries/%d/items?type=show&sort=recent", libraryRecord.ID), nil)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("list grouped shows status: %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data []database.MediaItem `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode grouped shows response: %v", err)
+		}
+		if len(body.Data) != 1 {
+			t.Fatalf("expected one grouped show, got %#v", body.Data)
+		}
+		if body.Data[0].Type != "show" || body.Data[0].Title != "Show One" {
+			t.Fatalf("unexpected grouped show card: %#v", body.Data[0])
+		}
+	})
+
+	t.Run("sorts by watch status", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/libraries/%d/items?sort=watch_status", libraryRecord.ID), nil)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("watch status sort status: %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data []database.MediaItem `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode watch status response: %v", err)
+		}
+		if len(body.Data) < 2 {
+			t.Fatalf("expected multiple items for watch status sort, got %#v", body.Data)
+		}
+		if body.Data[0].Title == "Show One" {
+			t.Fatalf("expected watched show to sort after unwatched items, got %#v", body.Data)
+		}
+	})
+}
+
+func TestHomeDiscoveryEndpoint(t *testing.T) {
+	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mediaRoot := filepath.Join(storageRoot, "home")
+	moviesDir := filepath.Join(mediaRoot, "Movies")
+	showsDir := filepath.Join(mediaRoot, "Shows")
+	if err := os.MkdirAll(moviesDir, 0o755); err != nil {
+		t.Fatalf("create movies dir: %v", err)
+	}
+	if err := os.MkdirAll(showsDir, 0o755); err != nil {
+		t.Fatalf("create shows dir: %v", err)
+	}
+
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{
+		Provider: "local",
+		Name:     "Home Source",
+		RootPath: mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	movieLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Movies",
+		Type:          "movies",
+		MediaSourceID: source.ID,
+		RootPath:      moviesDir,
+	})
+	if err != nil {
+		t.Fatalf("create movie library: %v", err)
+	}
+	showLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Shows",
+		Type:          "shows",
+		MediaSourceID: source.ID,
+		RootPath:      showsDir,
+	})
+	if err != nil {
+		t.Fatalf("create show library: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.Library{}).Where("id IN ?", []uint{movieLibrary.ID, showLibrary.ID}).Update("status", "active").Error; err != nil {
+		t.Fatalf("activate libraries: %v", err)
+	}
+
+	login := registerAndLoginRouterUser(t, ctx, authSvc, "home-user")
+	year2024 := 2024
+	createdAt := time.Now().UTC()
+
+	movie := database.MediaItem{LibraryID: movieLibrary.ID, Type: "movie", Title: "Library Movie", Year: &year2024, SourcePath: filepath.Join(moviesDir, "library-movie.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-2 * time.Hour), UpdatedAt: createdAt.Add(-2 * time.Hour)}
+	showEpisode := database.MediaItem{LibraryID: showLibrary.ID, Type: "episode", Title: "Pilot", SeriesTitle: "Library Show", ExternalID: "tmdb:library-show", Year: &year2024, SeasonNumber: intPtr(1), EpisodeNumber: intPtr(1), SourcePath: filepath.Join(showsDir, "library-show-s01e01.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-1 * time.Hour), UpdatedAt: createdAt.Add(-1 * time.Hour)}
+	for _, item := range []*database.MediaItem{&movie, &showEpisode} {
+		if err := db.WithContext(ctx).Create(item).Error; err != nil {
+			t.Fatalf("create home media item: %v", err)
+		}
+	}
+
+	lastPlayed := createdAt.Add(-30 * time.Minute)
+	progressRecords := []database.PlaybackProgress{
+		{UserID: login.User.ID, MediaItemID: movie.ID, PositionSeconds: 180, Watched: false, LastPlayedAt: &lastPlayed},
+		{UserID: login.User.ID, MediaItemID: showEpisode.ID, PositionSeconds: 2400, Watched: true, LastPlayedAt: timePtr(createdAt)},
+	}
+	for _, progressRecord := range progressRecords {
+		if err := db.WithContext(ctx).Create(&progressRecord).Error; err != nil {
+			t.Fatalf("create playback progress: %v", err)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/home/discovery", nil)
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", login.Token))
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("home discovery status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	if strings.Contains(recorder.Body.String(), "root_path") || strings.Contains(recorder.Body.String(), "storage_provider") {
+		t.Fatalf("home discovery leaked provider-centric fields: %s", recorder.Body.String())
+	}
+
+	var body struct {
+		Data homeDiscoveryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode home discovery response: %v", err)
+	}
+	if len(body.Data.ContinueWatching) != 1 || body.Data.ContinueWatching[0].MediaItem.ID != movie.ID {
+		t.Fatalf("unexpected continue watching payload: %#v", body.Data.ContinueWatching)
+	}
+	if len(body.Data.RecentlyPlayed) != 2 {
+		t.Fatalf("unexpected recently played payload: %#v", body.Data.RecentlyPlayed)
+	}
+	if len(body.Data.LatestByLibrary) != 2 {
+		t.Fatalf("expected two latest-by-library sections, got %#v", body.Data.LatestByLibrary)
+	}
+	if body.Data.LatestByLibrary[0].LibraryName == "" || len(body.Data.LatestByLibrary[0].Items) == 0 {
+		t.Fatalf("unexpected latest-by-library section: %#v", body.Data.LatestByLibrary)
+	}
+}
+
 func TestDeleteLibraryEndpoint(t *testing.T) {
 	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
@@ -2105,6 +2332,14 @@ func createAuthHeader(t *testing.T, ctx context.Context, authSvc *auth.Service) 
 		t.Fatalf("login auth user: %v", err)
 	}
 	return fmt.Sprintf("Bearer %s", loginResult.Token)
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }
 
 func assertDeletedCount(t *testing.T, ctx context.Context, db *gorm.DB, model any, query string, value any, want int64) {
