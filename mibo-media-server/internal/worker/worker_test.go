@@ -163,6 +163,123 @@ func TestRunOnceProcessesSyncLibraryJob(t *testing.T) {
 	}
 }
 
+func TestTargetedRefreshQueuesUniqueJobs(t *testing.T) {
+	t.Parallel()
+
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	showDir := filepath.Join(mediaRoot, "Movies", "ShowB")
+	if err := os.MkdirAll(showDir, 0o755); err != nil {
+		t.Fatalf("create media dirs: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: mediaRoot}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+
+	ctx := context.Background()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: filepath.Join(mediaRoot, "Movies")})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	first, err := librarySvc.QueueTargetedRefresh(ctx, record.ID, showDir, "storage_event")
+	if err != nil {
+		t.Fatalf("queue first targeted refresh: %v", err)
+	}
+	second, err := librarySvc.QueueTargetedRefresh(ctx, record.ID, showDir, "storage_event")
+	if err != nil {
+		t.Fatalf("queue duplicate targeted refresh: %v", err)
+	}
+
+	if first.ID != second.ID {
+		t.Fatalf("expected duplicate targeted refresh to return same job, got %d and %d", first.ID, second.ID)
+	}
+	if first.Kind != "targeted_refresh" {
+		t.Fatalf("expected targeted_refresh job kind, got %q", first.Kind)
+	}
+}
+
+func TestPartialSyncDoesNotSoftDeleteUnseenLibraryRows(t *testing.T) {
+	t.Parallel()
+
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	movieDir := filepath.Join(mediaRoot, "Movies")
+	showDir := filepath.Join(movieDir, "ShowB")
+	if err := os.MkdirAll(showDir, 0o755); err != nil {
+		t.Fatalf("create media dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "MovieA.2024.mkv"), []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write movie file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(showDir, "ShowB.S01E02.mkv"), []byte("episode"), 0o644); err != nil {
+		t.Fatalf("write episode file: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ffprobePath := writeFakeFFprobe(t)
+	cfg := config.Config{
+		Local:   config.LocalStorageConfig{RootPath: mediaRoot},
+		FFprobe: config.FFprobeConfig{Enabled: true, Path: ffprobePath, Timeout: 2 * time.Second},
+		Worker:  config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond},
+	}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, metadata.NewService(db, cfg.Metadata, settingsSvc), probe.NewService(db, registry, cfg.FFprobe), settingsSvc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, initialJob, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	runner.RunOnce(ctx)
+
+	if err := os.WriteFile(filepath.Join(showDir, "ShowB.S01E03.mkv"), []byte("episode-2"), 0o644); err != nil {
+		t.Fatalf("write new episode: %v", err)
+	}
+	targetedJob, err := librarySvc.QueueTargetedRefresh(ctx, record.ID, showDir, "storage_event")
+	if err != nil {
+		t.Fatalf("queue targeted refresh: %v", err)
+	}
+	runner.RunOnce(ctx)
+
+	var movieFile database.MediaFile
+	if err := db.WithContext(ctx).Where("library_id = ? AND storage_path = ?", record.ID, filepath.Join(movieDir, "MovieA.2024.mkv")).First(&movieFile).Error; err != nil {
+		t.Fatalf("load movie file: %v", err)
+	}
+	if movieFile.DeletedAt != nil {
+		t.Fatalf("expected unrelated movie row to stay active after partial sync")
+	}
+
+	var jobRecords []database.Job
+	if err := db.WithContext(ctx).Where("id IN ?", []uint{initialJob.ID, targetedJob.ID}).Order("id asc").Find(&jobRecords).Error; err != nil {
+		t.Fatalf("load jobs: %v", err)
+	}
+	if len(jobRecords) != 2 || jobRecords[1].Kind != "targeted_refresh" {
+		t.Fatalf("expected full sync then targeted refresh jobs, got %#v", jobRecords)
+	}
+}
+
 func newTMDBTestServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
