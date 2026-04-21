@@ -767,6 +767,11 @@ func (r *Router) handleDeleteLibrary(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleQueueLibraryScan(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	libraryID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -1166,6 +1171,11 @@ func (r *Router) handleStreamMediaFile(w http.ResponseWriter, req *http.Request)
 }
 
 func (r *Router) handleListJobs(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
 	status := req.URL.Query().Get("status")
 	kind := req.URL.Query().Get("kind")
@@ -1179,6 +1189,11 @@ func (r *Router) handleListJobs(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleRetryJob(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
 	jobID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)

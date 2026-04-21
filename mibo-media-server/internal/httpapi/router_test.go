@@ -1302,7 +1302,7 @@ func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
 }
 
 func TestAdminScanAndJobsEndpointsRequireAuth(t *testing.T) {
-	router, db, _, librarySvc, storageRoot := newDeleteTestRouter(t)
+	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1362,6 +1362,44 @@ func TestAdminScanAndJobsEndpointsRequireAuth(t *testing.T) {
 			}
 		})
 	}
+
+	authHeader := createAuthHeader(t, ctx, authSvc)
+
+	t.Run("authenticated scan and jobs operations still succeed", func(t *testing.T) {
+		queueRecorder := httptest.NewRecorder()
+		queueRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/libraries/%d/scan", createdLibrary.ID), nil)
+		queueRequest.Header.Set("Authorization", authHeader)
+		router.ServeHTTP(queueRecorder, queueRequest)
+		if queueRecorder.Code != http.StatusAccepted {
+			t.Fatalf("queue scan status: %d body=%s", queueRecorder.Code, queueRecorder.Body.String())
+		}
+
+		listRecorder := httptest.NewRecorder()
+		listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/jobs?status=failed", nil)
+		listRequest.Header.Set("Authorization", authHeader)
+		router.ServeHTTP(listRecorder, listRequest)
+		if listRecorder.Code != http.StatusOK {
+			t.Fatalf("list jobs status: %d body=%s", listRecorder.Code, listRecorder.Body.String())
+		}
+
+		var listBody struct {
+			Data []database.Job `json:"data"`
+		}
+		if err := json.Unmarshal(listRecorder.Body.Bytes(), &listBody); err != nil {
+			t.Fatalf("decode jobs list response: %v", err)
+		}
+		if len(listBody.Data) != 1 || listBody.Data[0].ID != failedJob.ID {
+			t.Fatalf("unexpected filtered jobs payload: %#v", listBody.Data)
+		}
+
+		retryRecorder := httptest.NewRecorder()
+		retryRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/jobs/%d/retry", failedJob.ID), nil)
+		retryRequest.Header.Set("Authorization", authHeader)
+		router.ServeHTTP(retryRecorder, retryRequest)
+		if retryRecorder.Code != http.StatusAccepted {
+			t.Fatalf("retry job status: %d body=%s", retryRecorder.Code, retryRecorder.Body.String())
+		}
+	})
 }
 
 func TestDeleteLibraryEndpoint(t *testing.T) {
