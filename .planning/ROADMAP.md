@@ -53,7 +53,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. TV content appears as series, seasons, and episodes, and films appear as standalone media items.
   3. Users see posters, summaries, and core item details instead of only raw filenames.
   4. Users can browse by library, filter, search, and open a media detail page for a chosen item.
-**Plans**: TBD
+**Plans**: 3 (`03-PLAN-01`, `03-PLAN-02`, `03-PLAN-03`)
 **UI hint**: yes
 
 ### Phase 4: Playback Entry & Unified Progress
@@ -96,7 +96,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 |-------|----------------|--------|-----------|
 | 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
 | 2. Library & Async Sync Foundation | 1/1 | Ready to execute | - |
-| 3. Semantic Catalog & Discovery | 0/TBD | Not started | - |
+| 3. Semantic Catalog & Discovery | 1/3 | In Progress | - |
 | 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
 | 5. Playback Decision Intelligence | 0/TBD | Not started | - |
 | 6. Stable Identity & Incremental Refresh | 0/TBD | Not started | - |

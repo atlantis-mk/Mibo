@@ -27,10 +27,13 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 
 - [x] **CATA-01
 **: 系统可以通过 `StorageProvider` 统一读取 OpenList 提供的文件访问能力，而不把 OpenList 细节暴露给业务 API
-- [ ] **CATA-02**: 系统可以在扫描后把媒体文件写入可追踪的 `media_files` 目录索引
-- [ ] **CATA-03**: 系统可以把识别出的内容组织为稳定的电影、剧集、季、集语义结构
+- [x] **CATA-02
+**: 系统可以在扫描后把媒体文件写入可追踪的 `media_files` 目录索引
+- [x] **CATA-03
+**: 系统可以把识别出的内容组织为稳定的电影、剧集、季、集语义结构
 - [ ] **CATA-04**: 用户可以看到带海报、简介和基础详情的媒体条目，而不是仅看到原始文件名
-- [ ] **CATA-05**: 用户可以按媒体库浏览、筛选、搜索并进入媒体详情页
+- [x] **CATA-05
+**: 用户可以按媒体库浏览、筛选、搜索并进入媒体详情页
 - [ ] **CATA-06**: 系统可以把扫描、识别、元数据匹配和 `ffprobe` 补全拆分为可重试的后台任务，而不是在单次请求中完成
 
 ### Playback
