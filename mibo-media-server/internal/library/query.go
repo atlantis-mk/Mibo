@@ -117,6 +117,12 @@ type TrackDetail struct {
 	Channels int    `json:"channels,omitempty"`
 }
 
+type LatestByLibrarySection struct {
+	LibraryID   uint                 `json:"library_id"`
+	LibraryName string               `json:"library_name"`
+	Items       []database.MediaItem `json:"items"`
+}
+
 func (s *Service) GetLibrary(ctx context.Context, libraryID uint) (LibraryDetail, error) {
 	var detail LibraryDetail
 	if err := s.db.WithContext(ctx).First(&detail.Library, libraryID).Error; err != nil {
@@ -234,6 +240,38 @@ func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]database.
 	}
 
 	return items, nil
+}
+
+func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]LatestByLibrarySection, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 12
+	}
+
+	libraries, err := s.ListActiveLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sections := make([]LatestByLibrarySection, 0, len(libraries))
+	for _, libraryRecord := range libraries {
+		items, err := s.BrowseMediaItems(ctx, BrowseMediaItemsInput{
+			LibraryID:  libraryRecord.ID,
+			Scope:      BrowseScopeLibrary,
+			TypeFilter: BrowseTypeFilterAll,
+			Sort:       BrowseSortRecent,
+			Limit:      limit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		sections = append(sections, LatestByLibrarySection{
+			LibraryID:   libraryRecord.ID,
+			LibraryName: libraryRecord.Name,
+			Items:       items,
+		})
+	}
+
+	return sections, nil
 }
 
 func (s *Service) loadWatchRanks(ctx context.Context) (map[uint]int, error) {

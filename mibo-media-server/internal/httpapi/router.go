@@ -59,6 +59,12 @@ type Router struct {
 	settings *settings.Service
 }
 
+type homeDiscoveryResponse struct {
+	ContinueWatching []progress.Entry                 `json:"continue_watching"`
+	RecentlyPlayed   []progress.Entry                 `json:"recently_played"`
+	LatestByLibrary  []library.LatestByLibrarySection `json:"latest_by_library"`
+}
+
 func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service) http.Handler {
 	router := &Router{
 		cfg:      cfg,
@@ -465,7 +471,35 @@ func (r *Router) handleRecentlyAdded(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleHomeDiscovery(w http.ResponseWriter, req *http.Request) {
-	writeError(req.Context(), w, http.StatusNotImplemented, fmt.Errorf("home discovery not implemented"))
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
+	continueWatching, err := r.progress.ContinueWatching(req.Context(), user.ID, 20)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+
+	recentlyPlayed, err := r.progress.RecentlyPlayed(req.Context(), user.ID, 20)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+
+	latestByLibrary, err := r.library.ListLatestByLibrary(req.Context(), 12)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(req.Context(), w, http.StatusOK, homeDiscoveryResponse{
+		ContinueWatching: continueWatching,
+		RecentlyPlayed:   recentlyPlayed,
+		LatestByLibrary:  latestByLibrary,
+	})
 }
 
 func (r *Router) handleCreateMediaSource(w http.ResponseWriter, req *http.Request) {
