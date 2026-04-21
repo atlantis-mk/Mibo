@@ -1005,20 +1005,37 @@ func (r *Router) handleGetPlaybackSource(w http.ResponseWriter, req *http.Reques
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-
-	source, err := r.playback.GetPlaybackSource(req.Context(), mediaItemID, preferredFileID)
+	clientProfile, err := parseClientProfileQuery(req)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	if r.hls.Enabled() {
-		source.URL = r.hls.PlaylistURL(source.MediaFileID)
-		source.Container = "m3u8"
-		source.Direct = false
+
+	source, err := r.playback.GetPlaybackSource(req.Context(), playback.PlaybackRequest{
+		MediaItemID:     mediaItemID,
+		PreferredFileID: preferredFileID,
+		ClientProfile:   clientProfile,
+		AllowHLSFallback: r.hls.Enabled(),
+	})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
 	}
 	source.URL = buildPlaybackURL(req, source.URL)
 
 	writeJSON(req.Context(), w, http.StatusOK, source)
+}
+
+func parseClientProfileQuery(req *http.Request) (playback.ClientProfile, error) {
+	value := playback.ClientProfile(strings.ToLower(strings.TrimSpace(req.URL.Query().Get("client_profile"))))
+	switch value {
+	case playback.ClientProfileWeb, playback.ClientProfileMobile, playback.ClientProfileTV:
+		return value, nil
+	case "":
+		return "", fmt.Errorf("client_profile is required")
+	default:
+		return "", fmt.Errorf("client_profile must be one of web, mobile, tv")
+	}
 }
 
 func (r *Router) handleGetMediaFileLink(w http.ResponseWriter, req *http.Request) {

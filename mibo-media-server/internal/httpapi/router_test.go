@@ -253,7 +253,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 
 		switch req.URL.Path {
 		case "/api/fs/get":
-			isDir := !strings.HasSuffix(body.Path, ".mkv")
+			isDir := !strings.HasSuffix(body.Path, ".mp4")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code":    http.StatusOK,
 				"message": "success",
@@ -262,7 +262,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		case "/api/fs/list":
 			content := []map[string]any{}
 			if body.Path == "/movies" {
-				content = []map[string]any{{"name": "MovieA.2024.mkv", "is_dir": false, "size": 1024}}
+				content = []map[string]any{{"name": "MovieA.2024.mp4", "is_dir": false, "size": 1024}}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code":    http.StatusOK,
@@ -376,7 +376,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		t.Fatalf("rematch status: %d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-items/1/playback", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-items/1/playback?client_profile=web", nil)
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", login.Token))
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -1259,6 +1259,118 @@ func TestPlaybackEndpointRequiresAuth(t *testing.T) {
 	}
 }
 
+func TestPlaybackEndpointRejectsMissingAndInvalidClientProfile(t *testing.T) {
+	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mediaRoot := filepath.Join(storageRoot, "playback-profile")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create media root: %v", err)
+	}
+
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{
+		Provider: "local",
+		Name:     "Playback Source",
+		RootPath: mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Playback Library",
+		Type:          "movies",
+		MediaSourceID: source.ID,
+		RootPath:      mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	mediaItem := database.MediaItem{LibraryID: createdLibrary.ID, Type: "movie", Title: "Playback Movie", SourcePath: filepath.Join(mediaRoot, "movie.mp4"), MatchStatus: "matched", Status: "ready"}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{LibraryID: createdLibrary.ID, MediaItemID: &mediaItem.ID, StoragePath: mediaItem.SourcePath, Container: "mp4", ProbeStatus: probe.StatusReady, VideoCodec: "h264"}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
+	if err := os.WriteFile(mediaFile.StoragePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write media file: %v", err)
+	}
+
+	authHeader := createAuthHeader(t, ctx, authSvc)
+
+	t.Run("missing profile", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/playback", mediaItem.ID), nil)
+		request.Header.Set("Authorization", authHeader)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("invalid profile", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/playback?client_profile=desktop", mediaItem.ID), nil)
+		request.Header.Set("Authorization", authHeader)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+}
+
+func TestPlaybackEndpointReturnsDecisionPayloadForFallbackAndUnplayable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	t.Run("fallback stays 200 with payload", func(t *testing.T) {
+		router, authSvc, mediaItemID := newPlaybackDecisionRouter(t, true)
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/playback?client_profile=web", mediaItemID), nil)
+		request.Header.Set("Authorization", createAuthHeader(t, ctx, authSvc))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data playback.PlaybackSource `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Data.Decision.Kind != "fallback" {
+			t.Fatalf("decision.kind = %q, want fallback", body.Data.Decision.Kind)
+		}
+	})
+
+	t.Run("unplayable stays 200 with payload", func(t *testing.T) {
+		router, authSvc, mediaItemID := newPlaybackDecisionRouter(t, false)
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/playback?client_profile=web", mediaItemID), nil)
+		request.Header.Set("Authorization", createAuthHeader(t, ctx, authSvc))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data playback.PlaybackSource `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Data.Decision.Kind != "unplayable" {
+			t.Fatalf("decision.kind = %q, want unplayable", body.Data.Decision.Kind)
+		}
+	})
+}
+
 func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
 	router, _, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
@@ -2035,7 +2147,7 @@ func TestLocalPlaybackStreamEndpoint(t *testing.T) {
 	if err := os.MkdirAll(movieDir, 0o755); err != nil {
 		t.Fatalf("create movie dir: %v", err)
 	}
-	moviePath := filepath.Join(movieDir, "MovieA.2024.mkv")
+	moviePath := filepath.Join(movieDir, "MovieA.2024.mp4")
 	movieBytes := []byte("local-stream-payload")
 	if err := os.WriteFile(moviePath, movieBytes, 0o644); err != nil {
 		t.Fatalf("write movie file: %v", err)
@@ -2088,7 +2200,7 @@ func TestLocalPlaybackStreamEndpoint(t *testing.T) {
 	}
 	authHeader := fmt.Sprintf("Bearer %s", loginResult.Token)
 
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback", nil)
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -2140,7 +2252,7 @@ func TestOpenListPlaybackStreamEndpoint(t *testing.T) {
 	openList = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if req.URL.Path == "/raw/MovieA.2024.mkv" {
+		if req.URL.Path == "/raw/MovieA.2024.mp4" {
 			w.Header().Set("Content-Type", "video/mp4")
 			w.Header().Set("Accept-Ranges", "bytes")
 			_, _ = w.Write(mediaPayload)
@@ -2154,20 +2266,20 @@ func TestOpenListPlaybackStreamEndpoint(t *testing.T) {
 
 		switch req.URL.Path {
 		case "/api/fs/get":
-			isDir := !strings.HasSuffix(body.Path, ".mkv")
+			isDir := !strings.HasSuffix(body.Path, ".mp4")
 			data := map[string]any{"name": "movies", "is_dir": isDir, "size": len(mediaPayload)}
 			if !isDir {
-				data["raw_url"] = openList.URL + "/raw/MovieA.2024.mkv"
+				data["raw_url"] = openList.URL + "/raw/MovieA.2024.mp4"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"code": http.StatusOK, "message": "success", "data": data})
 		case "/api/fs/list":
 			content := []map[string]any{}
 			if body.Path == "/movies" {
-				content = []map[string]any{{"name": "MovieA.2024.mkv", "is_dir": false, "size": len(mediaPayload)}}
+				content = []map[string]any{{"name": "MovieA.2024.mp4", "is_dir": false, "size": len(mediaPayload)}}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"code": http.StatusOK, "message": "success", "data": map[string]any{"content": content}})
 		case "/api/fs/link":
-			_ = json.NewEncoder(w).Encode(map[string]any{"code": http.StatusOK, "message": "success", "data": map[string]any{"url": openList.URL + "/raw/MovieA.2024.mkv"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": http.StatusOK, "message": "success", "data": map[string]any{"url": openList.URL + "/raw/MovieA.2024.mp4"}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -2221,7 +2333,7 @@ func TestOpenListPlaybackStreamEndpoint(t *testing.T) {
 	}
 	authHeader := fmt.Sprintf("Bearer %s", loginResult.Token)
 
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback", nil)
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -2315,7 +2427,7 @@ func TestLocalPlaybackReturnsHLSPlaylist(t *testing.T) {
 	}
 
 	loginResult := registerAndLoginRouterUser(t, ctx, authSvc, "hls-local")
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback", nil)
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -2453,7 +2565,7 @@ func TestOpenListPlaybackReturnsHLSPlaylist(t *testing.T) {
 	}
 
 	loginResult := registerAndLoginRouterUser(t, ctx, authSvc, "hls-openlist")
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback", nil)
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -2553,6 +2665,59 @@ func newDeleteTestRouter(t *testing.T) (http.Handler, *gorm.DB, *auth.Service, *
 	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settings.NewService(db, cfg.Metadata)), settings.NewService(db, cfg.Metadata))
 
 	return router, db, authSvc, librarySvc, storageRoot
+}
+
+func newPlaybackDecisionRouter(t *testing.T, enableHLS bool) (http.Handler, *auth.Service, uint) {
+	t.Helper()
+
+	storageRoot := filepath.Join(t.TempDir(), "playback-decision-root")
+	if err := os.MkdirAll(storageRoot, 0o755); err != nil {
+		t.Fatalf("create storage root: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Driver: "sqlite"},
+		Storage:  config.StorageConfig{Provider: "local"},
+		Local:    config.LocalStorageConfig{RootPath: storageRoot},
+		FFmpeg:   config.FFmpegConfig{Enabled: enableHLS, Path: writeRouterFakeFFmpeg(t), Timeout: 2 * time.Second},
+		HLS:      config.HLSConfig{Enabled: enableHLS, RootPath: filepath.Join(t.TempDir(), "hls"), SegmentDuration: 6, CleanupAge: time.Hour},
+	}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settings.NewService(db, cfg.Metadata)), settings.NewService(db, cfg.Metadata))
+
+	ctx := context.Background()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Playback Decision Source", RootPath: storageRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: storageRoot})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	mediaPath := filepath.Join(storageRoot, "decision.mkv")
+	if err := os.WriteFile(mediaPath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write media file: %v", err)
+	}
+
+	item := database.MediaItem{LibraryID: record.ID, Type: "movie", Title: "Decision Movie", SourcePath: mediaPath, MatchStatus: "matched", Status: "ready"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	file := database.MediaFile{LibraryID: record.ID, MediaItemID: &item.ID, StoragePath: mediaPath, Container: "mkv", ProbeStatus: probe.StatusReady, VideoCodec: "hevc"}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
+
+	return router, authSvc, item.ID
 }
 
 func seedLibraryData(t *testing.T, ctx context.Context, db *gorm.DB, authSvc *auth.Service, libraryID uint, rootDir, name string) (uint, uint, uint) {
