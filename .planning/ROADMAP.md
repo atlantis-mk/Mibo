@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Access & Platform Boundary** - Users enter the app through a stable authenticated boundary that hides storage-provider details. Completed 2026-04-21.
 - [ ] **Phase 2: Library & Async Sync Foundation** - Admins connect storage and run scans as background work instead of blocking requests.
-- [ ] **Phase 3: Semantic Catalog & Discovery** - Users browse a semantic media catalog rather than raw files.
+- [x] **Phase 3: Semantic Catalog & Discovery** - Users browse a semantic media catalog rather than raw files. Completed 2026-04-21.
 - [ ] **Phase 4: Playback Entry & Unified Progress** - Users can start playback and resume consistently across clients.
 - [ ] **Phase 5: Playback Decision Intelligence** - Playback selection becomes capability-aware with direct-play-first behavior.
 - [ ] **Phase 6: Stable Identity & Incremental Refresh** - Libraries stay fresh and resilient when files change over time.
@@ -96,7 +96,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 |-------|----------------|--------|-----------|
 | 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
 | 2. Library & Async Sync Foundation | 1/1 | Ready to execute | - |
-| 3. Semantic Catalog & Discovery | 2/3 | In Progress | - |
+| 3. Semantic Catalog & Discovery | 3/3 | Complete | 2026-04-21 |
 | 4. Playback Entry & Unified Progress | 0/TBD | Not started | - |
 | 5. Playback Decision Intelligence | 0/TBD | Not started | - |
 | 6. Stable Identity & Incremental Refresh | 0/TBD | Not started | - |
