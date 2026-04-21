@@ -129,6 +129,62 @@ func TestStorageEventEndpointEnqueuesTargetedRefresh(t *testing.T) {
 	}
 }
 
+func TestStorageEventEndpointRejectsEscapingPath(t *testing.T) {
+	t.Parallel()
+
+	router, _, authSvc, _, libraryID, _ := newStorageEventTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"update","path":"%s"}`, libraryID, filepath.Join(t.TempDir(), "outside", "MovieA.2024.mkv"))))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestStorageEventEndpointFallsBackToFullSyncForUnsupportedKind(t *testing.T) {
+	t.Parallel()
+
+	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"checksum","path":%q}`, libraryID, moviePath)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var queuedJob database.Job
+	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
+		t.Fatalf("load queued job: %v", err)
+	}
+	if queuedJob.Kind != library.JobKindSyncLibrary {
+		t.Fatalf("expected full sync fallback job, got %q", queuedJob.Kind)
+	}
+}
+
+func TestStorageEventEndpointRejectsEscapingUnsupportedPayload(t *testing.T) {
+	t.Parallel()
+
+	router, _, authSvc, _, libraryID, _ := newStorageEventTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"checksum","path":"%s"}`, libraryID, filepath.Join(t.TempDir(), "outside", "MovieA.2024.mkv"))))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestSetupStatus(t *testing.T) {
 	tests := []struct {
 		name            string
