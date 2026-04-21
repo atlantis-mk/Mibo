@@ -86,6 +86,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/me/progress", router.handleUpdateProgress)
 	mux.HandleFunc("GET /api/v1/me/continue-watching", router.handleContinueWatching)
 	mux.HandleFunc("GET /api/v1/me/recently-played", router.handleRecentlyPlayed)
+	mux.HandleFunc("GET /api/v1/home/discovery", router.handleHomeDiscovery)
 	mux.HandleFunc("GET /api/v1/home/recently-added", router.handleRecentlyAdded)
 	mux.HandleFunc("GET /api/v1/system/info", router.handleSystemInfo)
 	mux.HandleFunc("GET /api/v1/settings/metadata", router.handleGetMetadataSettings)
@@ -463,6 +464,10 @@ func (r *Router) handleRecentlyAdded(w http.ResponseWriter, req *http.Request) {
 	writeJSON(req.Context(), w, http.StatusOK, items)
 }
 
+func (r *Router) handleHomeDiscovery(w http.ResponseWriter, req *http.Request) {
+	writeError(req.Context(), w, http.StatusNotImplemented, fmt.Errorf("home discovery not implemented"))
+}
+
 func (r *Router) handleCreateMediaSource(w http.ResponseWriter, req *http.Request) {
 	var input library.CreateMediaSourceInput
 	if err := decodeJSON(req, &input); err != nil {
@@ -713,9 +718,16 @@ func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request
 		return
 	}
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	mediaType := req.URL.Query().Get("type")
+	browseInput := library.BrowseMediaItemsInput{
+		LibraryID:  libraryID,
+		Scope:      library.BrowseScopeLibrary,
+		TypeFilter: normalizeBrowseTypeFilter(req.URL.Query().Get("type")),
+		Year:       library.ParseBrowseYear(req.URL.Query().Get("year")),
+		Sort:       normalizeBrowseSort(req.URL.Query().Get("sort")),
+		Limit:      limit,
+	}
 
-	items, err := r.library.ListMediaItems(req.Context(), libraryID, mediaType, limit)
+	items, err := r.library.BrowseMediaItems(req.Context(), browseInput)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
@@ -1313,6 +1325,30 @@ func buildPlaybackURL(req *http.Request, rawURL string) string {
 	query.Set("access_token", token)
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
+}
+
+func normalizeBrowseTypeFilter(value string) library.BrowseTypeFilter {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(library.BrowseTypeFilterMovie):
+		return library.BrowseTypeFilterMovie
+	case string(library.BrowseTypeFilterShow):
+		return library.BrowseTypeFilterShow
+	default:
+		return library.BrowseTypeFilterAll
+	}
+}
+
+func normalizeBrowseSort(value string) library.BrowseSort {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(library.BrowseSortTitle):
+		return library.BrowseSortTitle
+	case string(library.BrowseSortYear):
+		return library.BrowseSortYear
+	case string(library.BrowseSortWatchStatus):
+		return library.BrowseSortWatchStatus
+	default:
+		return library.BrowseSortRecent
+	}
 }
 
 func rewriteHLSPlaylist(req *http.Request, mediaFileID uint, playlist []byte) []byte {
