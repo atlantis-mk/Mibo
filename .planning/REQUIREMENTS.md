@@ -13,7 +13,8 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 **: 管理员可以完成初始化配置并进入可用的媒体系统主流程
 - [x] **ACCS-02
 **: 用户可以登录并在后续请求中保持已认证会话
-- [ ] **ACCS-03**: 用户可以通过稳定的 HTTP API 访问同一套媒体能力，供 Web 现在使用并为移动端、TV 端预留兼容性
+- [x] **ACCS-03
+**: 用户可以通过稳定的 HTTP API 访问同一套媒体能力，供 Web 现在使用并为移动端、TV 端预留兼容性
 
 ### Libraries
 
@@ -24,7 +25,8 @@ Requirements for the current milestone. Each maps to exactly one roadmap phase.
 
 ### Catalog
 
-- [ ] **CATA-01**: 系统可以通过 `StorageProvider` 统一读取 OpenList 提供的文件访问能力，而不把 OpenList 细节暴露给业务 API
+- [x] **CATA-01
+**: 系统可以通过 `StorageProvider` 统一读取 OpenList 提供的文件访问能力，而不把 OpenList 细节暴露给业务 API
 - [ ] **CATA-02**: 系统可以在扫描后把媒体文件写入可追踪的 `media_files` 目录索引
 - [ ] **CATA-03**: 系统可以把识别出的内容组织为稳定的电影、剧集、季、集语义结构
 - [ ] **CATA-04**: 用户可以看到带海报、简介和基础详情的媒体条目，而不是仅看到原始文件名
