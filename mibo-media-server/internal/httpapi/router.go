@@ -1026,7 +1026,9 @@ func (r *Router) handleStreamMediaFile(w http.ResponseWriter, req *http.Request)
 
 func (r *Router) handleListJobs(w http.ResponseWriter, req *http.Request) {
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	jobList, err := r.jobs.List(req.Context(), limit)
+	status := req.URL.Query().Get("status")
+	kind := req.URL.Query().Get("kind")
+	jobList, err := r.jobs.List(req.Context(), limit, status, kind)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
