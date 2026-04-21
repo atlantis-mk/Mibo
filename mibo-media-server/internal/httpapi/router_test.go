@@ -1193,6 +1193,70 @@ func TestHomeDiscoveryEndpoint(t *testing.T) {
 	}
 }
 
+func TestPlaybackEndpointRequiresAuth(t *testing.T) {
+	router, db, _, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mediaRoot := filepath.Join(storageRoot, "playback-auth")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create media root: %v", err)
+	}
+
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{
+		Provider: "local",
+		Name:     "Playback Source",
+		RootPath: mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{
+		Name:          "Playback Library",
+		Type:          "movies",
+		MediaSourceID: source.ID,
+		RootPath:      mediaRoot,
+	})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	mediaItem := database.MediaItem{
+		LibraryID:   createdLibrary.ID,
+		Type:        "movie",
+		Title:       "Playback Auth Movie",
+		SourcePath:  filepath.Join(mediaRoot, "playback-auth.mkv"),
+		MatchStatus: "matched",
+		Status:      "ready",
+	}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+
+	mediaFile := database.MediaFile{
+		LibraryID:   createdLibrary.ID,
+		MediaItemID: &mediaItem.ID,
+		StoragePath: mediaItem.SourcePath,
+		ProbeStatus: "ready",
+	}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
+	if err := os.WriteFile(mediaFile.StoragePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write media file: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/playback", mediaItem.ID), nil)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestAdminSourceAndLibraryEndpointsRequireAuth(t *testing.T) {
 	router, _, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
 
