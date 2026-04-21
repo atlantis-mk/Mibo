@@ -140,6 +140,7 @@ type TVSeasonMetadata struct {
 }
 
 type TVEpisodeMetadata struct {
+	MediaItemID    *uint  `json:"media_item_id,omitempty"`
 	SeasonNumber   int    `json:"season_number"`
 	EpisodeNumber  int    `json:"episode_number"`
 	Name           string `json:"name"`
@@ -449,7 +450,7 @@ func (s *Service) ListTVSeasons(ctx context.Context, seriesTMDBID int) ([]TVSeas
 	return seasons, nil
 }
 
-func (s *Service) ListSeasonEpisodes(ctx context.Context, seriesTMDBID int, seasonNumber int) ([]TVEpisodeMetadata, error) {
+func (s *Service) ListSeasonEpisodes(ctx context.Context, seriesTMDBID int, seasonNumber int, libraryID *uint) ([]TVEpisodeMetadata, error) {
 	if seriesTMDBID <= 0 {
 		return nil, fmt.Errorf("tmdb_id 必须是正整数")
 	}
@@ -491,9 +492,15 @@ func (s *Service) ListSeasonEpisodes(ctx context.Context, seriesTMDBID int, seas
 		}
 	}
 
+	episodeMediaItemIDs, err := s.lookupEpisodeMediaItemIDs(ctx, seriesTMDBID, seasonNumber, libraryID)
+	if err != nil {
+		return nil, err
+	}
+
 	episodes := make([]TVEpisodeMetadata, 0, len(episodeRows))
 	for _, row := range episodeRows {
 		episodes = append(episodes, TVEpisodeMetadata{
+			MediaItemID:    episodeMediaItemIDs[row.EpisodeNumber],
 			SeasonNumber:   row.SeasonNumber,
 			EpisodeNumber:  row.EpisodeNumber,
 			Name:           row.Name,
@@ -503,6 +510,33 @@ func (s *Service) ListSeasonEpisodes(ctx context.Context, seriesTMDBID int, seas
 		})
 	}
 	return episodes, nil
+}
+
+func (s *Service) lookupEpisodeMediaItemIDs(ctx context.Context, seriesTMDBID int, seasonNumber int, libraryID *uint) (map[int]*uint, error) {
+	query := s.db.WithContext(ctx).
+		Where("external_id = ? AND season_number = ? AND deleted_at IS NULL", fmt.Sprintf("tv:%d", seriesTMDBID), seasonNumber)
+	if libraryID != nil {
+		query = query.Where("library_id = ?", *libraryID)
+	}
+
+	var items []database.MediaItem
+	if err := query.Order("id asc").Find(&items).Error; err != nil {
+		return nil, err
+	}
+
+	result := make(map[int]*uint, len(items))
+	for _, item := range items {
+		if item.EpisodeNumber == nil {
+			continue
+		}
+		if _, exists := result[*item.EpisodeNumber]; exists {
+			continue
+		}
+		id := uint(item.ID)
+		result[*item.EpisodeNumber] = &id
+	}
+
+	return result, nil
 }
 
 func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, mediaType, query string, year *int) (*searchResult, float64, error) {

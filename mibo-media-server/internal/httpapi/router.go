@@ -826,7 +826,18 @@ func (r *Router) handleListTVSeasonEpisodes(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	episodes, err := r.metadata.ListSeasonEpisodes(req.Context(), tmdbID, seasonNumber)
+	var libraryID *uint
+	if rawLibraryID := strings.TrimSpace(req.URL.Query().Get("library_id")); rawLibraryID != "" {
+		parsedLibraryID, err := strconv.ParseUint(rawLibraryID, 10, 64)
+		if err != nil || parsedLibraryID == 0 {
+			writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("library_id must be a positive integer"))
+			return
+		}
+		value := uint(parsedLibraryID)
+		libraryID = &value
+	}
+
+	episodes, err := r.metadata.ListSeasonEpisodes(req.Context(), tmdbID, seasonNumber, libraryID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return

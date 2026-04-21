@@ -304,7 +304,7 @@ func TestListSeasonEpisodesReusesEpisodeCache(t *testing.T) {
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	episodes, err := svc.ListSeasonEpisodes(ctx, 777, 1)
+	episodes, err := svc.ListSeasonEpisodes(ctx, 777, 1, nil)
 	if err != nil {
 		t.Fatalf("list season episodes: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestListSeasonEpisodesReusesEpisodeCache(t *testing.T) {
 		t.Fatalf("unexpected cache rows: season=%#v episodes=%#v", cachedSeason, cachedEpisodes)
 	}
 
-	if _, err := svc.ListSeasonEpisodes(ctx, 777, 1); err != nil {
+	if _, err := svc.ListSeasonEpisodes(ctx, 777, 1, nil); err != nil {
 		t.Fatalf("list season episodes from cache: %v", err)
 	}
 	if seasonRequests != 1 {

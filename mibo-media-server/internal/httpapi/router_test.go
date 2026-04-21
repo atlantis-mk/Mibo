@@ -2413,6 +2413,25 @@ func TestTVMetadataEndpoints(t *testing.T) {
 	authSvc := auth.NewService(db)
 	jobsSvc := jobs.NewService(db)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
+	showLibrary := database.Library{Name: "Shows", Type: "tvshows", RootPath: filepath.Join(storageRoot, "shows"), Status: "active", ScannerEnabled: true}
+	if err := db.WithContext(context.Background()).Create(&showLibrary).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	episodeOne := 1
+	if err := db.WithContext(context.Background()).Create(&database.MediaItem{
+		LibraryID:     showLibrary.ID,
+		Type:          "episode",
+		Title:         "Pilot",
+		SeriesTitle:   "Show A",
+		ExternalID:    "tv:777",
+		SeasonNumber:  &episodeOne,
+		EpisodeNumber: &episodeOne,
+		SourcePath:    filepath.Join(storageRoot, "shows", "show-a-s01e01.mkv"),
+		MatchStatus:   "matched",
+		Status:        "ready",
+	}).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
 	if _, err := settingsSvc.UpdateMetadataSettings(context.Background(), settings.UpdateMetadataSettingsInput{
 		TMDB: settings.MetadataProviderInput{
 			APIKey:       "router-tv-key",
@@ -2464,6 +2483,7 @@ func TestTVMetadataEndpoints(t *testing.T) {
 
 		var body struct {
 			Data []struct {
+				MediaItemID    *uint  `json:"media_item_id"`
 				SeasonNumber   int    `json:"season_number"`
 				EpisodeNumber  int    `json:"episode_number"`
 				Name           string `json:"name"`
@@ -2484,6 +2504,9 @@ func TestTVMetadataEndpoints(t *testing.T) {
 		}
 		if body.Data[0].RuntimeSeconds == nil || *body.Data[0].RuntimeSeconds != 2880 {
 			t.Fatalf("unexpected runtime seconds: %#v", body.Data[0].RuntimeSeconds)
+		}
+		if body.Data[0].MediaItemID == nil || *body.Data[0].MediaItemID == 0 {
+			t.Fatalf("expected episode media_item_id, got %#v", body.Data[0].MediaItemID)
 		}
 		if body.Data[0].PayloadJSON != "" {
 			t.Fatalf("expected sanitized payload without raw tmdb json, got %#v", body.Data[0])
