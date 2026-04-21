@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready_to_execute
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-04-21T20:58:30Z"
-last_activity: 2026-04-22 -- Completed 04-02 frontend playback route intent and controller seam
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-04-21T21:07:31Z"
+last_activity: 2026-04-22 -- Completed 04-03 canonical playback entry and resume/restart UX
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 12
-  completed_plans: 10
-  percent: 83
+  completed_plans: 11
+  percent: 92
 ---
 
 # Project State
@@ -26,19 +26,19 @@ See: .planning/PROJECT.md (updated 2026-04-22)
 ## Current Position
 
 Phase: 4
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
-Last activity: 2026-04-22 -- Completed 04-02 frontend playback route intent and controller seam
+Last activity: 2026-04-22 -- Completed 04-03 canonical playback entry and resume/restart UX
 
-Progress: [████████░░] 83%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: 9 min
-- Total execution time: 0.9 hours
+- Total execution time: 1.0 hours
 
 **By Phase:**
 
@@ -47,13 +47,13 @@ Progress: [████████░░] 83%
 | 01 | 2 | - | - |
 | 02 | 3 | - | - |
 | 03 | 3 | - | - |
-| 04 | 2 | 7 min | 4 min |
+| 04 | 3 | 15 min | 5 min |
 
 **Recent Trend:**
 
 - Last 5 plans: 01-01, 01-02, 02-01, 03-01, 03-02
 - Last 5 plans: 01-02, 02-01, 03-01, 03-02, 03-03
-- Last 5 plans: 03-01, 03-02, 03-03, 04-01, 04-02
+- Last 5 plans: 03-02, 03-03, 04-01, 04-02, 04-03
 - Trend: Stable
 
 | 01 | 2 | 36 min | 18 min |
@@ -62,6 +62,7 @@ Progress: [████████░░] 83%
 | Phase 03 P03 | recovery | 4 tasks | web + API wiring |
 | Phase 04 P01 | 3 min | 2 tasks | 4 files |
 | Phase 04 P02 | 4 min | 2 tasks | 4 files |
+| Phase 04 P03 | 8 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,8 @@ Recent decisions affecting current work:
 - Keep /media/$mediaItemId as the only TV detail route by exposing series_tmdb_id and default_season_number.
 - Keep playback entry authenticated and merge canonical progress by furthest unfinished position with completion dominance.
 - Represent playback restart intent as validated route search and funnel frontend playback entry through one typed controller helper.
+- Route home continue-watching directly into the standalone playback page instead of reopening detail first.
+- Only show explicit restart on detail surfaces when unfinished canonical progress exists; watched items default to fresh playback.
 
 ### Pending Todos
 
@@ -100,8 +103,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-04-21T20:58:30Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-04-21T21:07:31Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None
 
 **Planned Phase:** 04 (playback-entry-&-unified-progress)
