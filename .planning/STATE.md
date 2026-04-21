@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready_to_execute
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-04-21T20:49:23Z"
-last_activity: 2026-04-21 -- Completed 04-01 backend playback auth and canonical progress
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-04-21T20:58:30Z"
+last_activity: 2026-04-22 -- Completed 04-02 frontend playback route intent and controller seam
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-22)
 ## Current Position
 
 Phase: 4
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
-Last activity: 2026-04-21 -- Completed 04-01 backend playback auth and canonical progress
+Last activity: 2026-04-22 -- Completed 04-02 frontend playback route intent and controller seam
 
-Progress: [████████░░] 75%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -47,13 +47,13 @@ Progress: [████████░░] 75%
 | 01 | 2 | - | - |
 | 02 | 3 | - | - |
 | 03 | 3 | - | - |
-| 04 | 1 | 3 min | 3 min |
+| 04 | 2 | 7 min | 4 min |
 
 **Recent Trend:**
 
 - Last 5 plans: 01-01, 01-02, 02-01, 03-01, 03-02
 - Last 5 plans: 01-02, 02-01, 03-01, 03-02, 03-03
-- Last 5 plans: 02-01, 03-01, 03-02, 03-03, 04-01
+- Last 5 plans: 03-01, 03-02, 03-03, 04-01, 04-02
 - Trend: Stable
 
 | 01 | 2 | 36 min | 18 min |
@@ -61,6 +61,7 @@ Progress: [████████░░] 75%
 | Phase 03 P02 | 11 min | 3 tasks | 8 files |
 | Phase 03 P03 | recovery | 4 tasks | web + API wiring |
 | Phase 04 P01 | 3 min | 2 tasks | 4 files |
+| Phase 04 P02 | 4 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,7 @@ Recent decisions affecting current work:
 - Cache TMDB TV seasons from show detail and episode rows from season detail responses.
 - Keep /media/$mediaItemId as the only TV detail route by exposing series_tmdb_id and default_season_number.
 - Keep playback entry authenticated and merge canonical progress by furthest unfinished position with completion dominance.
+- Represent playback restart intent as validated route search and funnel frontend playback entry through one typed controller helper.
 
 ### Pending Todos
 
@@ -98,8 +100,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-04-21T20:49:23Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-04-21T20:58:30Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
 
 **Planned Phase:** 04 (playback-entry-&-unified-progress)

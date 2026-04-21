@@ -73,7 +73,7 @@ Plans:
  
 Plans:
 - [x] 04-01-PLAN.md — Backend playback auth and canonical progress merge semantics
-- [ ] 04-02-PLAN.md — Frontend playback route intent contract and controller seam
+- [x] 04-02-PLAN.md — Frontend playback route intent contract and controller seam
 - [ ] 04-03-PLAN.md — Home/detail/playback UI wiring for resume and restart behavior
 - [ ] 04-04-PLAN.md — Manual end-to-end playback/progress verification
 **UI hint**: yes
@@ -108,6 +108,6 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 1. Access & Platform Boundary | 2/2 | Complete | 2026-04-21 |
 | 2. Library & Async Sync Foundation | 3/3 | Complete | 2026-04-22 |
 | 3. Semantic Catalog & Discovery | 3/3 | Complete | 2026-04-21 |
-| 4. Playback Entry & Unified Progress | 1/4 | In progress | 2026-04-21 |
+| 4. Playback Entry & Unified Progress | 2/4 | In progress | 2026-04-22 |
 | 5. Playback Decision Intelligence | 0/TBD | Not started | - |
 | 6. Stable Identity & Incremental Refresh | 0/TBD | Not started | - |
