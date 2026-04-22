@@ -1,19 +1,19 @@
 import { createFileRoute, stripSearchParams } from '@tanstack/react-router'
 
-import { LegacyHomeRoute } from '~/features/app/legacy-app-shell'
+import { LegacyShowsRoute } from '~/features/app/legacy-app-shell'
 import { validateBrowseSearch } from '~/lib/app-route-search'
 import { DEFAULT_BROWSE_FILTERS } from '@/lib/mibo-api'
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute('/shows')({
   validateSearch: validateBrowseSearch,
   search: {
     middlewares: [stripSearchParams(DEFAULT_BROWSE_FILTERS)],
   },
-  component: Home,
+  component: ShowsRoute,
 })
 
-function Home() {
+function ShowsRoute() {
   const search = Route.useSearch()
 
-  return <LegacyHomeRoute browseFilters={search} />
+  return <LegacyShowsRoute browseFilters={search} />
 }

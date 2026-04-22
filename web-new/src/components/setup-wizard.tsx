@@ -28,7 +28,6 @@ import {
   TOKEN_STORAGE_KEY,
 } from '~/lib/client-config'
 import { ApiError, createMiboApi, DEFAULT_BROWSE_FILTERS, type MediaSource, type SetupStatus } from '~/lib/mibo-api'
-import { buildBrowseRouteSearch } from '~/lib/route-search'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import {
@@ -280,7 +279,7 @@ export function SetupWizard() {
   async function handleSkipToApp() {
     await navigate({
       to: '/',
-      search: buildBrowseRouteSearch(DEFAULT_BROWSE_FILTERS),
+      search: DEFAULT_BROWSE_FILTERS,
     })
   }
 
@@ -507,7 +506,9 @@ export function SetupWizard() {
                   进入应用
                 </Button>
                 <Button asChild variant="outline">
-                  <Link to="/">返回迁移首页</Link>
+                  <Link to="/" search={DEFAULT_BROWSE_FILTERS}>
+                    返回迁移首页
+                  </Link>
                 </Button>
               </div>
             )}
