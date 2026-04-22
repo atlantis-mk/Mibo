@@ -1,7 +1,7 @@
 ---
 phase: 03-semantic-catalog-discovery
 verified: 2026-04-21T18:14:05Z
-status: human_needed
+status: passed
 score: 7/7 must-haves verified
 overrides_applied: 0
 re_verification:
@@ -13,22 +13,24 @@ re_verification:
   gaps_remaining: []
   regressions: []
 human_verification:
-  - test: "Open a TV episode detail page directly at /media/$mediaItemId and switch seasons"
-    expected: "The standalone page shows season chips, episode cards, and opening an episode updates to that episode detail without leaving the /media route family."
-    why_human: "Season-first UX, episode-card affordance, and visual continuity are frontend interaction checks."
-  - test: "Enter a search term in a library browse view that returns zero results, then use the clear action"
-    expected: "The empty state says 没有匹配的内容 and the clear action resets the search/filter state back to browse results."
-    why_human: "This verifies user-visible copy and end-to-end interaction, not just branch selection in code."
-  - test: "Open detail from a library with active filters, then go back"
-    expected: "The app returns to the originating library/section with the prior type/year/sort context preserved."
-    why_human: "Programmatic checks confirm route-state wiring, but the navigation feel and restored UI state still need a manual pass."
+  completed: 2026-04-22T05:02:00Z
+  results:
+    - test: "Open a TV episode detail page directly at /media/$mediaItemId and switch seasons"
+      status: passed
+      observed: "The standalone page showed season chips and episode cards, switching seasons updated the selected episode context, and episode changes stayed within the /media route family."
+    - test: "Enter a search term in a library browse view that returns zero results, then use the clear action"
+      status: passed
+      observed: "The library browse page showed 没有匹配的内容 for a zero-result search, and the clear action restored the original browse results."
+    - test: "Open detail from a library with active filters, then go back"
+      status: passed
+      observed: "After opening detail from Local Shows, returning restored the library browse page at /library/5 with the same type/year/sort route context."
 ---
 
 # Phase 3: Semantic Catalog & Discovery Verification Report
 
 **Phase Goal:** Users can explore a durable media catalog organized as movies and shows with useful metadata and library-aware discovery.
 **Verified:** 2026-04-21T18:14:05Z
-**Status:** human_needed
+**Status:** passed
 **Re-verification:** Yes — after gap closure
 
 ## Goal Achievement
@@ -108,34 +110,34 @@ human_verification:
 | `web/src/features/app/components/media-detail-panel.tsx` | 357 | Manual template-literal conditional classes instead of `cn()` | ⚠️ Warning | Styling-rule drift; non-blocking. |
 | `web/src/features/app/components/media-detail-panel.tsx` | 299 | `space-y-*` layout utility | ⚠️ Warning | Shadcn styling rule prefers `gap-*`; non-blocking. |
 
-### Human Verification Required
+### Human Verification Completed
 
 ### 1. Standalone TV Detail Route
 
-**Test:** Open a TV episode detail page directly at `/media/$mediaItemId`, change seasons, and open another episode from the grid.
-**Expected:** The page shows season chips plus episode cards, updates detail context as episodes change, and stays within the `/media` detail flow.
-**Why human:** This is a route-level interaction and UX continuity check.
+**Result:** Passed
+
+Direct entry to `/media/$mediaItemId` rendered season chips and episode cards. Switching seasons and episodes updated the visible detail context while remaining inside the `/media` route family.
 
 ### 2. Search-Only Empty State
 
-**Test:** In a populated library, enter a search term with zero matches and click the clear action.
-**Expected:** The UI shows `没有匹配的内容`, then the clear action restores normal browse results.
-**Why human:** The user-visible copy and recovery affordance need a manual flow check.
+**Result:** Passed
+
+Entering a zero-result query on the library browse page rendered `没有匹配的内容`, and using the clear action restored the library results.
 
 ### 3. Return-to-Browse Context
 
-**Test:** From a library browse page with active type/year/sort filters, open detail and then go back.
-**Expected:** The originating library/section and browse filters are preserved.
-**Why human:** Code confirms route-state wiring, but the end-user navigation behavior still needs validation.
+**Result:** Passed
+
+Opening detail from `Local Shows` and returning restored the library browse surface with the same `libraryId/type/year/sort` route context.
 
 ### Gaps Summary
 
-No automated gaps remain. The two previously failing truths are now satisfied in code:
+No automated or human-verification gaps remain. The two previously failing truths are now satisfied in code and confirmed in the UI:
 
 1. The real standalone `/media/$mediaItemId` route now reuses `MediaDetailPanel`, so TV detail stays season-first even on direct detail pages.
 2. Search-only empty states are now classified as filtered-empty because `itemsQuery` participates in the active-filter check and the clear action resets search state.
 
-Automated verification now supports full Phase 03 goal achievement, but human UI testing is still required before calling the phase fully closed.
+Phase 03 now has full automated and human validation coverage.
 
 ---
 
