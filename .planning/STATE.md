@@ -4,8 +4,8 @@ milestone: v1
 milestone_name: MVP
 status: ready_for_next_milestone
 stopped_at: Milestone v1 archived
-last_updated: "2026-04-22T13:30:00+08:00"
-last_activity: 2026-04-22
+last_updated: "2026-04-23T00:00:00+08:00"
+last_activity: 2026-04-22 - Completed quick task 260423-4h5: 迁移 /Users/atlan/Desktop/IdeaProjects/Mibo/web/ 到新框架 /Users/atlan/Desktop/IdeaProjects/Mibo/web-new/
 progress:
   total_phases: 6
   completed_phases: 6
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-22)
 
 Milestone: v1
 Status: Shipped and archived
-Last activity: 2026-04-22
+Last activity: 2026-04-22 - Completed quick task 260423-4h5: 迁移 /Users/atlan/Desktop/IdeaProjects/Mibo/web/ 到新框架 /Users/atlan/Desktop/IdeaProjects/Mibo/web-new/
 
 Progress: [██████████] 100%
 
@@ -53,6 +53,12 @@ Most important shipped decisions:
 ### Open Blockers
 
 - None recorded at milestone close.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260423-4h5 | 迁移 /Users/atlan/Desktop/IdeaProjects/Mibo/web/ 到新框架 /Users/atlan/Desktop/IdeaProjects/Mibo/web-new/ | 2026-04-22 | c209e6f | [260423-4h5-users-atlan-desktop-ideaprojects-mibo-we](./quick/260423-4h5-users-atlan-desktop-ideaprojects-mibo-we/) |
 
 ## Deferred Items
 
