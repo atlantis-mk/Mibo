@@ -1,35 +1,36 @@
 ---
 gsd_state_version: 1.0
-milestone: v1
-milestone_name: MVP
-status: ready_for_next_milestone
-stopped_at: Milestone v1 archived
-last_updated: "2026-04-23T20:05:00+08:00"
-last_activity: 2026-04-22 - Completed quick task 260423-4p3: 继续迁移 /Users/atlan/Desktop/IdeaProjects/Mibo/web/ 到新框架 /Users/atlan/Desktop/IdeaProjects/Mibo/web-new/ 的主应用路由骨架
+milestone: v2
+milestone_name: Product Discovery And Operations
+status: defining_requirements
+stopped_at: Milestone v2 requirements definition in progress
+last_updated: "2026-04-23T20:30:00+08:00"
+last_activity: 2026-04-23 - Milestone v2 started for search, filters, trailers, metadata management, scan listeners, and scheduled jobs
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 13
-  completed_plans: 13
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-22)
+See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Planning next milestone
+**Current focus:** Defining milestone v2 requirements
 
 ## Current Position
 
-Milestone: v1
-Status: Shipped and archived
-Last activity: 2026-04-22 - Completed quick task 260423-4p3: 继续迁移 /Users/atlan/Desktop/IdeaProjects/Mibo/web/ 到新框架 /Users/atlan/Desktop/IdeaProjects/Mibo/web-new/ 的主应用路由骨架
+Phase: Not started (defining requirements)
+Plan: -
+Status: Defining requirements
+Last activity: 2026-04-23 - Milestone v2 started
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
 ## Accumulated Context
 

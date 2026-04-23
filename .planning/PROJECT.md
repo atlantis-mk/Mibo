@@ -8,6 +8,18 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 
 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
 
+## Current Milestone: v2 Product Discovery And Operations
+
+**Goal:** 把 Mibo 从基础可用媒体系统推进到更完整的内容发现体验与后台运营能力，其中主线偏前台用户体验，但同时补齐管理员侧的自动化与治理能力。
+
+**Target features:**
+- 全文搜索：支持按标题 / 演员 / 导演搜索，结果区分电影和剧集，并支持高亮、排序、历史记录
+- 更多筛选：类型、年份、地区、评分、是否看过、媒体库、分辨率
+- 预告片观看：从 TMDB / 外部源拉取预告片链接，并在详情页直接播放
+- 元数据管理：管理员可编辑标题、原始标题、年份、简介、海报、背景图、分类、演员、季集信息，支持锁定字段与重新匹配
+- 扫描监听：基于存储变更自动触发刷新，而不是仅依赖手动扫描
+- 计划任务管理：支持调度元数据重抓、预告片同步、库清理、失效链接检查、封面刷新等后台任务
+
 ## Current State
 
 - 已 shipped `v1 MVP`，覆盖 6 个阶段、13 个计划
@@ -31,11 +43,12 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 
 ### Active
 
-- [ ] 首页继续观看、最近加入和家庭发现流的产品体验增强
-- [ ] 更细粒度的家庭成员隔离和访问控制
-- [ ] 更成熟的远程访问和外网部署体验
-- [ ] 更完整的 HLS / 转码能力和更多设备场景兼容性
-- [ ] 在保持边界稳定的前提下继续扩展多端统一媒体 API
+- [ ] 用户可以通过标题、演员、导演完成产品内全文搜索，并在结果中区分电影和剧集
+- [ ] 用户可以通过类型、年份、地区、评分、是否看过、媒体库、分辨率等维度筛选媒体内容
+- [ ] 用户可以在媒体详情页直接观看来自 TMDB / 外部源的预告片
+- [ ] 管理员可以人工编辑媒体元数据、锁定字段、重新匹配并重抓元数据
+- [ ] 系统可以基于存储变更自动触发安全的增量刷新
+- [ ] 管理员可以管理后台计划任务，包括扫描、元数据、预告片和清理类调度任务
 
 ### Out of Scope
 
@@ -46,10 +59,9 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 
 ## Next Milestone Goals
 
-- 提升首页发现体验，让 Continue Watching / Recently Added / library rails 更像产品而不是基础数据面板
-- 继续打磨播放器能力，补齐更成熟的 fallback / HLS / transcoding 场景
-- 提升家庭多用户能力，包括更细的账号隔离和访问控制
-- 打磨远程访问、部署和长期运行稳定性体验
+- 让用户更快找到想看的内容，补齐搜索、筛选和预告片等发现体验
+- 让管理员更高效地治理媒体库，补齐元数据管理、扫描监听和计划任务
+- 在不引入外部中间件的前提下，把这些能力沉淀为产品内原生能力
 
 ## Context
 
@@ -75,6 +87,24 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 | 扫描与后台任务继续通过 Worker 队列执行，并通过统一任务视图暴露给管理员 | 保证请求快速返回，同时让管理员可观察、可重试地处理后台工作 | ✓ Good |
 | 优先直链播放，转码只作为兜底能力 | 降低 V1 复杂度并优先满足家庭媒体播放主路径 | ✓ Good |
 | 稳定身份优先于路径匹配，增量刷新必须保守不误绑定 | 保证长期媒体连续性和进度安全 | ✓ Good |
+| v2 搜索与筛选先基于现有产品内数据能力实现，不接任何外部中间件 | 先验证体验和数据模型，避免过早引入部署与运维复杂度 | — Pending |
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? -> Move to Out of Scope with reason
+2. Requirements validated? -> Move to Validated with phase reference
+3. New requirements emerged? -> Add to Active
+4. Decisions to log? -> Add to Key Decisions
+5. "What This Is" still accurate? -> Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check -> still the right priority?
+3. Audit Out of Scope -> reasons still valid?
+4. Update Context with current state
 
 ---
-*Last updated: 2026-04-22 after v1 milestone completion*
+*Last updated: 2026-04-23 after milestone v2 initialization*
