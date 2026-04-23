@@ -1,190 +1,102 @@
 # Project Research Summary
 
-**Project:** Mibo
-**Domain:** Self-hosted household media server
-**Researched:** 2026-04-21
+**Project:** Mibo  
+**Domain:** Self-hosted media server discovery and admin operations  
+**Researched:** 2026-04-23  
 **Confidence:** HIGH
 
-## Executive Summary
+## Recommended Direction
 
-Mibo is not a generic file browser and should not evolve like one. The research is consistent across stack, features, architecture, and pitfalls: successful household media servers keep storage access at the edge, move media semantics into the core service, and run expensive work asynchronously. For Mibo, that means keeping OpenList as a storage gateway, making `mibo-media-server` the durable business core, and building the product around a DB-backed media catalog, playback decisioning, and multi-client progress sync.
+Mibo v2 should stay within the current boundary: **storage provider/OpenList → `mibo-media-server` → JSON APIs → clients**. The right move is not adding external middleware. Search, filtering, metadata governance, trailer selection, listener policy, and scheduling should all live inside `mibo-media-server`, backed by the existing database and worker model.
 
-The recommended approach is a pragmatic monolith with strong internal seams: Go stays as the backend core, PostgreSQL becomes the production default, River becomes the job spine, and React/Vite stays on the frontend with TanStack Query added for server-state discipline. Product work should center on reliable ingestion, semantic media modeling, direct-play-first playback with fallback, and stable progress APIs rather than chasing Plex-scale feature breadth.
+For stack choices, the strongest recommendation is **SQL-native discovery infrastructure**: SQLite FTS5 by default, PostgreSQL `tsvector` + GIN where Postgres is used, explicit SQL migrations, an app-owned search projection, DB-backed schedule definitions, `robfig/cron/v3` only for schedule triggering, and `fsnotify` only for local-provider directory watching. Trailers should be treated as refreshable metadata references, not downloaded media.
 
-The main risks are architectural, not cosmetic: leaking OpenList details into product APIs, using path-based identity, overloading scan flows with metadata/probe work, and treating playback as “just return a URL.” Mitigation is clear from the research: harden the `StorageProvider` boundary first, split scan from enrichment jobs, add stable identity and confidence models early, and instrument the system before adding performance complexity.
+Roadmap-wise, the milestone should be built as **foundation first, discovery second, operations third**. Metadata ownership, projection tables, and query contracts must land before polished search/filter UI. Scheduled jobs and scan listeners should reuse the existing job pipeline instead of becoming parallel execution systems.
 
-## Key Findings
+## Table Stakes
 
-### Recommended Stack
+### Stack decisions
+- **Keep `mibo-media-server` as the product brain** — do not push business logic into OpenList.
+- **Add an app-owned search projection** — search and facets should not query JSON blobs directly.
+- **Use SQLite FTS5 / Postgres full-text search** — enough for v2 without Meilisearch/Elasticsearch.
+- **Add explicit SQL migrations** — required for FTS tables, triggers, generated columns, and schedule indexes.
+- **Use `robfig/cron/v3` as a trigger layer only** — schedules enqueue jobs; workers do the actual work.
+- **Use `fsnotify` only for local storage listeners** — keep reconciliation scans for safety.
 
-The stack recommendation is unusually clear: reinforce the existing Go + React architecture instead of rewriting it. The backend should become a Go media core on PostgreSQL with River-backed jobs, ffprobe/ffmpeg worker tooling, and OpenTelemetry + Prometheus from the start of the next milestone. OpenList remains the first storage adapter, not the source of product semantics.
+### User-facing table stakes
+- **Product-native search** across title, original title, cast, and director.
+- **Richer filters** for genre, year, library, watched state, rating, resolution, and sort.
+- **Trailer CTA on detail pages** when a trusted trailer exists.
+- **Typed, stable results** with title-first ranking and clear movie/series labeling.
 
-On the frontend, React + Vite remain good fits, but the missing discipline is server-state management. TanStack Query should be added next so library views, detail pages, playback state, and progress sync stop depending on ad-hoc fetch/state patterns.
+### Admin/operational table stakes
+- **Manual metadata editing** for title, summary, artwork, genres, and credits.
+- **Field-level locks** so refreshes and rematches do not overwrite admin decisions.
+- **Re-match and refresh actions** as separate flows.
+- **Scheduled task management** with enable/disable, run now, next run, last run, and history.
+- **Conservative scan listeners** that enqueue targeted refresh jobs, plus fallback reconciliation scans.
 
-**Core technologies:**
-- **Go 1.24.x**: backend core — already the right fit for long-running media orchestration and HTTP services.
-- **PostgreSQL 17/18**: primary production DB — needed for durable metadata, progress, and concurrent job orchestration.
-- **River + pgx**: background jobs — the recommended durable queue for scan, match, probe, and later transcode work.
-- **GORM**: app data access — keep it, but use it more explicitly and avoid domain leakage.
-- **OpenList over HTTP**: storage gateway — keep as first adapter while preserving a strict provider boundary.
-- **ffprobe / ffmpeg**: media analysis and fallback playback — direct play first, transcode only when necessary.
-- **OpenTelemetry + Prometheus**: observability — required before worker complexity and performance tuning grow.
-- **React + Vite + TanStack Query + Shaka Player**: web client stack — stable SPA base with proper server-state handling and browser playback.
+### Explicitly defer
+- External search middleware.
+- Semantic/vector search.
+- Trailer downloads, proxying, or transcoding.
+- Workflow-engine style scheduling.
+- Large-scale bulk metadata editing.
 
-### Expected Features
+## Suggested Sequencing
 
-The research draws a hard line between table stakes and differentiators. Table stakes are the core personal-media loop: setup, source/library management, scan/refresh, automatic organization into movie/show structures, metadata enrichment, browse/search/details, reliable playback, resume/progress sync, authentication, and an API shape that can support Web now and mobile/TV later. Mibo already has partial coverage in several of these areas, but they must be made reliable enough to feel like product fundamentals rather than prototype behavior.
+### 1. Discovery Foundation
+**Why first:** Search, filters, trailers, and metadata editing all depend on clean ownership and indexable data.  
+**Deliver:** projection tables, metadata overrides/locks, trailer records, schedule tables, explicit migrations, shared discovery query contract.  
+**Key watch-out:** do not keep building on JSON `LIKE` queries or direct metadata overwrites.
 
-Differentiation should come from architecture-aligned strengths: unified ingestion across mixed storage, stable identity that survives moves/renames, incremental sync, fast-path scanning with deferred heavy work, direct-play-first playback policy, and a unified progress/history model across clients. The research is equally clear on what to defer: Live TV/DVR, social/watch-party features, aggressive transcoding pipelines, deep OpenList customization, and broad non-video media expansion.
+### 2. Search + Filters
+**Why second:** This is the main user-visible value once the data model is stable.  
+**Deliver:** search API, ranking/highlights, search history, filtered browse/search endpoints, shared filter semantics across search and library views.  
+**Key watch-out:** browse and search must use one backend contract, especially for watched state, grouping, and media type semantics.
 
-**Must have (table stakes):**
-- Setup/admin onboarding — fast path to usable libraries.
-- Source and library management — storage selection, path validation, typed libraries.
-- Manual + scheduled scan/refresh — users expect newly added media to appear.
-- Semantic organization — movies, series, seasons, episodes.
-- Metadata enrichment — posters, synopsis, cast/basic details.
-- Browse, filter, search, and detail pages — DB-backed, predictable, multi-client friendly.
-- Reliable playback — direct link first with graceful fallback.
-- Resume playback and progress sync — durable across clients.
-- Authentication and household-safe user separation — baseline for real family usage.
+### 3. Metadata Management + Trailers
+**Why third:** Discovery quality depends on metadata governance, and trailers are only useful once identity and provider data are trustworthy.  
+**Deliver:** admin metadata editor, lock visibility, rematch/refetch flows, TMDB trailer sync, detail-page trailer playback.  
+**Key watch-out:** keep provider facts, overrides, and locks separate; invalidate trailer selections when item identity changes.
 
-**Should have (competitive):**
-- Unified storage ingestion across local/NAS/cloud behind adapters.
-- Stable file identity and rename/move resilience.
-- Fast-path scan pipeline with deferred metadata/probe work.
-- Incremental and event-driven sync after full-scan correctness is proven.
-- Unified progress/history model for Web, mobile, and TV clients.
-- Continue Watching and Recently Added surfaces once semantics and progress are stable.
+### 4. Scheduled Jobs
+**Why fourth:** Recurring automation should sit on top of working one-off jobs and stable metadata/search flows.  
+**Deliver:** schedule CRUD, run-now controls, next/last run visibility, no-overlap policy, job/schedule correlation.  
+**Key watch-out:** schedules are definitions, not executions; misfire and overlap policy must be explicit.
 
-**Defer (v2+):**
-- Live TV / DVR.
-- Music / photos / books expansion.
-- Watch-party / social features.
-- Deep OpenList fork or custom storage stack.
-- Always-on pre-transcoding or optimization pipelines.
+### 5. Scan Listeners + Refresh Hardening
+**Why fifth:** Listener correctness matters more than immediacy, and it depends on resilient refresh and reindex pipelines already existing.  
+**Deliver:** listener service, event dedupe/coalescing, targeted refresh enqueueing, admin visibility, reconciliation fallback.  
+**Key watch-out:** listeners must only narrow work scope; they must never mutate canonical media rows directly.
 
-### Architecture Approach
+## Watch Out For
 
-The architecture recommendation is to keep a single media-core service with explicit internal seams. Clients talk only to Mibo APIs; Mibo owns semantic media data, playback policy, progress, and jobs; OpenList remains a file-access boundary. The system should be built around DB-backed read models, an async worker pipeline, and a stable `StorageProvider` abstraction so future direct adapters remain optional optimizations rather than rewrites.
+1. **Index drift** — search must be a projection of canonical media state, rebuilt from scan/metadata changes and versionable for reindex jobs.
+2. **Filter drift** — search, browse, and home surfaces need one discovery contract or users will see inconsistent counts and results.
+3. **Metadata overwrite bugs** — manual edits will fail without persisted backend lock/merge semantics.
+4. **JSON-as-database creep** — discovery-critical fields need normalized/indexable structures, not more substring hacks.
+5. **Trailer staleness** — trailers are volatile external references and must be refreshed when metadata identity or locale changes.
+6. **Event storms** — bursty file events can DOS OpenList and the DB without debounce, path coalescing, and concurrency limits.
+7. **Scheduler ambiguity** — if schedule state lives only in jobs, restarts and overlaps will behave unpredictably.
+8. **Shared worker starvation** — slow maintenance jobs can block freshness unless job classes or per-kind concurrency budgets are added.
 
-**Major components:**
-1. **API + admin/query services** — own auth, setup, library management, browse/search/detail APIs, and client-facing contracts.
-2. **Playback + progress services** — resolve semantic items to playable sessions and manage durable resume/watch state.
-3. **Job system + workers** — run scan, classify, metadata match, probe, and later transcode/incremental refresh work asynchronously.
-4. **StorageProvider boundary** — normalize file access behind adapters and prevent OpenList leakage into business logic.
-5. **Database-backed semantic model** — store libraries, media files, media graph, jobs, and user playback state as the source of truth.
+## Open Questions
 
-### Critical Pitfalls
-
-The pitfalls research strongly reinforces the architecture guidance: most failures come from weak boundaries and premature shortcuts, not from missing shiny features.
-
-1. **Path-based identity** — treat path as mutable metadata, add stable file identity early, and attach progress to media/version identity instead of scan rows.
-2. **Scan loop doing everything** — keep scanning as fast discovery and split match/probe/playback prep into retryable job stages.
-3. **Weak metadata confidence model** — separate parsing from matching, store confidence, and plan for manual correction flows.
-4. **OpenList details leaking upward** — keep APIs media-centric and normalize all provider output before domain code sees it.
-5. **Playback modeled as URL generation** — build a capability-aware decision service with direct play, remux/direct stream, and transcode fallback.
-6. **Naive progress sync** — separate playback sessions from canonical resume state and define merge rules for concurrent clients.
-
-## Implications for Roadmap
-
-Based on the combined research, the roadmap should be dependency-first, not UI-first. The correct sequencing is: stabilize boundary and jobs, build the catalog, promote files into semantic media entities, expose stable query APIs, then harden playback/progress, and only then add technical playback intelligence and incremental sync.
-
-### Phase 1: Boundary and Job Foundation
-**Rationale:** Everything else depends on a stable storage contract and durable async orchestration.
-**Delivers:** Hardened `StorageProvider`, explicit API/worker separation, PostgreSQL production path, River job model, basic observability.
-**Addresses:** Source/library management, scheduled/manual sync foundation, operational simplicity.
-**Avoids:** OpenList leakage, path-identity mistakes, premature microservice drift.
-
-### Phase 2: Scan Catalog Pipeline
-**Rationale:** Mibo needs a trustworthy ingestion backbone before it can improve UX.
-**Delivers:** Canonical `sync_library` flow, `media_files` catalog, checkpoints, retries, bounded scan/probe concurrency, fast-path discovery.
-**Uses:** PostgreSQL, River, OpenTelemetry, Prometheus, existing Go worker skeleton.
-**Implements:** Scanner worker and DB-backed ingestion pipeline.
-**Avoids:** Full understanding inside scan loop, unbounded worker pressure.
-
-### Phase 3: Semantic Media Graph and Metadata Confidence
-**Rationale:** Browse, detail, search, and playback all depend on stable media semantics, not raw files.
-**Delivers:** `media_items / series / seasons / episodes`, metadata matching pipeline, confidence scoring, typed-library correctness, manual-fix hooks.
-**Addresses:** Automatic organization, metadata enrichment, detail pages, browse/search quality.
-**Avoids:** Wrong-match sprawl, mixed-library hacks, fragile filename assumptions.
-
-### Phase 4: Client-Facing Query, Playback, and Progress Core
-**Rationale:** This is the first phase that should feel fully product-grade to end users.
-**Delivers:** Home/library/detail/search APIs, direct-play-first playback decision service, stable progress/session model, Continue Watching groundwork, TanStack Query integration on web.
-**Addresses:** Reliable playback, resume sync, multi-device API readiness, household-facing home surfaces.
-**Avoids:** Playback-as-URL shortcut, web-only API bias, naive last-write-wins progress.
-
-### Phase 5: Probe Intelligence and Incremental Sync
-**Rationale:** Add smarter playback and day-2 operational quality only after correctness is established.
-**Delivers:** Async ffprobe facts, richer playback capability decisions, targeted rescans, scheduled reconciliation, initial event-driven refresh where safe.
-**Addresses:** Better client compatibility, rename/move resilience, faster library freshness.
-**Avoids:** Shipping delta sync before correctness, blind playback decisions, unsupported-client surprises.
-
-### Phase 6: Fallback Transcoding and Hotspot Optimization
-**Rationale:** Transcoding and direct adapters are valuable, but only after evidence justifies the complexity.
-**Delivers:** HLS/remux/transcode fallback, optional worker split, targeted caching or Redis only if metrics prove need, direct adapters only for measured hotspots.
-**Addresses:** Harder client/storage scenarios and larger-library robustness.
-**Avoids:** Performance theater, premature queue/cache architecture, overbuilt deployment topology.
-
-### Phase Ordering Rationale
-
-- Storage boundary, jobs, and identity come first because every later capability depends on them.
-- Semantic modeling must precede polished client experiences; otherwise the UI is built on unstable file semantics.
-- Playback and progress belong together because both depend on semantic identity and stable client-facing contracts.
-- Probe intelligence, incremental sync, and transcode fallback should be delayed until the core model is correct and observable.
-- Performance optimizations should follow metrics, not fear.
-
-### Research Flags
-
-Phases likely needing deeper research during planning:
-- **Phase 3:** metadata confidence/manual-fix design, especially around specials, alternate ordering, and multi-episode edge cases.
-- **Phase 4:** playback capability contract for Web/mobile/TV and progress conflict semantics across multiple clients.
-- **Phase 5:** event-driven/incremental sync strategy for OpenList-backed storage without sacrificing reconciliation correctness.
-- **Phase 6:** transcode policy and hardware acceleration choices for realistic household deployment targets.
-
-Phases with standard patterns (likely skip research-phase):
-- **Phase 1:** PostgreSQL + River + observability + strict adapter boundary are well-supported patterns.
-- **Phase 2:** async scan/catalog pipelines with bounded worker concurrency are established and already aligned with current architecture.
-
-## Confidence Assessment
-
-| Area | Confidence | Notes |
-|------|------------|-------|
-| Stack | HIGH | Strong alignment between project context and official docs for PostgreSQL, River, OTel, Prometheus, and frontend additions. |
-| Features | MEDIUM-HIGH | Competitor baselines are clear, but exact milestone cut lines still require product judgment. |
-| Architecture | HIGH | Local architecture docs and current code boundaries strongly agree on the recommended direction. |
-| Pitfalls | MEDIUM-HIGH | Most pitfalls are reinforced by official Jellyfin/Plex guidance plus clear project-specific risks; progress conflict semantics need some design validation. |
-
-**Overall confidence:** HIGH
-
-### Gaps to Address
-
-- **Stable identity implementation details:** decide what provider-level identity guarantees OpenList can expose and how to reconcile partial support.
-- **Metadata correction UX:** research and define the minimal manual-fix/admin workflow before broad rollout of aggressive matching.
-- **Playback capability schema:** formalize how clients declare codec/container/subtitle/HDR capabilities.
-- **Progress conflict rules:** validate merge behavior for dual-device use, seek/backtrack, and completion semantics.
-- **Incremental sync semantics:** define rename/delete/partial-upload behavior before trusting events over reconciliation.
-- **Production deployment guidance:** validate recommended Postgres + worker + ffmpeg packaging on Mibo’s expected self-hosted targets.
+- **SQLite readiness:** confirm FTS5 is enabled in all target builds and test environments.
+- **Cross-DB parity:** define how closely SQLite and Postgres search ranking/highlight behavior must match.
+- **Watched-state semantics:** lock down item-level vs episode/file-level rules before finalizing filter APIs.
+- **Trailer source policy:** decide whether v2 is YouTube-only or includes Vimeo from day one.
+- **Schedule UX:** decide how much cron syntax is exposed versus presets/basic forms.
+- **Operational visibility:** confirm whether metadata audit/provenance and queue-per-kind telemetry are required in this milestone or the next.
 
 ## Sources
 
-### Primary (HIGH confidence)
-- `.planning/PROJECT.md` — product scope, constraints, existing capabilities, and target evolution.
-- `docs/media-architecture/improved-architecture.md` — target system boundaries and build order.
-- PostgreSQL official docs — production DB recommendation.
-- River docs (`/riverqueue/river`) — durable PostgreSQL-backed jobs and transactional enqueue.
-- OpenTelemetry Go docs (`/open-telemetry/opentelemetry-go`) — tracing/metrics instrumentation model.
-- Prometheus Go client docs — service metrics export.
-- Jellyfin docs (libraries, metadata, transcoding, codec support) — feature baseline and operational constraints.
-
-### Secondary (MEDIUM confidence)
-- Plex official support/docs — market baseline for table stakes and playback model.
-- Navidrome docs — supporting pattern for app-owned scanning/transcoding boundaries.
-- Package/version checks captured in `STACK.md` — current ecosystem versions for recommended additions.
-
-### Tertiary (LOW confidence)
-- None material to the core recommendation; the main open items are design gaps, not source quality gaps.
+- `.planning/research/STACK.md`
+- `.planning/research/FEATURES.md`
+- `.planning/research/ARCHITECTURE.md`
+- `.planning/research/PITFALLS.md`
 
 ---
-*Research completed: 2026-04-21*
+*Research completed: 2026-04-23*  
 *Ready for roadmap: yes*

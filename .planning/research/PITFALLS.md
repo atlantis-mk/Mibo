@@ -1,314 +1,430 @@
-# Domain Pitfalls
+# Project Pitfalls Research: v2 Product Discovery And Operations
 
-**Domain:** 家庭媒体系统 / household media server  
-**Researched:** 2026-04-21  
-**Overall confidence:** MEDIUM-HIGH
+**Project:** Mibo  
+**Scope:** search, richer filters, trailer playback, metadata governance, storage-change scan listeners, scheduled task management  
+**Researched:** 2026-04-23  
+**Overall confidence:** HIGH for repo-specific integration risks, MEDIUM for long-tail operational scaling details
 
-This project is **greenfield with brownfield constraints**: there is already a working codebase, but the main risk is not “can it play a file?” — it is **locking the system into the wrong boundaries while the library, clients, and performance needs grow**.
+This milestone is not adding isolated features. It is adding a **second system of truth** on top of an existing self-hosted media stack: discovery indexes, editable metadata, external trailer links, event-triggered refresh, and operator-managed schedules. In Mibo, that work must stay inside `mibo-media-server`, with `OpenList` remaining only the storage/access layer.
 
-The most common failure mode in this domain is treating a household media server like a thin file browser. Mature systems converge on the opposite model: **storage is one concern; media semantics, playback policy, and user state are separate concerns**. Your architecture doc already points in that direction (`OpenList` for storage access, `mibo-media-server` for media/product logic). The pitfalls below are the places projects usually drift away from that boundary.
+The main failure mode is not “feature incomplete.” It is **breaking the ownership model that v1 already established**:
 
----
+- `OpenList` owns file access and path namespace
+- `mibo-media-server` owns media semantics, searchability, user state, and jobs
+- worker jobs already exist, but are still simple queue jobs backed by the app DB
+- metadata already mutates canonical `media_items` rows, and scans can reset metadata when base fields change
 
-## Critical Pitfalls
-
-### 1) Path-based identity instead of stable file identity
-**What goes wrong:** The system treats `storage_id + path` as the file’s identity, so renames, moves, mount changes, reorganizations, and duplicate scans create new records instead of updating existing ones.
-
-**Why it happens:** Path is the easiest thing to index early. Projects postpone stable identity until after scanning “works.”
-
-**Consequences:**
-- duplicate media items after library cleanup
-- lost watch progress after rename/move
-- bad incremental scan behavior
-- impossible-to-trust deduplication and “continue watching”
-
-**Warning signs:**
-- a rename causes delete + recreate rather than move detection
-- progress is attached to file rows that churn after rescans
-- users report “same movie appears twice” after reorganizing folders
-- scanner needs expensive full-library comparisons to detect changes
-
-**Prevention strategy:**
-- define a `StableIdentity` capability on `StorageProvider` early, even if some adapters only partially support it in V1
-- store both **logical media identity** and **source file identity** separately
-- treat path as mutable metadata, not canonical identity
-- add move/rename reconciliation rules before shipping aggressive incremental sync
-- keep progress attached to media/version identity, not raw scan row identity
-
-**Phase to address:** **Phase 1-2** — storage boundary + scanner foundation
+That means v2 risks are mostly about **index drift, overwrite rules, event storms, and scheduler ambiguity**.
 
 ---
 
-### 2) Doing full media understanding inside the scan loop
-**What goes wrong:** A “scan” tries to traverse storage, parse filenames, call TMDB/TVDB, run `ffprobe`, generate artwork, and sometimes even prepare playback artifacts in one synchronous pipeline.
+## Suggested Phase Labels For Roadmap Mapping
 
-**Why it happens:** Early prototypes optimize for fewer concepts, not for throughput or failure isolation.
+Use these labels when assigning risks into the milestone roadmap:
 
-**Consequences:**
-- slow scans block API capacity
-- remote metadata outages stall ingestion
-- a few bad files poison whole-library refreshes
-- retries become non-idempotent and expensive
-
-**Warning signs:**
-- “scan library” latency scales with metadata provider latency
-- worker and API share the same hot resources with no queue isolation
-- one failed lookup forces full rescan reruns
-- CPU spikes during scans because probe/transcode work sneaks into request paths
-
-**Prevention strategy:**
-- keep scan phase as a **fast path**: discover files, basic classification, enqueue follow-up jobs
-- split jobs into `scan -> classify -> metadata match -> probe -> playback prep`
-- make each stage idempotent and retryable with explicit status per item
-- record partial success so the library can be browsable before metadata is perfect
-- keep API reads off the scan hot path
-
-**Phase to address:** **Phase 2** — worker orchestration and job model
+1. **Phase 1 — Discovery data model**: searchable/filterable fields, canonical metadata ownership, edit/lock semantics
+2. **Phase 2 — Search and filtering engine**: query model, indexing, ranking, result shaping, history
+3. **Phase 3 — Metadata and trailers UX**: trailer sourcing, metadata editing, rematch/re-fetch flows, admin controls
+4. **Phase 4 — Storage listeners and refresh correctness**: event ingestion, coalescing, targeted refresh, reconciliation
+5. **Phase 5 — Scheduled jobs and operations**: schedule definitions, execution policy, observability, backpressure, admin tooling
 
 ---
 
-### 3) Weak naming assumptions and no explicit metadata confidence model
-**What goes wrong:** The system assumes filenames are “good enough,” then silently matches the wrong series/movie, mishandles specials, multi-episode files, alternate orders, or mixed libraries.
+## Critical Risks
 
-**Why it happens:** Filename parsing seems easy until real household libraries contain anime, specials, date-based shows, multi-part rips, mixed folders, and inconsistent renames.
+### 1) Search index built as a side view, not as a projection of canonical media state
 
-**Consequences:**
-- wrong posters/episodes/season mappings
-- bad series grouping and broken episode order
-- user distrust in the whole library
-- repeated destructive rescans to “fix metadata”
+**Risk**  
+Search starts as ad hoc SQL over `media_items.title`, `cast_json`, and `directors_json`, then later grows a separate index table/FTS table that is updated inconsistently. Users see titles or people in detail pages that search cannot find, or search results that no longer match current metadata.
 
-**Warning signs:**
-- high rate of low-similarity automatic matches
-- mixed movie/show folders need special-case code everywhere
-- season/special handling becomes a pile of regex exceptions
-- “fix match” becomes a common support path very early
+**Why It Happens**
+- v1 data already exists in denormalized JSON/text columns
+- full-text search feels easy to bolt on after browse APIs
+- metadata edits, rematches, and scan refreshes all change the same records from different paths
+- SQLite/Postgres dual support encourages lowest-common-denominator queries unless indexing is designed explicitly
 
-**Prevention strategy:**
-- separate **filename parsing** from **metadata matching** from **canonical media modeling**
-- persist a match confidence score and match source
-- support explicit identifiers (TMDB/TVDB/IMDb) and manual correction flows
-- treat specials, date-based shows, multi-episode files, and alternate ordering as first-class edge cases, not later hacks
-- keep libraries typed; do not normalize around mixed-content roots
+**Warning Signs**
+- after metadata apply/rematch, detail page updates immediately but search misses it
+- deleted or reclassified items still appear in search
+- highlight snippets come from stale text, not current item fields
+- search behavior differs between SQLite and Postgres environments
 
-**Phase to address:** **Phase 3** — metadata pipeline and media semantics
+**Prevention**
+- define a single **search document projection** owned by `mibo-media-server`
+- rebuild/update that projection from canonical media item changes, not from UI actions
+- if using SQLite FTS5, keep it synchronized with explicit triggers or a deterministic rebuild/update path; do not rely on best-effort app writes only
+- version the indexed payload so future ranking/filter changes can trigger safe reindex jobs
+- treat reindex as an operational job type, not a hidden migration side effect
 
-**Why this is high-confidence:** Jellyfin and Plex both explicitly require disciplined folder structure, typed libraries, season naming, and metadata IDs for reliable matching; Jellyfin also discourages mixed libraries due to unreliable metadata results.
-
----
-
-### 4) Leaking storage implementation details past the storage boundary
-**What goes wrong:** Business logic and clients become dependent on OpenList path conventions, direct-link formats, or raw file tree semantics.
-
-**Why it happens:** It is tempting to expose “whatever OpenList already knows” directly to move faster.
-
-**Consequences:**
-- impossible to swap/add direct local/NAS/cloud adapters cleanly
-- playback APIs become storage-specific instead of media-specific
-- search, progress, and permissions couple to file tree details
-- every future optimization becomes a breaking change
-
-**Warning signs:**
-- client routes or payloads contain raw storage paths as primary keys
-- frontend can navigate source trees more naturally than media entities
-- service code outside the adapter layer knows OpenList-specific response shapes
-- adding a second provider requires touching business and API contracts
-
-**Prevention strategy:**
-- keep `StorageProvider` narrow and capability-based (`List`, `Get`, `Link`, `ResolveStorage`, `Capabilities`, later `StableIdentity`, `DeltaScan`, `BatchStat`)
-- expose media-facing APIs around `library / media_item / version / stream`, not storage paths
-- confine raw file-path knowledge to scan/admin tooling
-- make adapter outputs normalized before they enter business logic
-- treat OpenList as a provider, not as the product model
-
-**Phase to address:** **Phase 1** — architecture boundary hardening
+**Best Phase To Address**  
+**Phase 1**, then implementation hardening in **Phase 2**
 
 ---
 
-### 5) Assuming “playback = return a URL”
-**What goes wrong:** Playback is implemented as direct-link handoff only, without capability negotiation for codec/container/subtitles/range/HDR/audio, and without a robust fallback path.
+### 2) Mixing browse filters with search filters without defining one query contract
 
-**Why it happens:** Direct links work in the happy path, especially on one browser and one test file.
+**Risk**  
+Search, library browse, homepage discovery, and admin metadata review each invent separate filter semantics for year, watched state, library, type, genre, rating, and resolution. The same filter chip returns different counts or different result sets depending on page.
 
-**Consequences:**
-- playback works on Web but fails on TV/mobile
-- subtitles unexpectedly force heavy transcodes
-- HDR/HEVC/container mismatches create black screens or buffering
-- progress/reporting breaks because the server is bypassed too much
+**Why It Happens**
+- current browse already has its own `BrowseMediaItemsInput`
+- v2 adds new dimensions not yet modeled consistently in the DB
+- watched state is user-specific while most metadata is global
+- show-level vs episode-level semantics are easy to blur
 
-**Warning signs:**
-- support issues are highly client-specific
-- subtitles cause sudden CPU spikes
-- same file direct-plays on one client and fails on another with no explanation
-- no server-side record of why a playback decision was made
+**Warning Signs**
+- “movie/show” filters behave differently between search and browse
+- resolution filter works on files but not grouped shows
+- watched/unwatched counts shift depending on whether an item has multiple files/episodes
+- frontend adds page-specific filter translation logic
 
-**Prevention strategy:**
-- model playback as a **decision service**, not a link service
-- evaluate per-client capabilities: container, video codec/profile, audio codec/channels, subtitle mode, HDR/SDR, seek/range support
-- prefer `direct play -> remux/direct stream -> transcode fallback`
-- log the decision reason for every playback session
-- keep progress sync separate from whether the final stream was direct or transcoded
+**Prevention**
+- define one backend query contract for discovery: scope, media type, global filters, user-state filters, sort, and grouping rules
+- decide explicitly which filters are **item-level**, **file-level**, and **user-level**
+- compute grouped-show semantics once on the server; do not let each client invent it
+- document whether filters apply before or after show grouping
+- add golden tests for the same query across browse and search endpoints
 
-**Phase to address:** **Phase 4** — playback service
-
-**Why this is high-confidence:** Plex and Jellyfin both document that playback outcomes differ by client capability, container, codecs, and subtitle behavior; subtitle burn-in is a particularly expensive transcode trigger.
-
----
-
-### 6) Progress sync modeled as naive last-write-wins
-**What goes wrong:** Every client posts raw position updates, and the server overwrites resume state without session semantics, monotonicity rules, or conflict handling.
-
-**Why it happens:** Progress looks like “just save seconds watched” until multiple devices and scrub behavior appear.
-
-**Consequences:**
-- progress jumps backward after pausing on another device
-- “continue watching” becomes noisy or wrong
-- rewatches and partial watches are indistinguishable
-- live/direct-play/proxy paths produce inconsistent reporting
-
-**Warning signs:**
-- the same title’s progress oscillates during dual-device usage
-- seek events overwrite meaningful completion state
-- resume state is keyed to transient playback URLs
-- no distinction between heartbeat, seek, stop, and completion
-
-**Prevention strategy:**
-- model **playback sessions** separately from **canonical resume state**
-- accept monotonic progress updates within a session, with explicit rules for seek/backtrack
-- store `position`, `duration`, `updated_at`, `completed_at`, `last_client`, and session identifiers
-- define server-side merge rules for concurrent clients
-- key progress to media/version identity, never to temporary links
-
-**Phase to address:** **Phase 4** — progress and multi-client sync
+**Best Phase To Address**  
+**Phase 1**
 
 ---
 
-## Moderate Pitfalls
+### 3) Treating editable metadata as the new truth without lock/merge semantics
 
-### 7) No backpressure or bounded concurrency in scanning/probing
-**What goes wrong:** The worker floods storage, metadata providers, DB, and CPU with unbounded parallel work.
+**Risk**  
+Admin-edited titles, overviews, posters, or season data are overwritten by later TMDB rematch/re-fetch jobs or by scan-driven metadata resets. The product appears to support manual governance, but the system silently reverts user decisions.
 
-**Consequences:** NAS/cloud latency explodes, OpenList becomes the bottleneck, and the app feels slow even though “background jobs” were supposed to isolate the load.
+**Why It Happens**
+- current metadata apply writes directly into canonical `media_items`
+- current scan logic resets metadata when base classification changes
+- “re-match” and “refresh metadata” are different intents but can touch the same fields
+- field-level locks are not present in the current model
 
-**Warning signs:**
-- scan speed gets worse as concurrency increases
-- OpenList HTTP latency rises sharply during scans
-- DB write contention during library refresh
-- worker queues grow while throughput falls
+**Warning Signs**
+- admins report “my edited title changed back after rescan”
+- rematch fixes poster but unexpectedly rewrites overview/cast/title
+- locking is implemented only in UI state, not persisted in backend rules
+- support asks users not to run scans after editing
 
-**Prevention strategy:**
-- per-stage concurrency limits
-- per-library scheduling and cancellation
-- queue metrics: backlog, age, retries, median stage duration
-- separate rate limits for storage traversal, metadata lookup, and probe jobs
+**Prevention**
+- split metadata into at least three concepts: **detected base facts**, **provider facts**, **admin overrides/locks**
+- make field locks enforceable in backend write paths, including scan, auto-match, re-fetch, and manual apply
+- store provenance per field or per metadata block: source, updated_at, lock state
+- require every metadata mutation path to use one merge policy
+- add regression tests covering: scan after edit, rematch after edit, and scheduled refresh after edit
 
-**Phase to address:** **Phase 2**, then tune again in **Phase 5**
-
----
-
-### 8) Shipping incremental sync before proving the correctness model
-**What goes wrong:** Projects jump to filesystem events/webhooks/cursors before they have trustworthy full-scan reconciliation, stable identity, or idempotent jobs.
-
-**Consequences:** silent drift between storage and DB, phantom deletions, and impossible-to-debug “missing episode” reports.
-
-**Warning signs:**
-- event handling code includes lots of “if missing, do full resync” fallbacks
-- the team cannot explain what happens after rename, partial upload, failed probe, or duplicate event delivery
-- manual full scan is still the only trustworthy recovery path
-
-**Prevention strategy:**
-- first make full scan + reconciliation correct and repeatable
-- define event semantics explicitly: create/update/delete/rename are advisory, not truth
-- keep periodic reconciliation even after event-driven sync arrives
-- treat partial uploads and eventually consistent backends as normal cases
-
-**Phase to address:** **Phase 5** — incremental/event-driven sync
+**Best Phase To Address**  
+**Phase 1**, with UX work in **Phase 3**
 
 ---
 
-### 9) Premature “performance architecture” instead of measured evolution
-**What goes wrong:** Teams rewrite for microservices, direct-storage adapters, or heavyweight caches before they have evidence about the actual hotspot.
+### 4) Search/filter model tied too tightly to current denormalized JSON columns
 
-**Consequences:** more deployment complexity, more failure modes, little real user benefit.
+**Risk**  
+Genres, cast, directors, region, rating, and trailer-related attributes stay embedded in text blobs (`GenresJSON`, `CastJSON`, `DirectorsJSON`), so filtering and ranking become expensive, brittle, and hard to migrate. The team keeps adding string contains hacks instead of a stable discovery model.
 
-**Warning signs:**
-- architecture discussions are about future scale rather than current bottlenecks
-- no timing breakdown for scan/list/playback/probe paths
-- proposal to bypass OpenList everywhere before hotspot profiling exists
+**Why It Happens**
+- denormalized JSON was fine for v1 detail rendering
+- product-native discovery requires indexed facets, not just display payloads
+- avoiding middleware pushes complexity into the app DB schema
 
-**Prevention strategy:**
-- add observability first: scan stage timings, provider latency, playback decision metrics, transcode counts, cache hit rate
-- isolate Worker from API before introducing more services
-- only add direct adapters for proven hotspots (for example local-path heavy scans)
-- treat Redis/caching/queue extraction as response to evidence, not as V1 defaults
+**Warning Signs**
+- filters rely on `LIKE` over JSON text
+- cast/director search matches substrings unpredictably
+- facet counts are too slow or disabled
+- every new filter requires endpoint-specific parsing code
 
-**Phase to address:** **Phase 5** — performance evolution
+**Prevention**
+- promote discovery-critical fields into index-friendly structures
+- keep display JSON if helpful, but do not make it the filtering substrate
+- for SQLite, design FTS/facet support intentionally and validate concurrency settings; for large filters, use supporting tables/materialized projections rather than repeated JSON scans
+- distinguish canonical metadata storage from query-optimized projections
+
+**Best Phase To Address**  
+**Phase 1**
 
 ---
 
-## Minor Pitfalls
+### 5) Trailer playback modeled as a permanent media asset instead of a volatile external reference
 
-### 10) Treating multi-client support as a UI concern rather than an API contract
-**What goes wrong:** Web works first, then mobile/TV are forced to emulate Web assumptions.
+**Risk**  
+Trailers are stored and surfaced like stable local media, but actual trailer sources are external, language/region-specific, can disappear, and may fail embed/playback rules. Users get broken play buttons, stale trailers, or trailers unrelated to the matched title.
 
-**Consequences:** awkward API shapes, playback regressions on constrained clients, and a permanent bias toward browser behavior.
+**Why It Happens**
+- UI wants “play trailer” to feel identical to “play media”
+- external metadata providers return links and video descriptors, but not all are durable or embeddable
+- rematch and language changes can invalidate previous trailer selection
 
-**Warning signs:**
-- API responses expose web-player details instead of media/playback semantics
-- TV/mobile clients need custom exceptions for common flows
-- no client capability declaration in playback negotiation
+**Warning Signs**
+- trailer button appears often but fails at playback time
+- trailers survive metadata rematch even when external ID changes
+- app stores raw embed URLs with no source/type/locale metadata
+- user cannot tell whether “no trailer” means unavailable, fetch failed, or blocked source
 
-**Prevention strategy:**
-- define stable media and playback contracts before expanding clients
-- require explicit client capability input for playback decisions
-- keep transport/UI concerns out of media identity and progress models
+**Prevention**
+- treat trailer data as **refreshable metadata**, not as canonical media inventory
+- store source/provider, external video key, locale, type, last-validated-at, and availability state
+- separate “candidate trailers fetched” from “preferred trailer shown in UI”
+- make playback degrade gracefully: unavailable, unsupported source, blocked embed, stale candidate
+- attach trailer invalidation to metadata rematch and scheduled refresh flows
 
-**Phase to address:** **Phase 4**
+**Best Phase To Address**  
+**Phase 3**
+
+---
+
+### 6) Storage-change listeners treated as truth instead of as hints into the existing reconciliation model
+
+**Risk**  
+New storage listeners directly create/update/delete media rows based on events from the storage layer. Duplicate, delayed, partial, or rename events then corrupt library state, especially when `OpenList` is only an HTTP-accessed storage provider and not the business source of truth.
+
+**Why It Happens**
+- event-driven refresh sounds more efficient than scanning
+- v1 already has targeted refresh foundations, so it is tempting to let events mutate rows directly
+- upstream storage/event streams are often lossy, duplicated, or path-centric
+
+**Warning Signs**
+- listener code writes `media_items` or `media_files` directly
+- rename/delete/create races produce flicker or duplicate rows
+- event handler needs many “fallback to full scan” branches
+- missing file reports become hard to reproduce because state depended on event order
+
+**Prevention**
+- keep listeners as producers of **targeted refresh jobs**, not direct mutators of canonical media rows
+- define event semantics as advisory: they narrow scan scope, they do not assert final truth
+- coalesce events by library/root path before enqueuing work
+- preserve periodic reconciliation even after listeners ship
+- explicitly test rename, partial upload, duplicate delivery, delete-after-create, and out-of-order events
+
+**Best Phase To Address**  
+**Phase 4**
+
+---
+
+### 7) Event storms turning targeted refresh into a denial-of-service against OpenList and the app DB
+
+**Risk**  
+Directory-level listeners emit bursts, each burst becomes a targeted refresh job, and the worker repeatedly scans the same subtree. The result is self-inflicted load on OpenList, the database, and metadata jobs.
+
+**Why It Happens**
+- file operations often emit many events for one logical change
+- current job uniqueness is keyed per root/reason for queued/running jobs only
+- without cooldown windows, the same subtree is rescanned repeatedly
+
+**Warning Signs**
+- many queued `targeted_refresh` jobs for near-identical paths
+- OpenList latency spikes during bulk copy/rename operations
+- background jobs stay busy but library freshness barely improves
+- metadata/probe queues grow because refresh keeps rediscovering the same items
+
+**Prevention**
+- add debounce/coalescing windows per library subtree
+- merge child-path events upward to the minimal safe root when bursts occur
+- track suppression metrics: dropped duplicates, merged paths, deferred jobs
+- cap concurrent refresh work separately from probe/metadata jobs
+- allow listener pause/catch-up modes during bulk library operations
+
+**Best Phase To Address**  
+**Phase 4**, with operational tuning in **Phase 5**
+
+---
+
+### 8) Scheduled job management implemented as “enqueue on cron” without schedule ownership, misfire, or overlap rules
+
+**Risk**  
+The app can create recurring scans/refreshes/cleanup tasks, but there is no clear distinction between a schedule definition and a job execution. Disabled schedules still run, restarts skip intended runs, and overlapping runs stack up.
+
+**Why It Happens**
+- current job system models one-off jobs well, not recurring policy
+- it is tempting to bolt timers directly onto the worker loop
+- scan refresh already uses config/settings-driven ticker behavior, which is too limited for v2 admin scheduling
+
+**Warning Signs**
+- schedule state is inferred from old jobs instead of stored explicitly
+- worker restart changes whether a run happens
+- long-running scan and next scheduled scan overlap unpredictably
+- admins cannot tell “scheduled”, “due”, “running”, “skipped”, and “last successful run” apart
+
+**Prevention**
+- model schedules as first-class records with: enabled flag, cadence, next run, last run, last success, policy, target scope, and owner feature
+- enqueue executions from schedule evaluation, not from UI clicks or worker boot side effects
+- define overlap policy per schedule type: skip, replace, queue one, or parallelize
+- define misfire policy after downtime: catch up once, catch up all, or resume from now
+- keep execution history separate from schedule definitions
+
+**Best Phase To Address**  
+**Phase 5**
+
+---
+
+### 9) One shared worker lane for user-facing freshness jobs and slow operational maintenance
+
+**Risk**  
+Scheduled cover refreshes, metadata retries, dead-link checks, and cleanup jobs share the same execution lane as user-visible scans and targeted refresh. Operations work starves discovery freshness, or discovery floods prevent maintenance from ever completing.
+
+**Why It Happens**
+- current worker claims jobs from one shared queue ordered by availability
+- job kinds have no built-in priority or resource class
+- “simple deployment” biases toward one poller and one queue table
+
+**Warning Signs**
+- search/browse remains stale while cleanup jobs run for long periods
+- admin runs “refresh all metadata” and normal library updates lag badly
+- retry storms from one job kind delay all others
+- operators cannot prioritize or pause a noisy job class
+
+**Prevention**
+- introduce job classes or priorities before adding many recurring task types
+- separate concurrency budgets for refresh, metadata, probe, and maintenance jobs
+- expose queue age and backlog per kind in admin UI
+- support pause/disable by job class, not only by individual job
+- make expensive recurring tasks shardable per library instead of monolithic global jobs
+
+**Best Phase To Address**  
+**Phase 5**
+
+---
+
+## Moderate Risks
+
+### 10) Search relevance tuned only for titles, making actor/director search feel broken
+
+**Risk**  
+The feature technically supports title/actor/director search, but ranking heavily favors title substring matches and weakly handles people names, alternate/original titles, and show-vs-episode collapsing.
+
+**Why It Happens**
+- title-only ranking is easier to ship first
+- actor/director data often arrives as arrays/JSON, not first-class searchable entities
+- grouped-show results complicate relevance scoring
+
+**Warning Signs**
+- searching a well-known actor returns many weak title matches first
+- original title search works in details but not in search ranking
+- episode-level matches clutter show-level search results
+
+**Prevention**
+- define ranking weights intentionally: exact title, prefix title, original title, cast, director, popularity/recency, watch state
+- collapse episodes to show-level search documents where appropriate
+- keep highlight logic aligned with indexed fields
+- test known ambiguous searches before freezing API shape
+
+**Best Phase To Address**  
+**Phase 2**
+
+---
+
+### 11) User-state filters accidentally cached or indexed as global state
+
+**Risk**  
+Filters like watched/unwatched or continue-watching get mixed into shared discovery caches or search documents, causing one user’s watch state to affect another user’s results.
+
+**Why It Happens**
+- product search/filter feels like one unified query surface
+- watched status is already derived from progress data, which is separate from media metadata
+- denormalized result caching often ignores user dimension at first
+
+**Warning Signs**
+- admin and normal user see different counts for “all items” unexpectedly
+- watched filters behave differently after login changes
+- response caching keys only on query text, not user identity
+
+**Prevention**
+- keep user-state joins outside the global search document unless explicitly keyed per user
+- separate global facets from user-personalized overlays
+- review every cached search/list endpoint for user scoping
+
+**Best Phase To Address**  
+**Phase 2**
+
+---
+
+### 12) Metadata governance UI ships before governance auditability exists
+
+**Risk**  
+Admins can edit, rematch, lock, and refresh metadata, but the system cannot explain who changed what, when a field became locked, or why a later scheduled job skipped or rewrote it.
+
+**Why It Happens**
+- UI editing often ships before durable audit design
+- “single-admin household app” feels low-risk until later debugging is needed
+- scheduled jobs amplify the cost of invisible changes
+
+**Warning Signs**
+- support requires DB inspection to answer “why did this metadata change?”
+- a locked field is skipped with no visible reason
+- there is no last-updated/source view for metadata blocks
+
+**Prevention**
+- add lightweight metadata audit fields/events early
+- expose source/provenance and lock reason in admin detail views
+- record whether changes came from scan, provider fetch, rematch, manual edit, or schedule
+
+**Best Phase To Address**  
+**Phase 3**
+
+---
+
+### 13) Scheduled refreshes and listeners re-triggering metadata work with no item-level idempotency
+
+**Risk**  
+The same media item is queued repeatedly for match, trailer sync, or metadata refresh because multiple sources of work exist: scan, targeted refresh, manual rematch, scheduled refresh, and external provider corrections.
+
+**Why It Happens**
+- current queue uniqueness is strong for some scan jobs, but item-level enrichment can still duplicate logically
+- new features create many more triggers for the same enrichment actions
+
+**Warning Signs**
+- same item appears in multiple queued metadata jobs
+- provider rate limits are hit during bulk refreshes
+- retries and manual actions produce indistinguishable duplicate work
+
+**Prevention**
+- define job keys at the item/feature scope where safe
+- persist freshness timestamps and reason codes per enrichment type
+- skip enqueuing when current state is already fresh enough or locked
+- expose deduped vs executed counts in job telemetry
+
+**Best Phase To Address**  
+**Phase 3** for data rules, **Phase 5** for operational policy
 
 ---
 
 ## Phase-Specific Warnings
 
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| Phase 1: Storage boundary | OpenList leaks into API/business model | Normalize everything behind `StorageProvider`; media APIs must not use raw storage paths as identities |
-| Phase 2: Scanner/jobs | Scan tries to do metadata/probe/transcode inline | Split fast-path discovery from slow-path enrichment jobs |
-| Phase 2: Scanner correctness | Path-based identity breaks rename/move handling | Introduce stable file identity and reconciliation rules before aggressive delta sync |
-| Phase 3: Metadata | Wrong matches become “normal” | Add confidence scores, manual fix flows, typed libraries, explicit IDs |
-| Phase 4: Playback | Playback treated as URL generation | Build capability-aware playback decision engine with direct/remux/transcode fallback |
-| Phase 4: Progress | Concurrent clients overwrite each other | Separate session telemetry from canonical resume state; add merge rules |
-| Phase 5: Incremental sync | Event-driven updates drift from reality | Keep periodic reconciliation and idempotent event handlers |
-| Phase 5: Performance | Premature rewrite/microservices | Measure first, then isolate Worker, then optimize hotspots |
+| Roadmap Phase | Likely Pitfall | Why It Matters In Mibo | Mitigation |
+|---|---|---|---|
+| Phase 1 — Discovery data model | Search/filter fields piggyback on JSON blobs and mutable display fields | Current `media_items` schema is optimized for browse/detail, not discovery governance | Introduce canonical-vs-projected discovery model and metadata lock semantics before shipping search UI |
+| Phase 1 — Discovery data model | Manual edits overwritten by scan/rematch | Current scan logic can reset metadata when base fields change | Add provider facts, admin overrides, and field locks with one merge policy |
+| Phase 2 — Search/filter engine | Browse and search drift into separate semantics | Existing browse contract is narrower than planned v2 discovery | Define one query contract and one grouping model across list/search surfaces |
+| Phase 2 — Search/filter engine | SQLite/Postgres behavior diverges | Repo supports both DBs; search feature will amplify query differences | Use deterministic search projection and DB-specific tests, especially for FTS/facets |
+| Phase 3 — Metadata + trailers | Trailer records become stale after rematch or locale change | Trailer source is external and coupled to metadata IDs | Treat trailers as refreshable metadata with validation state |
+| Phase 3 — Metadata + trailers | Governance exists in UI but not backend | Manual edits, re-fetch, rematch, and schedules all mutate metadata | Enforce lock/merge rules server-side and expose provenance |
+| Phase 4 — Storage listeners | Events mutate canonical rows directly | `OpenList` is an adapter, not the semantic source of truth | Convert events into targeted refresh jobs only |
+| Phase 4 — Storage listeners | Event bursts overwhelm targeted refresh | Current worker/job system is simple and path-based | Add path coalescing, debounce windows, and library-level throttles |
+| Phase 5 — Scheduled jobs | Schedules are inferred from jobs | Existing job table models executions, not recurring policy | Create first-class schedules with overlap and misfire policies |
+| Phase 5 — Scheduled jobs | Slow maintenance starves freshness | Current worker has one shared claim loop | Add job classes, priorities, and per-kind concurrency budgets |
 
 ---
 
-## What This Means For Roadmap Planning
+## Practical Roadmap Guidance
 
-1. **Do not start with “better playback UX” before the storage and identity model are stable.** Playback quality is downstream of correct media/file semantics.
-2. **Treat scanning as orchestration, not enrichment.** Fast discovery first; expensive understanding later.
-3. **Make metadata confidence explicit.** Silent wrong matches are worse than incomplete metadata.
-4. **Define playback and progress as first-class backend services.** They are not thin wrappers over storage URLs.
-5. **Delay performance complexity until metrics justify it.** But add observability early so the trigger is obvious.
+1. **Do not start Phase 2 UI-first.** Search/filter UX should follow a Phase 1 contract for canonical metadata ownership and projected discovery fields.
+2. **Treat metadata governance as a data-model problem first, an admin-screen problem second.** Otherwise manual edits will not survive scans and schedules.
+3. **Listeners should only narrow work scope.** They should never become an alternate ingestion pipeline.
+4. **Schedules must be modeled, not implied.** Recurring operations need durable schedule state, overlap policy, and visibility.
+5. **Plan one explicit reindex/reprojection path.** v2 will almost certainly need it after schema/ranking changes.
 
 ---
 
 ## Sources
 
-### Project-specific
-- `.planning/PROJECT.md` — active requirements and constraints around OpenList boundary, Worker separation, stable identity, playback, and multi-client API. **Confidence: HIGH**
-- `docs/media-architecture/improved-architecture.md` — recommended architecture, data ownership, scan/playback flows, and known risks. **Confidence: HIGH**
-
-### Official ecosystem references
-- Jellyfin — Libraries: mixed library type is discouraged because of unreliable metadata results. https://jellyfin.org/docs/general/server/libraries/ **Confidence: HIGH**
-- Jellyfin — Movies naming and metadata provider IDs improve matching reliability. https://jellyfin.org/docs/general/server/media/movies/ **Confidence: HIGH**
-- Jellyfin — TV shows naming, season structure, specials, and multi-part caveats. https://jellyfin.org/docs/general/server/media/shows/ **Confidence: HIGH**
-- Jellyfin — Client codec/container/subtitle compatibility varies substantially; subtitles can force expensive transcodes. https://jellyfin.org/docs/general/clients/codec-support/ **Confidence: HIGH**
-- Jellyfin — Hardware acceleration is partial on some platforms; SSD/RAM cache and correct ffmpeg builds matter. https://jellyfin.org/docs/general/post-install/transcoding/hardware-acceleration/ **Confidence: HIGH**
-- Plex — TV organization, year/IDs, episode ordering, specials, multi-episode and split-file caveats. Last modified 2025-10-08. https://support.plex.tv/articles/naming-and-organizing-your-tv-show-files/ **Confidence: HIGH**
-- Plex — Direct Play vs Direct Stream vs Transcode overview, including subtitle-triggered full transcode. Last modified 2021-07-04 (older but still aligned with current Jellyfin guidance). https://support.plex.tv/articles/200430303-streaming-overview/ **Confidence: MEDIUM**
-
-## Confidence Notes
-
-- **Highest-confidence pitfalls:** storage boundary leakage, path-vs-identity problems, scan/enrichment coupling, metadata naming/mixed-library issues, client capability mismatch in playback.
-- **Medium-confidence area:** exact best-practice details for cross-client progress conflict resolution are less explicitly documented in public official docs; recommendations here are based on common server design patterns plus the project’s own multi-client requirement.
+- `.planning/PROJECT.md` — product goals, architecture boundaries, current v1 capabilities, and v2 constraints. **Confidence: HIGH**
+- `mibo-media-server/internal/database/models.go` — current canonical tables and denormalized metadata fields. **Confidence: HIGH**
+- `mibo-media-server/internal/library/scan.go` — scan/reset behavior, targeted refresh flow, and enqueue patterns. **Confidence: HIGH**
+- `mibo-media-server/internal/library/service.go` — queue uniqueness and targeted refresh job shape. **Confidence: HIGH**
+- `mibo-media-server/internal/library/query.go` — current browse contract and grouping logic. **Confidence: HIGH**
+- `mibo-media-server/internal/jobs/service.go` — current execution queue semantics and uniqueness limits. **Confidence: HIGH**
+- `mibo-media-server/internal/worker/worker.go` — single worker claim loop and current scheduled-scan ticker behavior. **Confidence: HIGH**
+- `mibo-media-server/internal/metadata/service.go` — current metadata mutation path and lack of field-level lock semantics. **Confidence: HIGH**
+- SQLite documentation on FTS5 external-content tables and synchronization triggers. https://www.sqlite.org/fts5.html **Confidence: HIGH**
+- SQLite documentation on WAL/concurrency and optimization pragmas. https://www.sqlite.org/pragma.html#pragma_journal_mode **Confidence: HIGH**
