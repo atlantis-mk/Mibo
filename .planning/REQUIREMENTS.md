@@ -92,48 +92,48 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SRCH-01 | Unmapped | Pending |
-| SRCH-02 | Unmapped | Pending |
-| SRCH-03 | Unmapped | Pending |
-| SRCH-04 | Unmapped | Pending |
-| SRCH-05 | Unmapped | Pending |
-| SRCH-06 | Unmapped | Pending |
-| SRCH-07 | Unmapped | Pending |
-| SRCH-08 | Unmapped | Pending |
-| FLTR-01 | Unmapped | Pending |
-| FLTR-02 | Unmapped | Pending |
-| FLTR-03 | Unmapped | Pending |
-| FLTR-04 | Unmapped | Pending |
-| FLTR-05 | Unmapped | Pending |
-| FLTR-06 | Unmapped | Pending |
-| TRLR-01 | Unmapped | Pending |
-| TRLR-02 | Unmapped | Pending |
-| TRLR-03 | Unmapped | Pending |
-| TRLR-04 | Unmapped | Pending |
-| META-01 | Unmapped | Pending |
-| META-02 | Unmapped | Pending |
-| META-03 | Unmapped | Pending |
-| META-04 | Unmapped | Pending |
-| META-05 | Unmapped | Pending |
-| META-06 | Unmapped | Pending |
-| LIST-01 | Unmapped | Pending |
-| LIST-02 | Unmapped | Pending |
-| LIST-03 | Unmapped | Pending |
-| LIST-04 | Unmapped | Pending |
-| SJOB-01 | Unmapped | Pending |
-| SJOB-02 | Unmapped | Pending |
-| SJOB-03 | Unmapped | Pending |
-| SJOB-04 | Unmapped | Pending |
-| SJOB-05 | Unmapped | Pending |
-| SJOB-06 | Unmapped | Pending |
-| SJOB-07 | Unmapped | Pending |
-| SJOB-08 | Unmapped | Pending |
+| SRCH-01 | Phase 8 | Pending |
+| SRCH-02 | Phase 8 | Pending |
+| SRCH-03 | Phase 8 | Pending |
+| SRCH-04 | Phase 8 | Pending |
+| SRCH-05 | Phase 8 | Pending |
+| SRCH-06 | Phase 8 | Pending |
+| SRCH-07 | Phase 8 | Pending |
+| SRCH-08 | Phase 8 | Pending |
+| FLTR-01 | Phase 8 | Pending |
+| FLTR-02 | Phase 8 | Pending |
+| FLTR-03 | Phase 8 | Pending |
+| FLTR-04 | Phase 8 | Pending |
+| FLTR-05 | Phase 8 | Pending |
+| FLTR-06 | Phase 8 | Pending |
+| TRLR-01 | Phase 9 | Pending |
+| TRLR-02 | Phase 9 | Pending |
+| TRLR-03 | Phase 9 | Pending |
+| TRLR-04 | Phase 9 | Pending |
+| META-01 | Phase 7 | Pending |
+| META-02 | Phase 7 | Pending |
+| META-03 | Phase 7 | Pending |
+| META-04 | Phase 7 | Pending |
+| META-05 | Phase 7 | Pending |
+| META-06 | Phase 7 | Pending |
+| LIST-01 | Phase 11 | Pending |
+| LIST-02 | Phase 11 | Pending |
+| LIST-03 | Phase 11 | Pending |
+| LIST-04 | Phase 11 | Pending |
+| SJOB-01 | Phase 10 | Pending |
+| SJOB-02 | Phase 10 | Pending |
+| SJOB-03 | Phase 10 | Pending |
+| SJOB-04 | Phase 10 | Pending |
+| SJOB-05 | Phase 10 | Pending |
+| SJOB-06 | Phase 10 | Pending |
+| SJOB-07 | Phase 10 | Pending |
+| SJOB-08 | Phase 10 | Pending |
 
 **Coverage:**
 - v2 requirements: 36 total
-- Mapped to phases: 0
-- Unmapped: 36 ⚠
+- Mapped to phases: 36
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-23*
-*Last updated: 2026-04-23 after initial milestone v2 definition*
+*Last updated: 2026-04-24 after milestone v2 roadmap creation*
