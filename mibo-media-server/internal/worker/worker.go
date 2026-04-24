@@ -111,6 +111,7 @@ func (r *Runner) RunOnce(ctx context.Context) {
 
 func (r *Runner) runOnce(ctx context.Context) {
 	r.enqueueDueSchedules(ctx)
+	r.ensureListenerReconcileCoverage(ctx)
 	for {
 		job, err := r.jobs.ClaimNext(ctx)
 		if err != nil {
@@ -149,6 +150,11 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return errors.New("listener service unavailable")
 		}
 		return r.listener.ApplyStorageEventRefresh(ctx, job)
+	case listener.JobKindListenerReconcile:
+		if r.listener == nil {
+			return errors.New("listener service unavailable")
+		}
+		return r.listener.RunReconcile(ctx, job)
 	case library.JobKindMatchMediaItem:
 		var payload struct {
 			MediaItemID uint `json:"media_item_id"`
@@ -273,6 +279,20 @@ func (r *Runner) markScheduleRunFinished(ctx context.Context, job database.Job, 
 	}
 	if err := r.schedule.MarkRunFinished(ctx, schedule.RunTransitionInput{JobID: job.ID, Status: status, Message: message, Finished: time.Now().UTC()}); err != nil {
 		log.Printf("worker: mark schedule job %d %s: %v", job.ID, status, err)
+	}
+}
+
+func (r *Runner) ensureListenerReconcileCoverage(ctx context.Context) {
+	if r.listener == nil || r.library == nil {
+		return
+	}
+	libraries, err := r.library.ListActiveLibraries(ctx)
+	if err != nil {
+		log.Printf("worker: list active libraries for listener reconcile: %v", err)
+		return
+	}
+	if err := r.listener.EnsureReconcileCoverage(ctx, libraries); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("worker: ensure listener reconcile coverage: %v", err)
 	}
 }
 
