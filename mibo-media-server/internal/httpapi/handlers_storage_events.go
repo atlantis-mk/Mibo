@@ -88,6 +88,9 @@ func validateStorageEventPath(providerName string, libraryRoot string, candidate
 	}
 	cleanRoot := filepath.Clean("/" + strings.TrimLeft(strings.TrimSpace(libraryRoot), "/"))
 	cleanCandidate := filepath.Clean("/" + strings.TrimLeft(trimmed, "/"))
+	if cleanRoot == string(filepath.Separator) {
+		return cleanCandidate, nil
+	}
 	if cleanCandidate != cleanRoot && !strings.HasPrefix(cleanCandidate, cleanRoot+"/") {
 		return "", fmt.Errorf("path %s is outside library root %s", cleanCandidate, cleanRoot)
 	}
