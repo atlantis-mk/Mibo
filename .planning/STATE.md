@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 11-04-PLAN.md
-last_updated: "2026-04-24T10:21:22.987Z"
+status: verifying
+stopped_at: Completed 11-05-PLAN.md
+last_updated: "2026-04-24T10:36:01.336Z"
 last_activity: 2026-04-24
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 18
-  completed_plans: 17
-  percent: 94
+  completed_plans: 18
+  percent: 100
 ---
 
 # Project State
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-04-23)
 
 Phase: 11 (event-driven-refresh-hardening) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-24
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [█████████░] 94%
 | Phase 11-event-driven-refresh-hardening P01 | 3min | 2 tasks | 2 files |
 | Phase 11-event-driven-refresh-hardening P03 | 13min | 2 tasks | 2 files |
 | Phase 11-event-driven-refresh-hardening P04 | 6min | 2 tasks | 3 files |
+| Phase 11-event-driven-refresh-hardening P05 | 9min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - Listener worker branches delegate to the listener service and only enqueue existing scan jobs.
 - Reconciliation coverage is seeded before normal job claiming so active libraries keep a future fallback scan intent.
 - Special-case normalized non-local / roots in Mibo HTTP validation while preserving local filepath.Rel and non-root prefix checks.
+- Use JobActiveIntent.IntentKey for active listener uniqueness instead of making database.Job.JobKey globally unique.
+- Keep listener refresh and reconcile guards keyed at library scope so completed historical jobs can remain in the jobs table.
 
 ### Pending Todos
 
@@ -95,8 +98,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-24T10:21:22.981Z
-Stopped at: Completed 11-04-PLAN.md
+Last session: 2026-04-24T10:36:01.330Z
+Stopped at: Completed 11-05-PLAN.md
 Resume file: None
 
 **Planned Phase:** 11 (event-driven-refresh-hardening) — 5 plans — 2026-04-24T10:06:15.484Z

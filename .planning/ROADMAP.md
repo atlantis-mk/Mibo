@@ -91,8 +91,8 @@ Plans:
 - [x] 11-01-PLAN.md — Add the listener-domain service with explicit debounce, path coalescing, and reconciliation coverage. Completed 2026-04-24.
 - [x] 11-02-PLAN.md — Route `/api/v1/storage-events` through the listener service with conservative normalization and API regressions. Completed 2026-04-24.
 - [x] 11-03-PLAN.md — Extend the worker to apply coalesced listener jobs and maintain periodic reconciliation. Completed 2026-04-24.
-- [ ] 11-04-PLAN.md — Close the OpenList `/` root storage-event validation gap.
-- [ ] 11-05-PLAN.md — Add atomic active-intent guards for concurrent listener refresh and reconciliation jobs.
+- [x] 11-04-PLAN.md — Close the OpenList `/` root storage-event validation gap. Completed 2026-04-24.
+- [x] 11-05-PLAN.md — Add atomic active-intent guards for concurrent listener refresh and reconciliation jobs. Completed 2026-04-24.
 
 ## Progress
 
@@ -108,4 +108,4 @@ Plans:
 | 8. Native Search & Discovery Filters | v2 Product Discovery And Operations | 4/4 | Complete | 2026-04-24 |
 | 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 1/1 | Complete | 2026-04-24 |
 | 10. Scheduled Operations Control | v2 Product Discovery And Operations | 7/7 | Complete | 2026-04-24 |
-| 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 3/3 | Complete | 2026-04-24 |
+| 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 5/5 | Complete | 2026-04-24 |
