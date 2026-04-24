@@ -14,7 +14,7 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
 - [x] **Phase 7: Metadata Governance & Matching** - Give admins direct control over metadata quality before broader discovery automation builds on it.
 - [x] **Phase 8: Native Search & Discovery Filters** - Let users find content through one product-native search and filtering experience. Completed 2026-04-24.
 - [x] **Phase 9: Trailer Discovery & Playback** - Surface and play trusted trailers from media detail pages. Completed 2026-04-24.
-- [ ] **Phase 10: Scheduled Operations Control** - Let admins automate recurring maintenance through managed schedules.
+- [x] **Phase 10: Scheduled Operations Control** - Let admins automate recurring maintenance through managed schedules. Completed 2026-04-24.
 - [ ] **Phase 11: Event-Driven Refresh Hardening** - Keep libraries fresh from storage changes through safe listener-driven refresh and reconciliation.
 
 ## Phase Details
@@ -69,13 +69,13 @@ Plans:
   3. Admin can review each schedule’s latest result and run history.
 **Plans**: 7 plans
 Plans:
-- [ ] 10-01-PLAN.md — Add the persisted schedule domain, recurrence math, and schedule-centric history foundations.
-- [ ] 10-02-PLAN.md — Implement library-owned maintenance executors for scan, cleanup, and invalid-link checks.
-- [ ] 10-03-PLAN.md — Implement metadata-owned maintenance executors for metadata refetch, trailer sync, and artwork refresh.
-- [ ] 10-04-PLAN.md — Expose authenticated schedule CRUD/toggle/run-now/history APIs on top of the schedule service.
-- [ ] 10-05-PLAN.md — Wire due schedules and run-history propagation into the existing worker lifecycle.
-- [ ] 10-06-PLAN.md — Build the dedicated schedules workspace route and typed frontend schedule contract.
-- [ ] 10-07-PLAN.md — Finish schedule mutations, history detail UI, and the settings summary entry.
+- [x] 10-01-PLAN.md — Add the persisted schedule domain, recurrence math, and schedule-centric history foundations.
+- [x] 10-02-PLAN.md — Implement library-owned maintenance executors for scan, cleanup, and invalid-link checks.
+- [x] 10-03-PLAN.md — Implement metadata-owned maintenance executors for metadata refetch, trailer sync, and artwork refresh.
+- [x] 10-04-PLAN.md — Expose authenticated schedule CRUD/toggle/run-now/history APIs on top of the schedule service.
+- [x] 10-05-PLAN.md — Wire due schedules and run-history propagation into the existing worker lifecycle.
+- [x] 10-06-PLAN.md — Build the dedicated schedules workspace route and typed frontend schedule contract.
+- [x] 10-07-PLAN.md — Finish schedule mutations, history detail UI, and the settings summary entry.
 **UI hint**: yes
 
 ### Phase 11: Event-Driven Refresh Hardening
@@ -101,5 +101,5 @@ Plans:
 | 7. Metadata Governance & Matching | v2 Product Discovery And Operations | 3/3 | Complete | 2026-04-24 |
 | 8. Native Search & Discovery Filters | v2 Product Discovery And Operations | 4/4 | Complete | 2026-04-24 |
 | 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 1/1 | Complete | 2026-04-24 |
-| 10. Scheduled Operations Control | v2 Product Discovery And Operations | 0/TBD | Not started | - |
+| 10. Scheduled Operations Control | v2 Product Discovery And Operations | 7/7 | Complete | 2026-04-24 |
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 0/TBD | Not started | - |

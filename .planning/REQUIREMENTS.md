@@ -50,14 +50,22 @@
 
 ### Scheduled Jobs
 
-- [ ] **SJOB-01**: 管理员可以创建和管理扫描类计划任务
-- [ ] **SJOB-02**: 管理员可以创建和管理元数据重抓类计划任务
-- [ ] **SJOB-03**: 管理员可以创建和管理预告片同步类计划任务
-- [ ] **SJOB-04**: 管理员可以创建和管理库清理类计划任务
-- [ ] **SJOB-05**: 管理员可以创建和管理失效链接检查类计划任务
-- [ ] **SJOB-06**: 管理员可以创建和管理封面刷新类计划任务
-- [ ] **SJOB-07**: 管理员可以启停计划任务、手动执行任务，并查看下次运行时间
-- [ ] **SJOB-08**: 管理员可以查看计划任务最近运行结果和历史记录
+- [x] **SJOB-01
+**: 管理员可以创建和管理扫描类计划任务
+- [x] **SJOB-02
+**: 管理员可以创建和管理元数据重抓类计划任务
+- [x] **SJOB-03
+**: 管理员可以创建和管理预告片同步类计划任务
+- [x] **SJOB-04
+**: 管理员可以创建和管理库清理类计划任务
+- [x] **SJOB-05
+**: 管理员可以创建和管理失效链接检查类计划任务
+- [x] **SJOB-06
+**: 管理员可以创建和管理封面刷新类计划任务
+- [x] **SJOB-07
+**: 管理员可以启停计划任务、手动执行任务，并查看下次运行时间
+- [x] **SJOB-08
+**: 管理员可以查看计划任务最近运行结果和历史记录
 
 ## Future Requirements
 
@@ -120,14 +128,14 @@
 | LIST-02 | Phase 11 | Pending |
 | LIST-03 | Phase 11 | Pending |
 | LIST-04 | Phase 11 | Pending |
-| SJOB-01 | Phase 10 | Pending |
-| SJOB-02 | Phase 10 | Pending |
-| SJOB-03 | Phase 10 | Pending |
-| SJOB-04 | Phase 10 | Pending |
-| SJOB-05 | Phase 10 | Pending |
-| SJOB-06 | Phase 10 | Pending |
-| SJOB-07 | Phase 10 | Pending |
-| SJOB-08 | Phase 10 | Pending |
+| SJOB-01 | Phase 10 | Complete |
+| SJOB-02 | Phase 10 | Complete |
+| SJOB-03 | Phase 10 | Complete |
+| SJOB-04 | Phase 10 | Complete |
+| SJOB-05 | Phase 10 | Complete |
+| SJOB-06 | Phase 10 | Complete |
+| SJOB-07 | Phase 10 | Complete |
+| SJOB-08 | Phase 10 | Complete |
 
 **Coverage:**
 - v2 requirements: 36 total
@@ -136,4 +144,4 @@
 
 ---
 *Requirements defined: 2026-04-23*
-*Last updated: 2026-04-24 after Phase 9 completion*
+*Last updated: 2026-04-24 after Phase 10 completion*

@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: Phase 9 execution complete; next work is Phase 10 planning/discussion
-last_updated: "2026-04-24T03:18:58.951Z"
-last_activity: 2026-04-24 -- Phase --phase execution started
+milestone: v2
+milestone_name: Product Discovery And Operations
+status: ready_to_plan
+stopped_at: Completed 10-07-PLAN.md
+last_updated: "2026-04-24T04:04:02.553Z"
+last_activity: 2026-04-24 - Phase 10 completed after schedule domain, executors, APIs, worker wiring, and admin workspace landed
 progress:
-  total_phases: 5
-  completed_phases: 3
-  total_plans: 13
-  completed_plans: 6
-  percent: 46
+  total_phases: 11
+  completed_phases: 10
+  total_plans: 30
+  completed_plans: 30
+  percent: 91
 ---
 
 # Project State
@@ -21,22 +21,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Phase --phase — 10
+**Current focus:** Phase 11 - Event-Driven Refresh Hardening
 
 ## Current Position
 
-Phase: --phase (10) — EXECUTING
-Plan: 1 of --name
-Status: Executing Phase --phase
-Last activity: 2026-04-24 -- Phase --phase execution started
+Phase: 11 of 11 (Event-Driven Refresh Hardening)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-24 - Phase 10 completed after schedule domain, executors, APIs, worker wiring, and admin workspace landed
 
-Progress: [████████░░] 82%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 23
+- Total plans completed: 30
 - Average duration: n/a
 - Total execution time: n/a
 
@@ -48,6 +48,8 @@ Progress: [████████░░] 82%
 | 7 | 3 complete | n/a | n/a |
 | 08 | 4 complete | n/a | n/a |
 | 09 | 3 complete | n/a | n/a |
+| 10 | 7 complete | n/a | n/a |
+| Phase 10 P07 | unknown | 7 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -64,6 +66,9 @@ Recent decisions affecting current work:
 - Keep trailer discovery metadata-driven: the frontend consumes one persisted trailer result from GET /api/v1/media-items/{id}.
 - Use SpecsSection as the formal trailer entry point and remove the hero placeholder from the primary interaction path.
 - Play trailers inside a detail-page dialog so closing playback always returns users to the same detail context.
+- Persist schedules as first-class rows with schedule-centric run history instead of deriving them from global job logs.
+- Route all scheduled maintenance through the existing jobs/worker queue so manual and recurring execution share one lifecycle.
+- Keep schedule management in a dedicated `/schedules` workspace and let settings act only as a summary bridge.
 
 ### Pending Todos
 
@@ -81,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-24 10:33
-Stopped at: Phase 9 execution complete; next work is Phase 10 planning/discussion
-Resume file: .planning/ROADMAP.md
+Last session: 2026-04-24T04:03:49.811Z
+Stopped at: Completed 10-07-PLAN.md
+Resume file: .planning/phases/10-scheduled-operations-control/10-07-SUMMARY.md
