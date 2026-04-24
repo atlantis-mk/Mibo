@@ -86,11 +86,13 @@ Plans:
   1. When storage content is added, updated, deleted, or moved, Mibo turns those changes into automatic targeted refresh work.
   2. Bursty or duplicate storage events are coalesced so the same change window does not create noisy duplicate refresh activity.
   3. Reconciliation can recover missed listener events and bring library state back in sync.
-**Plans**: 3 plans
+**Plans**: 5 plans
 Plans:
 - [x] 11-01-PLAN.md — Add the listener-domain service with explicit debounce, path coalescing, and reconciliation coverage. Completed 2026-04-24.
 - [x] 11-02-PLAN.md — Route `/api/v1/storage-events` through the listener service with conservative normalization and API regressions. Completed 2026-04-24.
 - [x] 11-03-PLAN.md — Extend the worker to apply coalesced listener jobs and maintain periodic reconciliation. Completed 2026-04-24.
+- [ ] 11-04-PLAN.md — Close the OpenList `/` root storage-event validation gap.
+- [ ] 11-05-PLAN.md — Add atomic active-intent guards for concurrent listener refresh and reconciliation jobs.
 
 ## Progress
 
