@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v2
-milestone_name: Product Discovery And Operations
-status: ready_to_plan
-stopped_at: Completed 10-07-PLAN.md
-last_updated: "2026-04-24T04:04:02.553Z"
-last_activity: 2026-04-24 - Phase 10 completed after schedule domain, executors, APIs, worker wiring, and admin workspace landed
+milestone: v1.0
+milestone_name: milestone
+status: executing
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-04-24T08:39:09.668Z"
+last_activity: 2026-04-24
 progress:
-  total_phases: 11
-  completed_phases: 10
-  total_plans: 30
-  completed_plans: 30
-  percent: 91
+  total_phases: 5
+  completed_phases: 4
+  total_plans: 16
+  completed_plans: 14
+  percent: 88
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Phase 11 - Event-Driven Refresh Hardening
+**Current focus:** Phase 11 — event-driven-refresh-hardening
 
 ## Current Position
 
-Phase: 11 of 11 (Event-Driven Refresh Hardening)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-04-24 - Phase 10 completed after schedule domain, executors, APIs, worker wiring, and admin workspace landed
+Phase: 11 (event-driven-refresh-hardening) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-04-24
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [█████████░] 91%
 | 09 | 3 complete | n/a | n/a |
 | 10 | 7 complete | n/a | n/a |
 | Phase 10 P07 | unknown | 7 tasks | 16 files |
+| Phase 11-event-driven-refresh-hardening P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,9 @@ Recent decisions affecting current work:
 - Persist schedules as first-class rows with schedule-centric run history instead of deriving them from global job logs.
 - Route all scheduled maintenance through the existing jobs/worker queue so manual and recurring execution share one lifecycle.
 - Keep schedule management in a dedicated `/schedules` workspace and let settings act only as a summary bridge.
+- Use database.Job.available_at as the durable 15-second listener debounce window for Phase 11.
+- Seed one listener_reconcile intent per active library on the six-hour default cadence.
+- Unsafe listener normalization falls back to sync_library intent rather than guessing a wider targeted root.
 
 ### Pending Todos
 
@@ -86,6 +90,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-24T04:03:49.811Z
-Stopped at: Completed 10-07-PLAN.md
-Resume file: .planning/phases/10-scheduled-operations-control/10-07-SUMMARY.md
+Last session: 2026-04-24T08:39:09.661Z
+Stopped at: Completed 11-01-PLAN.md
+Resume file: None
+
+**Planned Phase:** 11 (event-driven-refresh-hardening) — 3 plans — 2026-04-24T05:00:14.036Z
