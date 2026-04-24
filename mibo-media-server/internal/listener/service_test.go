@@ -117,7 +117,7 @@ func TestReconcileCoverageSchedulesOneFutureJobPerLibrary(t *testing.T) {
 		t.Fatalf("expected exactly one future-dated reconcile job per library, got %d", len(queued))
 	}
 	for _, job := range queued {
-		payload := decodeReconcilePayload(t, job.PayloadJSON)
+		payload := mustDecodeReconcilePayload(t, job.PayloadJSON)
 		if job.AvailableAt.Sub(fixedNow) != 6*time.Hour {
 			t.Fatalf("expected available_at 6h in the future, got %s", job.AvailableAt.Sub(fixedNow))
 		}
@@ -288,6 +288,9 @@ func newListenerIntegrationService(t *testing.T) (*Service, *gorm.DB, database.L
 	if err := db.WithContext(ctx).Model(&database.Library{}).Where("id = ?", record.ID).Update("status", "active").Error; err != nil {
 		t.Fatalf("activate library: %v", err)
 	}
+	if err := db.WithContext(ctx).Where("1 = 1").Delete(&database.Job{}).Error; err != nil {
+		t.Fatalf("clear setup jobs: %v", err)
+	}
 	record.Status = "active"
 	return NewService(db, jobsSvc, librarySvc), db, record
 }
@@ -301,7 +304,7 @@ func mustDecodeRefreshPayload(t *testing.T, raw string) storageEventRefreshPaylo
 	return payload
 }
 
-func decodeReconcilePayload(t *testing.T, raw string) reconcilePayload {
+func mustDecodeReconcilePayload(t *testing.T, raw string) reconcilePayload {
 	t.Helper()
 	var payload reconcilePayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {

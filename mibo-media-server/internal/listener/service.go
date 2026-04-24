@@ -171,6 +171,72 @@ func (s *Service) EnsureReconcileCoverage(ctx context.Context, libraries []datab
 	return nil
 }
 
+func (s *Service) ApplyStorageEventRefresh(ctx context.Context, job database.Job) error {
+	if s.library == nil {
+		return errors.New("listener library service unavailable")
+	}
+	payload, err := decodeRefreshPayload(job.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	if payload.LibraryID == 0 {
+		return fmt.Errorf("listener refresh payload missing library_id")
+	}
+	if payload.FallbackFullSync {
+		_, err = s.library.QueueLibraryScan(ctx, payload.LibraryID)
+		return err
+	}
+	_, err = s.library.QueueTargetedRefresh(ctx, payload.LibraryID, payload.RootPath, payload.Reason)
+	return err
+}
+
+func (s *Service) RunReconcile(ctx context.Context, job database.Job) error {
+	if s.library == nil {
+		return errors.New("listener library service unavailable")
+	}
+	if s.db == nil {
+		return errors.New("listener database unavailable")
+	}
+	payload, err := decodeReconcilePayload(job.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	if payload.LibraryID == 0 {
+		return fmt.Errorf("listener reconcile payload missing library_id")
+	}
+	if _, err := s.library.QueueLibraryScan(ctx, payload.LibraryID); err != nil {
+		return err
+	}
+
+	nextScheduledFor := s.now().Add(defaultReconcileInterval)
+	nextPayload := reconcilePayload{LibraryID: payload.LibraryID, Reason: payload.Reason, ScheduledFor: nextScheduledFor}
+	jobKey := reconcileJobKey(payload.LibraryID)
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing database.Job
+		err := tx.
+			Where("job_key = ? AND kind = ? AND status = ? AND id <> ?", jobKey, JobKindListenerReconcile, jobs.StatusQueued, job.ID).
+			Order("id desc").
+			First(&existing).Error
+		if err == nil {
+			payloadJSON, err := json.Marshal(nextPayload)
+			if err != nil {
+				return fmt.Errorf("marshal listener reconcile payload: %w", err)
+			}
+			return tx.Model(&database.Job{}).
+				Where("id = ?", existing.ID).
+				Updates(map[string]any{"payload_json": string(payloadJSON), "available_at": nextScheduledFor.UTC(), "job_key": jobKey}).Error
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		queued, err := createQueuedJob(jobKey, JobKindListenerReconcile, nextPayload, nextScheduledFor)
+		if err != nil {
+			return err
+		}
+		return tx.Create(&queued).Error
+	})
+}
+
 func refreshJobKey(libraryID uint, rootPath string, fallback bool) string {
 	mode := "targeted"
 	if fallback {
@@ -235,6 +301,14 @@ func decodeRefreshPayload(raw string) (storageEventRefreshPayload, error) {
 	var payload storageEventRefreshPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return storageEventRefreshPayload{}, fmt.Errorf("decode listener refresh payload: %w", err)
+	}
+	return payload, nil
+}
+
+func decodeReconcilePayload(raw string) (reconcilePayload, error) {
+	var payload reconcilePayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return reconcilePayload{}, fmt.Errorf("decode listener reconcile payload: %w", err)
 	}
 	return payload, nil
 }
