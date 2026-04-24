@@ -27,6 +27,7 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 - 已具备电影/剧集语义目录、TV season/episode 详情和首页发现流
 - 已具备统一播放入口、续播/重播、能力感知播放决策和 canonical progress
 - 已具备稳定身份、增量 targeted refresh 和存储事件驱动同步基础能力
+- 已完成 Phase 8：原生 discovery contract、全局搜索、搜索历史、共享筛选，以及由 projection + lifecycle refresh 保证的新鲜度验证链路
 
 ## Requirements
 
@@ -40,11 +41,11 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 - ✓ 用户可以获得统一播放入口，并在继续观看、从头播放和跨端进度同步之间保持一致语义 — v1
 - ✓ 系统会优先直链播放，并在不可直链时返回明确回退路径或不可播放原因 — v1
 - ✓ 系统具备稳定文件身份、增量刷新和安全的存储事件驱动更新能力 — v1
+- ✓ 用户可以通过标题、演员、导演完成产品内全文搜索，并在结果中区分电影和剧集 — Validated in Phase 8
+- ✓ 用户可以通过类型、年份、地区、评分、是否看过、媒体库、分辨率等维度筛选媒体内容 — Validated in Phase 8 (current phase scope delivered FLTR-01..06; FLTR-07/08 remain future requirements)
 
 ### Active
 
-- [ ] 用户可以通过标题、演员、导演完成产品内全文搜索，并在结果中区分电影和剧集
-- [ ] 用户可以通过类型、年份、地区、评分、是否看过、媒体库、分辨率等维度筛选媒体内容
 - [ ] 用户可以在媒体详情页直接观看来自 TMDB / 外部源的预告片
 - [ ] 管理员可以人工编辑媒体元数据、锁定字段、重新匹配并重抓元数据
 - [ ] 系统可以基于存储变更自动触发安全的增量刷新
@@ -87,7 +88,7 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 | 扫描与后台任务继续通过 Worker 队列执行，并通过统一任务视图暴露给管理员 | 保证请求快速返回，同时让管理员可观察、可重试地处理后台工作 | ✓ Good |
 | 优先直链播放，转码只作为兜底能力 | 降低 V1 复杂度并优先满足家庭媒体播放主路径 | ✓ Good |
 | 稳定身份优先于路径匹配，增量刷新必须保守不误绑定 | 保证长期媒体连续性和进度安全 | ✓ Good |
-| v2 搜索与筛选先基于现有产品内数据能力实现，不接任何外部中间件 | 先验证体验和数据模型，避免过早引入部署与运维复杂度 | — Pending |
+| v2 搜索与筛选先基于现有产品内数据能力实现，不接任何外部中间件 | 先验证体验和数据模型，避免过早引入部署与运维复杂度 | ✓ Good |
 
 ## Evolution
 
@@ -107,4 +108,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-23 after milestone v2 initialization*
+*Last updated: 2026-04-24 after Phase 8 completion*

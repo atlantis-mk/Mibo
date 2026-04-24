@@ -1,0 +1,430 @@
+package metadata
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/atlan/mibo-media-server/internal/config"
+	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/library"
+)
+
+func imageURL(cfg config.TMDBConfig, imagePath string) string {
+	trimmed := strings.TrimSpace(imagePath)
+	if trimmed == "" {
+		return ""
+	}
+	return cfg.ImageBaseURL + "/" + strings.TrimLeft(trimmed, "/")
+}
+
+func imageLanguages(language string) string {
+	trimmed := strings.TrimSpace(language)
+	if trimmed == "" {
+		return "en,null"
+	}
+	base := trimmed
+	if idx := strings.Index(trimmed, "-"); idx > 0 {
+		base = trimmed[:idx]
+	}
+	if base == trimmed {
+		return trimmed + ",null,en"
+	}
+	return trimmed + "," + base + ",null,en"
+}
+
+func pickLogoPath(language string, logos []imageAsset) string {
+	if len(logos) == 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(language)
+	base := trimmed
+	if idx := strings.Index(trimmed, "-"); idx > 0 {
+		base = trimmed[:idx]
+	}
+	rank := func(asset imageAsset) int {
+		lang := strings.TrimSpace(asset.Language)
+		switch {
+		case trimmed != "" && lang == trimmed:
+			return 0
+		case base != "" && lang == base:
+			return 1
+		case lang == "":
+			return 2
+		case lang == "en":
+			return 3
+		default:
+			return 4
+		}
+	}
+	best := logos[0]
+	bestRank := rank(best)
+	for _, logo := range logos[1:] {
+		currentRank := rank(logo)
+		if currentRank < bestRank || (currentRank == bestRank && logo.VoteAverage > best.VoteAverage) {
+			best = logo
+			bestRank = currentRank
+		}
+	}
+	return best.FilePath
+}
+
+func calculateConfidence(mediaType, query string, year *int, result searchResult) float64 {
+	target := normalizeString(query)
+	candidate := normalizeString(result.Title)
+	if mediaType == "tv" {
+		candidate = normalizeString(result.Name)
+	}
+	confidence := 0.4
+	if target == candidate {
+		confidence = 0.9
+	} else if strings.Contains(candidate, target) || strings.Contains(target, candidate) {
+		confidence = 0.75
+	}
+	if year != nil {
+		resultYear := parseYear(result.ReleaseDate)
+		if mediaType == "tv" {
+			resultYear = parseYear(result.FirstAirDate)
+		}
+		if resultYear != nil && *resultYear == *year {
+			confidence += 0.08
+		}
+	}
+	if confidence > 0.99 {
+		confidence = 0.99
+	}
+	return confidence
+}
+
+func extractNamedValues(values []namedValue, max int) []string {
+	limit := len(values)
+	if max > 0 && limit > max {
+		limit = max
+	}
+	result := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		name := strings.TrimSpace(values[i].Name)
+		if name != "" {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func extractCast(detail detailResponse, cfg config.TMDBConfig, max int) []library.PersonDetail {
+	limit := len(detail.Credits.Cast)
+	if max > 0 && limit > max {
+		limit = max
+	}
+	result := make([]library.PersonDetail, 0, limit)
+	for i := 0; i < limit; i++ {
+		member := detail.Credits.Cast[i]
+		name := strings.TrimSpace(member.Name)
+		if name == "" {
+			continue
+		}
+		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Character), AvatarURL: imageURL(cfg, member.ProfilePath)})
+	}
+	return result
+}
+
+func extractDirectors(detail detailResponse, cfg config.TMDBConfig) []library.PersonDetail {
+	if len(detail.Credits.Crew) > 0 {
+		result := make([]library.PersonDetail, 0, 4)
+		for _, member := range detail.Credits.Crew {
+			if member.Job == "Director" || member.Department == "Directing" {
+				name := strings.TrimSpace(member.Name)
+				if name == "" {
+					continue
+				}
+				result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Job), AvatarURL: imageURL(cfg, member.ProfilePath)})
+				if len(result) == 4 {
+					return result
+				}
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
+	}
+	fallback := extractNamedValues(detail.CreatedBy, 4)
+	result := make([]library.PersonDetail, 0, len(fallback))
+	for _, name := range fallback {
+		result = append(result, library.PersonDetail{Name: name, Role: "Creator"})
+	}
+	return result
+}
+
+func runtimeFromDetail(detail detailResponse) *int {
+	if detail.Runtime != nil && *detail.Runtime > 0 {
+		seconds := *detail.Runtime * 60
+		return &seconds
+	}
+	if len(detail.EpisodeRunTime) > 0 && detail.EpisodeRunTime[0] > 0 {
+		seconds := detail.EpisodeRunTime[0] * 60
+		return &seconds
+	}
+	return nil
+}
+
+func runtimeSecondsFromMinutes(minutes *int) *int {
+	if minutes == nil || *minutes <= 0 {
+		return nil
+	}
+	seconds := *minutes * 60
+	return &seconds
+}
+
+func cacheIsStale(fetchedAt time.Time) bool {
+	if fetchedAt.IsZero() {
+		return true
+	}
+	return time.Since(fetchedAt) > tmdbCacheTTL
+}
+
+func seasonCachesStale(rows []database.TVSeasonMetadataCache) bool {
+	for _, row := range rows {
+		if cacheIsStale(row.FetchedAt) {
+			return true
+		}
+	}
+	return false
+}
+
+func episodeCachesStale(rows []database.TVEpisodeMetadataCache) bool {
+	for _, row := range rows {
+		if cacheIsStale(row.FetchedAt) {
+			return true
+		}
+	}
+	return false
+}
+
+func seasonSummariesToCacheRows(summaries []seasonSummary) []database.TVSeasonMetadataCache {
+	rows := make([]database.TVSeasonMetadataCache, 0, len(summaries))
+	for _, season := range summaries {
+		payloadJSON, err := marshalPayload(season)
+		if err != nil {
+			continue
+		}
+		rows = append(rows, database.TVSeasonMetadataCache{SeasonNumber: season.SeasonNumber, Name: season.Name, Overview: season.Overview, PosterPath: season.PosterPath, PayloadJSON: payloadJSON})
+	}
+	return rows
+}
+
+func seasonDetailToCacheRow(seriesTMDBID int, language string, detail seasonDetailResponse, fetchedAt time.Time) database.TVSeasonMetadataCache {
+	payloadJSON, _ := marshalPayload(detail)
+	return database.TVSeasonMetadataCache{SeriesTMDBID: seriesTMDBID, SeasonNumber: detail.SeasonNumber, Language: strings.TrimSpace(language), Name: detail.Name, Overview: detail.Overview, PosterPath: detail.PosterPath, PayloadJSON: payloadJSON, FetchedAt: fetchedAt}
+}
+
+func marshalPayload(value any) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func marshalStringSlice(values []string) (string, error) {
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func marshalPeople(values []library.PersonDetail) (string, error) {
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func marshalTrailer(value *library.TrailerDetail) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func selectTrailer(detail detailResponse) *videoAsset {
+	playable := make([]videoAsset, 0, len(detail.Videos.Results))
+	for _, candidate := range detail.Videos.Results {
+		watchURL, embedURL := trailerSiteURLs(candidate.Site, candidate.Key)
+		if watchURL == "" || embedURL == "" {
+			continue
+		}
+		playable = append(playable, candidate)
+	}
+	if len(playable) == 0 {
+		return nil
+	}
+
+	sort.SliceStable(playable, func(i, j int) bool {
+		left := trailerPriority(playable[i])
+		right := trailerPriority(playable[j])
+		if left != right {
+			return left < right
+		}
+		return false
+	})
+	best := playable[0]
+	return &best
+}
+
+func trailerPriority(video videoAsset) int {
+	videoType := strings.ToLower(strings.TrimSpace(video.Type))
+	switch {
+	case video.Official && videoType == "trailer":
+		return 0
+	case videoType == "trailer":
+		return 1
+	case videoType == "teaser":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func buildTrailerDetail(detail detailResponse) *library.TrailerDetail {
+	selected := selectTrailer(detail)
+	if selected == nil {
+		return nil
+	}
+	watchURL, embedURL := trailerSiteURLs(selected.Site, selected.Key)
+	if watchURL == "" || embedURL == "" {
+		return nil
+	}
+	thumbnail := trailerThumbnailURL(selected.Site, selected.Key)
+	return &library.TrailerDetail{
+		Provider:  "tmdb",
+		Site:      strings.TrimSpace(selected.Site),
+		Key:       strings.TrimSpace(selected.Key),
+		Name:      strings.TrimSpace(selected.Name),
+		Type:      strings.TrimSpace(selected.Type),
+		Official:  selected.Official,
+		Language:  strings.TrimSpace(selected.Language),
+		WatchURL:  watchURL,
+		EmbedURL:  embedURL,
+		Thumbnail: thumbnail,
+	}
+}
+
+func trailerSiteURLs(site, key string) (string, string) {
+	trimmedKey := strings.TrimSpace(key)
+	if trimmedKey == "" {
+		return "", ""
+	}
+	switch strings.ToLower(strings.TrimSpace(site)) {
+	case "youtube":
+		return "https://www.youtube.com/watch?v=" + trimmedKey, "https://www.youtube.com/embed/" + trimmedKey
+	default:
+		return "", ""
+	}
+}
+
+func trailerThumbnailURL(site, key string) string {
+	trimmedKey := strings.TrimSpace(key)
+	if trimmedKey == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(site)) {
+	case "youtube":
+		return "https://img.youtube.com/vi/" + trimmedKey + "/hqdefault.jpg"
+	default:
+		return ""
+	}
+}
+
+func normalizeString(input string) string {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	replacer := strings.NewReplacer(".", " ", "_", " ", "-", " ")
+	return strings.Join(strings.Fields(replacer.Replace(lower)), " ")
+}
+
+func parseYear(input string) *int {
+	if len(input) < 4 {
+		return nil
+	}
+	value, err := strconv.Atoi(input[:4])
+	if err != nil {
+		return nil
+	}
+	return &value
+}
+
+func cloneValues(values url.Values) url.Values {
+	if values == nil {
+		return url.Values{}
+	}
+	result := make(url.Values, len(values))
+	for key, list := range values {
+		copied := make([]string, len(list))
+		copy(copied, list)
+		result[key] = copied
+	}
+	return result
+}
+
+func tmdbMediaType(itemType string) string {
+	if itemType == "episode" {
+		return "tv"
+	}
+	return "movie"
+}
+
+func defaultQuery(item database.MediaItem, mediaType string) string {
+	if mediaType == "tv" && strings.TrimSpace(item.SeriesTitle) != "" {
+		return item.SeriesTitle
+	}
+	return item.Title
+}
+
+func searchResultToCandidate(cfg config.TMDBConfig, mediaType string, result searchResult, confidence float64) SearchCandidate {
+	title := result.Title
+	originalTitle := result.OriginalTitle
+	releaseDate := result.ReleaseDate
+	if mediaType == "tv" {
+		title = result.Name
+		originalTitle = result.OriginalName
+		releaseDate = result.FirstAirDate
+	}
+	return SearchCandidate{Provider: "tmdb", MediaType: mediaType, ExternalID: mediaType + ":" + strconv.Itoa(result.ID), Title: title, OriginalTitle: originalTitle, Overview: result.Overview, PosterURL: imageURL(cfg, result.PosterPath), BackdropURL: imageURL(cfg, result.BackdropPath), ReleaseDate: releaseDate, Year: parseYear(releaseDate), Confidence: confidence}
+}
+
+func detailToCandidate(cfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64) SearchCandidate {
+	title := detail.Title
+	originalTitle := detail.OriginalTitle
+	releaseDate := detail.ReleaseDate
+	if mediaType == "tv" {
+		title = detail.Name
+		originalTitle = detail.OriginalName
+		releaseDate = detail.FirstAirDate
+	}
+	return SearchCandidate{Provider: "tmdb", MediaType: mediaType, ExternalID: mediaType + ":" + strconv.Itoa(detail.ID), Title: title, OriginalTitle: originalTitle, Overview: detail.Overview, PosterURL: imageURL(cfg, detail.PosterPath), BackdropURL: imageURL(cfg, detail.BackdropPath), ReleaseDate: releaseDate, Year: parseYear(releaseDate), Confidence: confidence}
+}
+
+func parseExternalID(value string) (string, int, error) {
+	parts := strings.SplitN(strings.TrimSpace(value), ":", 2)
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("external_id 格式无效")
+	}
+	mediaType := strings.TrimSpace(parts[0])
+	if mediaType != "movie" && mediaType != "tv" {
+		return "", 0, fmt.Errorf("external_id 媒体类型无效")
+	}
+	id, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || id <= 0 {
+		return "", 0, fmt.Errorf("external_id 标识无效")
+	}
+	return mediaType, id, nil
+}

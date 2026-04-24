@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1 MVP** — Phases 1-6 shipped 2026-04-22. Archive: `.planning/milestones/v1-ROADMAP.md`
-- 📋 **v2 Product Discovery And Operations** — Phases 7-11 planned
+- 🚧 **v2 Product Discovery And Operations** — Phase 7 shipped; Phases 8-11 planned
 
 ## Overview
 
@@ -11,9 +11,9 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
 
 ## Phases
 
-- [ ] **Phase 7: Metadata Governance & Matching** - Give admins direct control over metadata quality before broader discovery automation builds on it.
-- [ ] **Phase 8: Native Search & Discovery Filters** - Let users find content through one product-native search and filtering experience.
-- [ ] **Phase 9: Trailer Discovery & Playback** - Surface and play trusted trailers from media detail pages.
+- [x] **Phase 7: Metadata Governance & Matching** - Give admins direct control over metadata quality before broader discovery automation builds on it.
+- [x] **Phase 8: Native Search & Discovery Filters** - Let users find content through one product-native search and filtering experience. Completed 2026-04-24.
+- [x] **Phase 9: Trailer Discovery & Playback** - Surface and play trusted trailers from media detail pages. Completed 2026-04-24.
 - [ ] **Phase 10: Scheduled Operations Control** - Let admins automate recurring maintenance through managed schedules.
 - [ ] **Phase 11: Event-Driven Refresh Hardening** - Keep libraries fresh from storage changes through safe listener-driven refresh and reconciliation.
 
@@ -28,7 +28,7 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
   2. Admin can replace poster and backdrop artwork and see updated images on affected media surfaces.
   3. Admin can update genres, cast, and season/episode basics, and the saved metadata appears in the item’s managed record.
   4. Admin can run re-match and metadata refetch as separate actions on a media item.
-**Plans**: TBD
+**Plans**: 3 (`07-PLAN.md`: Plan 01-03)
 **UI hint**: yes
 
 ### Phase 8: Native Search & Discovery Filters
@@ -40,7 +40,12 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
   2. Search results clearly distinguish movies and shows, highlight matched terms, and support sort changes.
   3. User can reopen recent searches from preserved search history.
   4. User can apply genre, year, region, rating, watched-state, and shared sort controls consistently across search and browse results.
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [x] 08-PLAN.md — Original Phase 8 decomposition used for the first execution pass.
+- [x] 08-02-PLAN.md — Add discovery projection foundation and metadata-backed region/rating fields.
+- [x] 08-03-PLAN.md — Wire projection freshness into scan, metadata, and progress lifecycles.
+- [x] 08-04-PLAN.md — Add regression proof for the remaining discovery freshness gaps.
 **UI hint**: yes
 
 ### Phase 9: Trailer Discovery & Playback
@@ -51,7 +56,7 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
   1. When TMDB provides a usable trailer, the media detail page shows a clear watch-trailer entry.
   2. User can play the trailer directly from the detail experience.
   3. When no usable trailer exists, the detail page hides trailer actions instead of showing a broken entry.
-**Plans**: TBD
+**Plans**: 3 (`09-PLAN.md`: Plan 01-03)
 **UI hint**: yes
 
 ### Phase 10: Scheduled Operations Control
@@ -62,7 +67,15 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
   1. Admin can create and manage recurring schedules for scans, metadata refetches, trailer syncs, library cleanup, invalid-link checks, and artwork refreshes.
   2. Admin can enable or disable a schedule, run it immediately, and see its next run time.
   3. Admin can review each schedule’s latest result and run history.
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+- [ ] 10-01-PLAN.md — Add the persisted schedule domain, recurrence math, and schedule-centric history foundations.
+- [ ] 10-02-PLAN.md — Implement library-owned maintenance executors for scan, cleanup, and invalid-link checks.
+- [ ] 10-03-PLAN.md — Implement metadata-owned maintenance executors for metadata refetch, trailer sync, and artwork refresh.
+- [ ] 10-04-PLAN.md — Expose authenticated schedule CRUD/toggle/run-now/history APIs on top of the schedule service.
+- [ ] 10-05-PLAN.md — Wire due schedules and run-history propagation into the existing worker lifecycle.
+- [ ] 10-06-PLAN.md — Build the dedicated schedules workspace route and typed frontend schedule contract.
+- [ ] 10-07-PLAN.md — Finish schedule mutations, history detail UI, and the settings summary entry.
 **UI hint**: yes
 
 ### Phase 11: Event-Driven Refresh Hardening
@@ -85,8 +98,8 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
 | 4. Playback Entry & Unified Progress | v1 MVP | 4/4 | Complete | 2026-04-22 |
 | 5. Playback Decision Intelligence | v1 MVP | 2/2 | Complete | 2026-04-22 |
 | 6. Stable Identity & Incremental Refresh | v1 MVP | 4/4 | Complete | 2026-04-22 |
-| 7. Metadata Governance & Matching | v2 Product Discovery And Operations | 0/TBD | Not started | - |
-| 8. Native Search & Discovery Filters | v2 Product Discovery And Operations | 0/TBD | Not started | - |
-| 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 0/TBD | Not started | - |
+| 7. Metadata Governance & Matching | v2 Product Discovery And Operations | 3/3 | Complete | 2026-04-24 |
+| 8. Native Search & Discovery Filters | v2 Product Discovery And Operations | 4/4 | Complete | 2026-04-24 |
+| 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 1/1 | Complete | 2026-04-24 |
 | 10. Scheduled Operations Control | v2 Product Discovery And Operations | 0/TBD | Not started | - |
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 0/TBD | Not started | - |

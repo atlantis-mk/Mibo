@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "mibo-media-server: run",
+      "type": "shell",
+      "command": "go run ./cmd/mibo-media-server",
+      "options": {
+        "cwd": "${workspaceFolder}/mibo-media-server"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "mibo-media-server: test",
+      "type": "shell",
+      "command": "go test ./...",
+      "options": {
+        "cwd": "${workspaceFolder}/mibo-media-server"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "OpenList: test",
+      "type": "shell",
+      "command": "go test ./...",
+      "options": {
+        "cwd": "${workspaceFolder}/OpenList"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

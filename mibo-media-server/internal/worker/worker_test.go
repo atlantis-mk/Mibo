@@ -18,6 +18,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 )
 
@@ -206,6 +207,175 @@ func TestTargetedRefreshQueuesUniqueJobs(t *testing.T) {
 	}
 	if first.Kind != "targeted_refresh" {
 		t.Fatalf("expected targeted_refresh job kind, got %q", first.Kind)
+	}
+}
+
+func TestRunOnceProcessesMetadataRefetchJob(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/movie/101":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             101,
+				"title":          "MovieA Refetched",
+				"original_title": "MovieA Refetched",
+				"overview":       "Fresh metadata overview",
+				"poster_path":    "/movie-a-refetched.jpg",
+				"backdrop_path":  "/movie-a-refetched-bg.jpg",
+				"release_date":   "2024-02-02",
+				"runtime":        126,
+				"genres":         []map[string]any{{"name": "Action"}},
+				"credits": map[string]any{
+					"cast": []map[string]any{{"name": "Actor A"}},
+					"crew": []map[string]any{{"name": "Director A", "job": "Director", "department": "Directing"}},
+				},
+				"images": map[string]any{"logos": []map[string]any{}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{Worker: config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(context.Background(), settings.UpdateMetadataSettingsInput{
+		TMDB: settings.MetadataProviderInput{
+			APIKey:       "refetch-key",
+			BaseURL:      tmdb.URL,
+			ImageBaseURL: tmdb.URL + "/images",
+			Language:     "en-US",
+			Timeout:      "1s",
+		},
+	}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	confidence := 0.93
+	item := database.MediaItem{
+		LibraryID:          1,
+		Type:               "movie",
+		Title:              "MovieA Stale",
+		SourcePath:         "/movies/MovieA.2024.mkv",
+		MatchStatus:        metadata.StatusMatched,
+		MetadataProvider:   "tmdb",
+		ExternalID:         "movie:101",
+		MetadataConfidence: &confidence,
+		Status:             "ready",
+	}
+	if err := db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+
+	job, err := jobsSvc.Enqueue(context.Background(), library.JobKindRefetchMediaItem, map[string]any{"media_item_id": item.ID})
+	if err != nil {
+		t.Fatalf("enqueue refetch job: %v", err)
+	}
+
+	runner := NewRunner(cfg.Worker, jobsSvc, library.NewService(cfg, db, registry, jobsSvc), metadata.NewService(db, config.MetadataConfig{}, settingsSvc), probe.NewService(db, registry, config.FFprobeConfig{}), settingsSvc)
+	runner.RunOnce(context.Background())
+
+	var storedJob database.Job
+	if err := db.WithContext(context.Background()).First(&storedJob, job.ID).Error; err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if storedJob.Status != jobs.StatusCompleted {
+		t.Fatalf("expected refetch job completed, got %q", storedJob.Status)
+	}
+
+	var stored database.MediaItem
+	if err := db.WithContext(context.Background()).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.Title != "MovieA Refetched" || stored.Overview != "Fresh metadata overview" {
+		t.Fatalf("unexpected refetched media item: %#v", stored)
+	}
+}
+
+func TestRunOnceProcessesSearchReindexJobs(t *testing.T) {
+	t.Parallel()
+
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create media root: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: mediaRoot}, Worker: config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	searchSvc := search.NewService(db)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, searchSvc)
+
+	ctx := context.Background()
+	source := database.MediaSource{Name: "Local", Provider: "local", StorageRef: "local", RootPath: mediaRoot}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record := database.Library{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: mediaRoot, Status: "active", ScannerEnabled: true}
+	if err := db.WithContext(ctx).Create(&record).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rating := 8.4
+	year := 2024
+	items := []database.MediaItem{
+		{LibraryID: record.ID, Type: "movie", Title: "MovieA", CastJSON: `[{"name":"Actor A"}]`, GenresJSON: `["Action"]`, RegionsJSON: `["Japan"]`, VoteAverage: &rating, Year: &year, SourcePath: filepath.Join(mediaRoot, "MovieA.2024.mkv"), MatchStatus: metadata.StatusMatched, Status: "ready"},
+		{LibraryID: record.ID, Type: "movie", Title: "MovieB", CastJSON: `[{"name":"Actor B"}]`, GenresJSON: `["Drama"]`, RegionsJSON: `["United States"]`, VoteAverage: &rating, Year: &year, SourcePath: filepath.Join(mediaRoot, "MovieB.2024.mkv"), MatchStatus: metadata.StatusMatched, Status: "ready"},
+	}
+	for idx := range items {
+		if err := db.WithContext(ctx).Create(&items[idx]).Error; err != nil {
+			t.Fatalf("create media item %d: %v", idx, err)
+		}
+	}
+
+	documentJob, err := jobsSvc.Enqueue(ctx, library.JobKindReindexSearchDocument, map[string]any{"media_item_id": items[0].ID})
+	if err != nil {
+		t.Fatalf("enqueue search document reindex: %v", err)
+	}
+	libraryJob, err := jobsSvc.Enqueue(ctx, library.JobKindReindexLibrarySearch, map[string]any{"library_id": record.ID, "root_path": mediaRoot})
+	if err != nil {
+		t.Fatalf("enqueue library search reindex: %v", err)
+	}
+
+	runner.RunOnce(ctx)
+
+	for _, jobID := range []uint{documentJob.ID, libraryJob.ID} {
+		var job database.Job
+		if err := db.WithContext(ctx).First(&job, jobID).Error; err != nil {
+			t.Fatalf("reload job %d: %v", jobID, err)
+		}
+		if job.Status != jobs.StatusCompleted {
+			t.Fatalf("expected job %d completed, got %q", jobID, job.Status)
+		}
+	}
+
+	var docs []database.SearchDocument
+	if err := db.WithContext(ctx).Order("media_item_id asc").Find(&docs).Error; err != nil {
+		t.Fatalf("load search documents: %v", err)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("expected 2 search documents, got %#v", docs)
+	}
+	if docs[0].MediaItemID != items[0].ID || docs[1].MediaItemID != items[1].ID {
+		t.Fatalf("unexpected search documents: %#v", docs)
+	}
+	if docs[0].VoteAverage == nil || *docs[0].VoteAverage != rating || !strings.Contains(docs[0].SearchCountriesText, "Japan") {
+		t.Fatalf("unexpected first search document: %#v", docs[0])
 	}
 }
 

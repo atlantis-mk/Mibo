@@ -1,0 +1,38 @@
+{
+  "files.watcherExclude": {
+    "**/routeTree.gen.ts": true,
+    "**/dist/**": true,
+    "**/tmp/**": true,
+    "**/data/**": true,
+    "**/node_modules/**": true
+  },
+  "search.exclude": {
+    "**/routeTree.gen.ts": true,
+    "**/dist/**": true,
+    "**/tmp/**": true,
+    "**/data/**": true,
+    "**/node_modules/**": true
+  },
+  "files.readonlyInclude": {
+    "**/routeTree.gen.ts": true
+  },
+  "go.toolsManagement.autoUpdate": true,
+  "go.useLanguageServer": true,
+  "gopls": {
+    "staticcheck": true,
+    "ui.semanticTokens": true,
+    "usePlaceholders": true,
+    "completeUnimported": true,
+    "analyses": {
+      "unusedparams": true,
+      "shadow": true
+    }
+  },
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  }
+}

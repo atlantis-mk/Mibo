@@ -1,0 +1,47 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="miboLogoTitle miboLogoDesc">
+  <title id="miboLogoTitle">Mibo logo</title>
+  <desc id="miboLogoDesc">A minimal tech-inspired logo for Mibo with a media play motif.</desc>
+  <defs>
+    <linearGradient id="bg" x1="72" y1="64" x2="440" y2="456" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#020617" />
+      <stop offset="0.5" stop-color="#0F172A" />
+      <stop offset="1" stop-color="#111827" />
+    </linearGradient>
+    <linearGradient id="ring" x1="126" y1="110" x2="380" y2="334" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8" />
+      <stop offset="1" stop-color="#22C55E" />
+    </linearGradient>
+    <linearGradient id="wordmark" x1="146" y1="386" x2="378" y2="466" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E2E8F0" />
+      <stop offset="1" stop-color="#94A3B8" />
+    </linearGradient>
+    <filter id="shadow" x="92" y="82" width="328" height="282" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix" />
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha" />
+      <feOffset dy="18" />
+      <feGaussianBlur stdDeviation="22" />
+      <feComposite in2="hardAlpha" operator="out" />
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0313725 0 0 0 0 0.0784314 0 0 0 0 0.160784 0 0 0 0.45 0" />
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1" />
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape" />
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="120" fill="url(#bg)" />
+  <circle cx="396" cy="108" r="88" fill="#38BDF8" fill-opacity="0.08" />
+  <circle cx="118" cy="404" r="104" fill="#22C55E" fill-opacity="0.08" />
+  <path d="M106 150H406" stroke="#E2E8F0" stroke-opacity="0.08" stroke-width="2" />
+  <path d="M106 362H406" stroke="#E2E8F0" stroke-opacity="0.08" stroke-width="2" />
+
+  <g filter="url(#shadow)">
+    <rect x="126" y="110" width="260" height="244" rx="56" fill="#0B1220" stroke="#E2E8F0" stroke-opacity="0.08" />
+    <path d="M154 306V158H192.3L241.4 226.8L289.8 158H328V306H299.6V201.8L252.9 267.2H229.1L182.4 201.8V306H154Z" fill="#F8FAFC" />
+    <path d="M257 132C315.542 132 363 179.458 363 238C363 296.542 315.542 344 257 344" stroke="url(#ring)" stroke-width="22" stroke-linecap="round" />
+    <path d="M279 206L325 238L279 270V206Z" fill="#38BDF8" />
+  </g>
+
+  <path d="M140 408H158.94L181.604 444.746L204.354 408H223.294V468H205.62V435.97L188.473 463.37H174.562L157.414 435.97V468H140V408Z" fill="url(#wordmark)" />
+  <path d="M236.431 408H263.745C281.973 408 293.972 418.381 293.972 438C293.972 457.619 281.973 468 263.745 468H236.431V408ZM262.95 452.573C271.855 452.573 276.038 447.799 276.038 438C276.038 428.201 271.855 423.427 262.95 423.427H254.364V452.573H262.95Z" fill="url(#wordmark)" />
+  <path d="M305.799 408H323.733V468H305.799V408ZM314.766 401.56C309.191 401.56 304.847 397.476 304.847 392.245C304.847 387.014 309.191 382.93 314.766 382.93C320.255 382.93 324.684 387.014 324.684 392.245C324.684 397.476 320.255 401.56 314.766 401.56Z" fill="url(#wordmark)" />
+  <path d="M334.188 438C334.188 419.326 346.941 406.539 364.875 406.539C382.809 406.539 395.562 419.326 395.562 438C395.562 456.674 382.809 469.461 364.875 469.461C346.941 469.461 334.188 456.674 334.188 438ZM377.628 438C377.628 428.438 372.727 422.653 364.875 422.653C357.023 422.653 352.122 428.438 352.122 438C352.122 447.562 357.023 453.347 364.875 453.347C372.727 453.347 377.628 447.562 377.628 438Z" fill="url(#wordmark)" />
+</svg>

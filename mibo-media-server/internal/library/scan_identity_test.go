@@ -141,6 +141,65 @@ func TestRunSyncLibraryCreatesFallbackCandidateWithoutPathRebind(t *testing.T) {
 	}
 }
 
+func TestRunSyncLibraryPreservesMatchedMetadataAcrossRescan(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, svc, libraryRecord := newIdentityScanService(t)
+	provider := &stableIdentityProvider{objects: [][]storage.Object{{
+		{Name: "MovieA.2024.mkv", Path: "/library/MovieA.2024.mkv", Size: 2048, Modified: timePtr(time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))},
+	}}}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+
+	var item database.MediaItem
+	if err := db.WithContext(ctx).
+		Where("library_id = ? AND source_path = ?", libraryRecord.ID, "/library/MovieA.2024.mkv").
+		First(&item).Error; err != nil {
+		t.Fatalf("load scanned item: %v", err)
+	}
+
+	confidence := 0.98
+	if err := db.WithContext(ctx).
+		Model(&database.MediaItem{}).
+		Where("id = ?", item.ID).
+		Updates(map[string]any{
+			"title":               "A Remote Title",
+			"original_title":      "Original Remote Title",
+			"overview":            "Remote overview",
+			"poster_url":          "https://image.test/poster.jpg",
+			"metadata_provider":   "tmdb",
+			"external_id":         "movie:101",
+			"metadata_confidence": &confidence,
+			"match_status":        "matched",
+		}).Error; err != nil {
+		t.Fatalf("seed matched metadata: %v", err)
+	}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+
+	var stored database.MediaItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.Title != "A Remote Title" {
+		t.Fatalf("expected remote title to survive rescan, got %q", stored.Title)
+	}
+	if stored.Overview != "Remote overview" {
+		t.Fatalf("expected overview to survive rescan, got %q", stored.Overview)
+	}
+	if stored.MetadataProvider != "tmdb" || stored.ExternalID != "movie:101" {
+		t.Fatalf("expected matched metadata identity to survive rescan, got provider=%q external_id=%q", stored.MetadataProvider, stored.ExternalID)
+	}
+	if stored.MatchStatus != "matched" {
+		t.Fatalf("expected matched status to survive rescan, got %q", stored.MatchStatus)
+	}
+}
+
 type stableIdentityProvider struct {
 	mu      sync.Mutex
 	objects [][]storage.Object

@@ -1,0 +1,15 @@
+2026/04/20 05:09:44 mibo-media-server listening on :18086
+2026/04/20 05:09:59 http request_id=9755c58d7a8573c1 method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:10:45 http request_id=4fe46fd816dd0303 method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:10:45 http request_id=2627f6eb9d1e25ff method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:10:45 http request_id=ed17beda1c19c2fd method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:11:20 http request_id=dc909730ccf25c5f method=POST path=/api/v1/auth/register status=201 duration=50ms
+2026/04/20 05:11:21 http request_id=0c1726ddd09524f8 method=POST path=/api/v1/auth/login status=200 duration=49ms
+2026/04/20 05:11:21 http request_id=2b7206e589efe277 method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:11:21 http request_id=d669d2c08c250860 method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:11:47 http request_id=7f1146122a18b54d method=GET path=/api/v1/setup/status status=200 duration=0s
+2026/04/20 05:11:47 http request_id=5e283e04f3302ceb method=GET path=/api/v1/me status=200 duration=2ms
+2026/04/20 05:11:47 http request_id=8c51b463dee6caa1 method=GET path=/api/v1/me/continue-watching status=200 duration=2ms
+2026/04/20 05:11:47 http request_id=b9e3c7988b812706 method=GET path=/api/v1/libraries status=200 duration=4ms
+2026/04/20 05:11:47 http request_id=7886bcebfc5b40af method=GET path=/api/v1/media-sources status=200 duration=5ms
+2026/04/20 05:11:47 http request_id=c75be14c3d082236 method=GET path=/api/v1/me/recently-played status=200 duration=5ms

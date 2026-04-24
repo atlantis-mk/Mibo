@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/search"
 	"gorm.io/gorm"
 )
 
 type Service struct {
-	db *gorm.DB
+	db     *gorm.DB
+	search *search.Service
 }
 
 type UpdateInput struct {
@@ -37,8 +39,14 @@ type Entry struct {
 	MediaItem database.MediaItem `json:"media_item"`
 }
 
-func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+func NewService(db *gorm.DB, args ...any) *Service {
+	service := &Service{db: db}
+	for _, arg := range args {
+		if searchSvc, ok := arg.(*search.Service); ok {
+			service.search = searchSvc
+		}
+	}
+	return service
 }
 
 func (s *Service) Status() string {
@@ -96,6 +104,11 @@ func (s *Service) Update(ctx context.Context, userID uint, input UpdateInput) (S
 		}
 	} else {
 		if err := s.db.WithContext(ctx).Save(&progress).Error; err != nil {
+			return State{}, err
+		}
+	}
+	if s.search != nil {
+		if err := s.search.ReindexMediaItem(ctx, input.MediaItemID); err != nil {
 			return State{}, err
 		}
 	}

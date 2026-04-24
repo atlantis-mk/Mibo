@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug mibo-media-server",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/mibo-media-server/cmd/mibo-media-server",
+      "cwd": "${workspaceFolder}/mibo-media-server"
+    }
+  ]
+}

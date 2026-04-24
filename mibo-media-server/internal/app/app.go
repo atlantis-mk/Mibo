@@ -42,12 +42,12 @@ func New(_ context.Context, cfg config.Config) (*App, error) {
 	jobsSvc := jobs.NewService(db)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
-	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc)
 	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
 	playbackSvc := playback.NewService(db, registry)
-	progressSvc := progress.NewService(db)
-	searchSvc := search.NewService()
-	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc)
+	searchSvc := search.NewService(db, librarySvc)
+	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	progressSvc := progress.NewService(db, searchSvc)
+	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, searchSvc)
 
 	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc)
 

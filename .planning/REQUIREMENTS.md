@@ -7,30 +7,30 @@
 
 ### Search
 
-- [ ] **SRCH-01**: 用户可以按标题搜索媒体内容
-- [ ] **SRCH-02**: 用户可以按原始标题搜索媒体内容
-- [ ] **SRCH-03**: 用户可以按演员搜索媒体内容
-- [ ] **SRCH-04**: 用户可以按导演搜索媒体内容
-- [ ] **SRCH-05**: 搜索结果会明确区分电影和剧集
-- [ ] **SRCH-06**: 搜索结果会高亮命中的关键词
-- [ ] **SRCH-07**: 用户可以对搜索结果进行排序
-- [ ] **SRCH-08**: 系统会为用户保留最近搜索历史
+- [x] **SRCH-01**: 用户可以按标题搜索媒体内容
+- [x] **SRCH-02**: 用户可以按原始标题搜索媒体内容
+- [x] **SRCH-03**: 用户可以按演员搜索媒体内容
+- [x] **SRCH-04**: 用户可以按导演搜索媒体内容
+- [x] **SRCH-05**: 搜索结果会明确区分电影和剧集
+- [x] **SRCH-06**: 搜索结果会高亮命中的关键词
+- [x] **SRCH-07**: 用户可以对搜索结果进行排序
+- [x] **SRCH-08**: 系统会为用户保留最近搜索历史
 
 ### Filters
 
-- [ ] **FLTR-01**: 用户可以按类型筛选媒体内容
-- [ ] **FLTR-02**: 用户可以按年份筛选媒体内容
-- [ ] **FLTR-03**: 用户可以按地区筛选媒体内容
-- [ ] **FLTR-04**: 用户可以按评分筛选媒体内容
-- [ ] **FLTR-05**: 用户可以按已看 / 未看状态筛选媒体内容
-- [ ] **FLTR-06**: 用户可以在搜索和浏览结果中使用统一的排序能力
+- [x] **FLTR-01**: 用户可以按类型筛选媒体内容
+- [x] **FLTR-02**: 用户可以按年份筛选媒体内容
+- [x] **FLTR-03**: 用户可以按地区筛选媒体内容
+- [x] **FLTR-04**: 用户可以按评分筛选媒体内容
+- [x] **FLTR-05**: 用户可以按已看 / 未看状态筛选媒体内容
+- [x] **FLTR-06**: 用户可以在搜索和浏览结果中使用统一的排序能力
 
 ### Trailers
 
-- [ ] **TRLR-01**: 系统可以从 TMDB 同步媒体条目的预告片元数据
-- [ ] **TRLR-02**: 当存在可用预告片时，媒体详情页会展示“观看预告片”入口
-- [ ] **TRLR-03**: 用户可以在媒体详情页内直接播放预告片
-- [ ] **TRLR-04**: 当没有可用预告片时，系统会优雅隐藏预告片入口
+- [x] **TRLR-01**: 系统可以从 TMDB 同步媒体条目的预告片元数据
+- [x] **TRLR-02**: 当存在可用预告片时，媒体详情页会展示“观看预告片”入口
+- [x] **TRLR-03**: 用户可以在媒体详情页内直接播放预告片
+- [x] **TRLR-04**: 当没有可用预告片时，系统会优雅隐藏预告片入口
 
 ### Metadata Management
 
@@ -92,30 +92,30 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SRCH-01 | Phase 8 | Pending |
-| SRCH-02 | Phase 8 | Pending |
-| SRCH-03 | Phase 8 | Pending |
-| SRCH-04 | Phase 8 | Pending |
-| SRCH-05 | Phase 8 | Pending |
-| SRCH-06 | Phase 8 | Pending |
-| SRCH-07 | Phase 8 | Pending |
-| SRCH-08 | Phase 8 | Pending |
-| FLTR-01 | Phase 8 | Pending |
-| FLTR-02 | Phase 8 | Pending |
-| FLTR-03 | Phase 8 | Pending |
-| FLTR-04 | Phase 8 | Pending |
-| FLTR-05 | Phase 8 | Pending |
-| FLTR-06 | Phase 8 | Pending |
-| TRLR-01 | Phase 9 | Pending |
-| TRLR-02 | Phase 9 | Pending |
-| TRLR-03 | Phase 9 | Pending |
-| TRLR-04 | Phase 9 | Pending |
-| META-01 | Phase 7 | Pending |
-| META-02 | Phase 7 | Pending |
-| META-03 | Phase 7 | Pending |
-| META-04 | Phase 7 | Pending |
-| META-05 | Phase 7 | Pending |
-| META-06 | Phase 7 | Pending |
+| SRCH-01 | Phase 8 | Complete |
+| SRCH-02 | Phase 8 | Complete |
+| SRCH-03 | Phase 8 | Complete |
+| SRCH-04 | Phase 8 | Complete |
+| SRCH-05 | Phase 8 | Complete |
+| SRCH-06 | Phase 8 | Complete |
+| SRCH-07 | Phase 8 | Complete |
+| SRCH-08 | Phase 8 | Complete |
+| FLTR-01 | Phase 8 | Complete |
+| FLTR-02 | Phase 8 | Complete |
+| FLTR-03 | Phase 8 | Complete |
+| FLTR-04 | Phase 8 | Complete |
+| FLTR-05 | Phase 8 | Complete |
+| FLTR-06 | Phase 8 | Complete |
+| TRLR-01 | Phase 9 | Complete |
+| TRLR-02 | Phase 9 | Complete |
+| TRLR-03 | Phase 9 | Complete |
+| TRLR-04 | Phase 9 | Complete |
+| META-01 | Phase 7 | Complete |
+| META-02 | Phase 7 | Complete |
+| META-03 | Phase 7 | Complete |
+| META-04 | Phase 7 | Complete |
+| META-05 | Phase 7 | Complete |
+| META-06 | Phase 7 | Complete |
 | LIST-01 | Phase 11 | Pending |
 | LIST-02 | Phase 11 | Pending |
 | LIST-03 | Phase 11 | Pending |
@@ -136,4 +136,4 @@
 
 ---
 *Requirements defined: 2026-04-23*
-*Last updated: 2026-04-24 after milestone v2 roadmap creation*
+*Last updated: 2026-04-24 after Phase 9 completion*

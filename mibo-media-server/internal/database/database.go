@@ -53,6 +53,8 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&Session{},
 		&PlaybackProgress{},
 		&SystemSetting{},
+		&SearchHistory{},
+		&SearchDocument{},
 	); err != nil {
 		return nil, err
 	}

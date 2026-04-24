@@ -8,6 +8,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/search"
 	"gorm.io/gorm"
 )
 
@@ -107,6 +108,77 @@ func TestProgressCompletionDominatesCanonicalStateAndDiscoveryRails(t *testing.T
 	}
 	if recentlyPlayed[0].CompletedAt == nil {
 		t.Fatal("expected recently played entry to retain completed_at")
+	}
+}
+
+func TestProgressWatchedStateReindexesSearchDocument(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	source := database.MediaSource{Name: "Local", Provider: "local", StorageRef: "local", RootPath: t.TempDir()}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	libraryRecord := database.Library{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: source.RootPath, Status: "active"}
+	if err := db.Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	runtimeSeconds := 1200
+	item := database.MediaItem{
+		LibraryID:      libraryRecord.ID,
+		Type:           "movie",
+		Title:          "Progress Reindex Movie",
+		RuntimeSeconds: &runtimeSeconds,
+		SourcePath:     filepath.Join(source.RootPath, "progress-reindex.mkv"),
+		MatchStatus:    "matched",
+		Status:         "ready",
+	}
+	if err := db.Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+
+	searchSvc := search.NewService(db)
+	if err := searchSvc.ReindexMediaItem(ctx, item.ID); err != nil {
+		t.Fatalf("seed search document: %v", err)
+	}
+	service := NewService(db, searchSvc)
+
+	var seeded database.SearchDocument
+	if err := db.WithContext(ctx).First(&seeded, "media_item_id = ?", item.ID).Error; err != nil {
+		t.Fatalf("load seeded document: %v", err)
+	}
+
+	if _, err := service.Update(ctx, 7, UpdateInput{MediaItemID: item.ID, PositionSeconds: 180, DurationSeconds: intPtr(1200)}); err != nil {
+		t.Fatalf("set in-progress state: %v", err)
+	}
+	var inProgress database.SearchDocument
+	if err := db.WithContext(ctx).First(&inProgress, "media_item_id = ?", item.ID).Error; err != nil {
+		t.Fatalf("load in-progress document: %v", err)
+	}
+	if !inProgress.UpdatedAt.After(seeded.UpdatedAt) {
+		t.Fatalf("expected in-progress update to refresh search document timestamp: before=%s after=%s", seeded.UpdatedAt, inProgress.UpdatedAt)
+	}
+
+	if _, err := service.Update(ctx, 7, UpdateInput{MediaItemID: item.ID, PositionSeconds: 1180, DurationSeconds: intPtr(1200), Completed: true}); err != nil {
+		t.Fatalf("set watched state: %v", err)
+	}
+	var watched database.SearchDocument
+	if err := db.WithContext(ctx).First(&watched, "media_item_id = ?", item.ID).Error; err != nil {
+		t.Fatalf("load watched document: %v", err)
+	}
+	if !watched.UpdatedAt.After(inProgress.UpdatedAt) {
+		t.Fatalf("expected watched update to refresh search document timestamp: in-progress=%s watched=%s", inProgress.UpdatedAt, watched.UpdatedAt)
+	}
+
+	state, err := service.GetState(ctx, 7, item.ID)
+	if err != nil {
+		t.Fatalf("load progress state: %v", err)
+	}
+	if !state.Watched {
+		t.Fatal("expected watched state after completion")
 	}
 }
 

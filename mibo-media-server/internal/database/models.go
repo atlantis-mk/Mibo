@@ -38,9 +38,11 @@ type MediaItem struct {
 	LogoURL            string     `gorm:"size:2048" json:"logo_url"`
 	BackdropURL        string     `gorm:"size:2048" json:"backdrop_url"`
 	GenresJSON         string     `gorm:"type:text" json:"genres_json"`
+	RegionsJSON        string     `gorm:"type:text" json:"regions_json"`
 	CastJSON           string     `gorm:"type:text" json:"cast_json"`
 	DirectorsJSON      string     `gorm:"type:text" json:"directors_json"`
 	Year               *int       `json:"year,omitempty"`
+	VoteAverage        *float64   `json:"vote_average,omitempty"`
 	ReleaseDate        string     `gorm:"size:32" json:"release_date"`
 	RuntimeSeconds     *int       `json:"runtime_seconds,omitempty"`
 	SeasonNumber       *int       `json:"season_number,omitempty"`
@@ -50,6 +52,7 @@ type MediaItem struct {
 	MetadataProvider   string     `gorm:"size:64" json:"metadata_provider"`
 	ExternalID         string     `gorm:"size:128" json:"external_id"`
 	MetadataConfidence *float64   `json:"metadata_confidence,omitempty"`
+	TrailerJSON        string     `gorm:"type:text" json:"trailer_json"`
 	Status             string     `gorm:"size:64;not null;default:pending" json:"status"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
@@ -208,4 +211,37 @@ type SystemSetting struct {
 	IsSecret  bool      `gorm:"not null;default:false" json:"is_secret"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type SearchHistory struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	UserID       uint       `gorm:"not null;index:idx_search_history_user_used_at" json:"user_id"`
+	Query        string     `gorm:"size:512;not null" json:"query"`
+	TypeFilter   string     `gorm:"size:32" json:"type_filter"`
+	Genre        string     `gorm:"size:128" json:"genre"`
+	Region       string     `gorm:"size:128" json:"region"`
+	Year         *int       `json:"year,omitempty"`
+	MinRating    *float64   `json:"min_rating,omitempty"`
+	WatchedState string     `gorm:"size:32" json:"watched_state"`
+	Sort         string     `gorm:"size:32" json:"sort"`
+	LastUsedAt   time.Time  `gorm:"not null;index:idx_search_history_user_used_at" json:"last_used_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `gorm:"index" json:"deleted_at,omitempty"`
+}
+
+type SearchDocument struct {
+	MediaItemID         uint      `gorm:"primaryKey" json:"media_item_id"`
+	LibraryID           uint      `gorm:"not null;index" json:"library_id"`
+	MediaType           string    `gorm:"size:64;not null;index" json:"media_type"`
+	Title               string    `gorm:"size:512;not null;index" json:"title"`
+	OriginalTitle       string    `gorm:"size:512" json:"original_title"`
+	SeriesTitle         string    `gorm:"size:512;index" json:"series_title"`
+	Overview            string    `gorm:"type:text" json:"overview"`
+	SearchPeopleText    string    `gorm:"type:text" json:"search_people_text"`
+	SearchGenresText    string    `gorm:"type:text" json:"search_genres_text"`
+	SearchCountriesText string    `gorm:"type:text" json:"search_countries_text"`
+	Year                *int      `json:"year,omitempty"`
+	VoteAverage         *float64  `json:"vote_average,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }

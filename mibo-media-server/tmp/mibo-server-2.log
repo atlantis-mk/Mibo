@@ -1,0 +1,8 @@
+2026/04/20 02:52:18 mibo-media-server listening on :18081
+2026/04/20 02:52:31 http request_id=eb3579a01a1bd8c9 method=GET path=/healthz status=200 duration=0s
+2026/04/20 02:52:31 http request_id=de8cbf4e63b91b85 method=GET path=/readyz status=200 duration=1ms
+2026/04/20 02:52:31 http request_id=3df7661af2fc1295 method=GET path=/api/v1/system/info status=200 duration=0s
+2026/04/20 02:52:31 http request_id=8be88f64cad6ee86 method=POST path=/api/v1/media-sources status=201 duration=1ms
+2026/04/20 02:52:32 http request_id=7a6049d96d4d1ec5 method=POST path=/api/v1/libraries status=201 duration=2ms
+2026/04/20 02:52:33 http request_id=3d6020fec3764bf4 method=GET path=/api/v1/libraries status=200 duration=0s
+2026/04/20 02:52:33 http request_id=aa5f3e47ab2334a9 method=GET path=/api/v1/jobs status=200 duration=0s

@@ -13,6 +13,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
+	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 )
 
@@ -22,17 +23,18 @@ type Runner struct {
 	library  *library.Service
 	metadata *metadata.Service
 	probe    *probe.Service
+	search   *search.Service
 	settings *settings.Service
 	interval time.Duration
 }
 
-func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *library.Service, metadataSvc *metadata.Service, probeSvc *probe.Service, settingsSvc *settings.Service) *Runner {
+func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *library.Service, metadataSvc *metadata.Service, probeSvc *probe.Service, settingsSvc *settings.Service, args ...any) *Runner {
 	interval := cfg.PollInterval
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
 
-	return &Runner{
+	runner := &Runner{
 		cfg:      cfg,
 		jobs:     jobsSvc,
 		library:  librarySvc,
@@ -41,6 +43,12 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 		settings: settingsSvc,
 		interval: interval,
 	}
+	for _, arg := range args {
+		if searchSvc, ok := arg.(*search.Service); ok {
+			runner.search = searchSvc
+		}
+	}
+	return runner
 }
 
 func (r *Runner) Run(ctx context.Context) {
@@ -139,7 +147,7 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 		return r.library.RunSyncLibrary(ctx, job)
 	case library.JobKindTargetedRefresh:
 		return r.library.RunTargetedRefresh(ctx, job)
-	case "match_media_item":
+	case library.JobKindMatchMediaItem:
 		var payload struct {
 			MediaItemID uint `json:"media_item_id"`
 		}
@@ -147,6 +155,37 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.metadata.MatchItem(ctx, payload.MediaItemID)
+	case library.JobKindRefetchMediaItem:
+		var payload struct {
+			MediaItemID uint `json:"media_item_id"`
+		}
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.metadata.RefetchItem(ctx, payload.MediaItemID)
+	case library.JobKindReindexSearchDocument:
+		if r.search == nil {
+			return errors.New("search service unavailable")
+		}
+		var payload struct {
+			MediaItemID uint `json:"media_item_id"`
+		}
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.search.ReindexMediaItem(ctx, payload.MediaItemID)
+	case library.JobKindReindexLibrarySearch:
+		if r.search == nil {
+			return errors.New("search service unavailable")
+		}
+		var payload struct {
+			LibraryID uint   `json:"library_id"`
+			RootPath  string `json:"root_path"`
+		}
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.search.ReindexLibrary(ctx, payload.LibraryID, payload.RootPath)
 	case "probe_media_file":
 		var payload struct {
 			MediaFileID uint `json:"media_file_id"`
