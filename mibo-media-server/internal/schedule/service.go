@@ -236,6 +236,25 @@ func (s *Service) Get(ctx context.Context, id uint) (Schedule, error) {
 	return projectSchedule(record, runs), nil
 }
 
+func (s *Service) SetEnabled(ctx context.Context, id uint, enabled bool) (Schedule, error) {
+	return s.Update(ctx, id, UpdateScheduleInput{Enabled: &enabled})
+}
+
+func (s *Service) ListHistory(ctx context.Context, scheduleID uint, limit int) ([]ScheduleRun, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var runs []database.ScheduleRun
+	if err := s.db.WithContext(ctx).Where("schedule_id = ?", scheduleID).Order("created_at desc").Limit(limit).Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	projected := make([]ScheduleRun, 0, len(runs))
+	for _, run := range runs {
+		projected = append(projected, projectRun(run))
+	}
+	return projected, nil
+}
+
 func (s *Service) RecordRunResult(ctx context.Context, scheduleID uint, input RecordRunResultInput) (ScheduleRun, error) {
 	if !isValidRunStatus(input.Status) {
 		return ScheduleRun{}, fmt.Errorf("invalid run status %q", input.Status)
