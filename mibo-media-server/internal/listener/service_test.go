@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,6 +58,83 @@ func TestMergeWindowUsesOneQueuedIntentPerEvent(t *testing.T) {
 	}
 	if !jobs[0].AvailableAt.Equal(payload.WindowEndsAt) {
 		t.Fatalf("expected available_at to match window end")
+	}
+}
+
+func TestRecordStorageEventConcurrentDuplicatesKeepOneActiveIntent(t *testing.T) {
+	t.Parallel()
+
+	svc, db, record := newListenerTestService(t)
+	fixedNow := time.Date(2026, time.April, 24, 10, 2, 0, 0, time.UTC)
+	svc.now = func() time.Time { return fixedNow }
+
+	ctx := context.Background()
+	const goroutines = 20
+	errCh := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "update", Path: filepath.Join(record.RootPath, "Movies", "MovieA.2024.mkv")})
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("record concurrent storage event: %v", err)
+		}
+	}
+
+	var active int64
+	if err := db.WithContext(ctx).Model(&database.Job{}).
+		Where("kind = ? AND status IN ?", JobKindApplyStorageEventRefresh, []string{jobs.StatusQueued, jobs.StatusRunning}).
+		Count(&active).Error; err != nil {
+		t.Fatalf("count active listener refresh jobs: %v", err)
+	}
+	if active != 1 {
+		t.Fatalf("expected one active listener refresh job, got %d", active)
+	}
+}
+
+func TestEnsureReconcileCoverageConcurrentCallsKeepOneActiveIntent(t *testing.T) {
+	t.Parallel()
+
+	svc, db, record := newListenerTestService(t)
+	fixedNow := time.Date(2026, time.April, 24, 11, 2, 0, 0, time.UTC)
+	svc.now = func() time.Time { return fixedNow }
+
+	ctx := context.Background()
+	const goroutines = 20
+	errCh := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- svc.EnsureReconcileCoverage(ctx, []database.Library{record})
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("ensure concurrent reconcile coverage: %v", err)
+		}
+	}
+
+	var active int64
+	if err := db.WithContext(ctx).Model(&database.Job{}).
+		Where("kind = ? AND status IN ?", JobKindListenerReconcile, []string{jobs.StatusQueued, jobs.StatusRunning}).
+		Count(&active).Error; err != nil {
+		t.Fatalf("count active listener reconcile jobs: %v", err)
+	}
+	if active != 1 {
+		t.Fatalf("expected one active listener reconcile job, got %d", active)
 	}
 }
 
