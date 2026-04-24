@@ -86,11 +86,11 @@ export function DetailHeroSection({
     .join('，')
 
   return (
-    <div className="max-w-[980px] pt-1">
+    <div className="min-w-0 max-w-[980px] pt-1">
       <div className="space-y-5">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-4xl font-semibold tracking-tight text-foreground lg:text-[52px]">
+            <h1 className="min-w-0 break-words text-4xl font-semibold tracking-tight text-foreground lg:text-[52px]">
               {item.title}
             </h1>
             <Button
@@ -198,7 +198,7 @@ export function DetailHeroSection({
         ) : null}
 
         <div className="space-y-3">
-          <div className="text-[26px] font-semibold text-foreground">
+          <div className="break-words text-[26px] font-semibold text-foreground">
             {titleLine}
           </div>
           <div

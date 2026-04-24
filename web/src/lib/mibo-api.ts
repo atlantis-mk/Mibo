@@ -400,7 +400,7 @@ export function getApiBaseUrl() {
     (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
       /\/$/,
       '',
-    ) ?? 'http://127.0.0.1:8080'
+    ) ?? 'http://10.0.0.33:8080'
   )
 }
 

@@ -36,8 +36,8 @@ export function SpecsSection({
   const audioSummary = formatAudioTrackLabel(primaryAudioTrack)
   const videoSummary = formatVideoTrackLabel(primaryFile)
   return (
-    <section className="mt-12 grid gap-10 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-      <div className="space-y-6">
+    <section className="mt-12 grid min-w-0 gap-10 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+      <div className="min-w-0 space-y-6">
         <h2 className="text-[19px] font-semibold text-foreground">其它信息</h2>
         <div className="space-y-7">
           {item.trailer ? (
@@ -48,14 +48,14 @@ export function SpecsSection({
               <div className="text-base font-medium text-muted-foreground">
                 {group.title}
               </div>
-              <div className="text-[17px] leading-8 whitespace-pre-wrap text-muted-foreground/80">
+              <div className="text-[17px] leading-8 whitespace-pre-wrap text-muted-foreground/80 [overflow-wrap:anywhere]">
                 {group.value}
               </div>
             </div>
           ))}
         </div>
       </div>
-      <div className="grid gap-6 self-start lg:grid-cols-2 xl:grid-cols-2">
+      <div className="grid min-w-0 gap-6 self-start lg:grid-cols-2 xl:grid-cols-2">
         <InfoCard
           icon={<FileVideo className="size-4" />}
           title="视频"
@@ -221,7 +221,9 @@ function InfoCard({
             className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 text-sm"
           >
             <div className="text-muted-foreground">{label}</div>
-            <div className="text-foreground/85">{value}</div>
+            <div className="text-foreground/85 [overflow-wrap:anywhere]">
+              {value}
+            </div>
           </div>
         ))}
       </CardContent>

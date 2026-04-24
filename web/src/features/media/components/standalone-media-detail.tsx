@@ -122,7 +122,7 @@ export function StandaloneMediaDetail({
   )
 
   return (
-    <div className="relative min-h-svh overflow-hidden bg-background text-foreground">
+    <div className="relative min-h-svh w-full max-w-full overflow-hidden bg-background text-foreground">
       <div
         className="absolute inset-0 bg-cover bg-center"
         style={{
@@ -140,7 +140,7 @@ export function StandaloneMediaDetail({
 
       <div
         ref={scrollContainerRef}
-        className="relative z-10 h-svh overflow-y-auto"
+        className="relative z-10 h-svh overflow-x-hidden overflow-y-auto"
       >
         <AppTopBar
           scrollContainerRef={scrollContainerRef}

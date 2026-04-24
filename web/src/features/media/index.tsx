@@ -166,7 +166,7 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
     rematchMutation.error?.message || markWatchedMutation.error?.message
 
   return (
-    <div className="relative flex-1">
+    <div className="relative min-w-0 flex-1 overflow-x-hidden">
       {mutationErrorMessage ? (
         <div className="absolute inset-x-0 top-4 z-30 px-4 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-4xl">
