@@ -18,6 +18,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 )
@@ -376,6 +377,110 @@ func TestRunOnceProcessesSearchReindexJobs(t *testing.T) {
 	}
 	if docs[0].VoteAverage == nil || *docs[0].VoteAverage != rating || !strings.Contains(docs[0].SearchCountriesText, "Japan") {
 		t.Fatalf("unexpected first search document: %#v", docs[0])
+	}
+}
+
+func TestRunOnceClaimsDueSchedulesAndUpdatesRunHistory(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.URL.Path != "/movie/101" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":             101,
+			"title":          "Artwork Updated",
+			"original_title": "Artwork Updated",
+			"overview":       "Existing overview",
+			"poster_path":    "/poster.jpg",
+			"backdrop_path":  "/backdrop.jpg",
+			"release_date":   "2024-02-02",
+			"runtime":        120,
+			"genres":         []map[string]any{{"name": "Action"}},
+			"credits":        map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}},
+			"images":         map[string]any{"logos": []map[string]any{{"file_path": "/logo.png", "iso_639_1": "en", "vote_average": 9.0}}},
+		})
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	cfg := config.Config{Worker: config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(context.Background(), settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "worker-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+	searchSvc := search.NewService(db)
+	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
+	runner := NewRunner(cfg.Worker, jobsSvc, library.NewService(cfg, db, registry, jobsSvc), metadataSvc, probe.NewService(db, registry, config.FFprobeConfig{}), settingsSvc, searchSvc, scheduleSvc)
+
+	confidence := 0.9
+	item := database.MediaItem{LibraryID: 1, Type: "movie", Title: "Artwork stale", Overview: "Existing overview", SourcePath: "/library/movie.mkv", MatchStatus: metadata.StatusMatched, MetadataProvider: "tmdb", ExternalID: "movie:101", MetadataConfidence: &confidence, Status: "ready"}
+	if err := db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+	created, err := scheduleSvc.Create(context.Background(), schedule.CreateScheduleInput{Name: "Artwork", Kind: schedule.KindArtworkRefresh, ScopeKind: schedule.ScopeGlobal, Enabled: true, Frequency: schedule.FrequencySpec{Kind: schedule.FrequencyDaily, TimeOfDay: "09:00"}})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	past := time.Now().UTC().Add(-time.Minute)
+	if err := db.WithContext(context.Background()).Model(&database.Schedule{}).Where("id = ?", created.ID).Update("next_run_at", past).Error; err != nil {
+		t.Fatalf("set due next_run_at: %v", err)
+	}
+
+	runner.RunOnce(context.Background())
+
+	var storedSchedule database.Schedule
+	if err := db.WithContext(context.Background()).First(&storedSchedule, created.ID).Error; err != nil {
+		t.Fatalf("reload schedule: %v", err)
+	}
+	if storedSchedule.LatestRunStatus != schedule.StatusCompleted {
+		t.Fatalf("expected completed schedule status, got %q", storedSchedule.LatestRunStatus)
+	}
+	if storedSchedule.LatestJobID == nil {
+		t.Fatalf("expected latest job id to be set")
+	}
+	var runs []database.ScheduleRun
+	if err := db.WithContext(context.Background()).Where("schedule_id = ?", created.ID).Find(&runs).Error; err != nil {
+		t.Fatalf("list schedule runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != schedule.StatusCompleted || runs[0].StartedAt == nil || runs[0].FinishedAt == nil {
+		t.Fatalf("expected completed run history, got %#v", runs)
+	}
+	var storedItem database.MediaItem
+	if err := db.WithContext(context.Background()).First(&storedItem, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if storedItem.PosterURL == "" || storedItem.LogoURL == "" {
+		t.Fatalf("expected artwork refresh to update fields, got %#v", storedItem)
+	}
+}
+
+func TestRunOnceIgnoresLegacyRefreshIntervalWithoutSchedules(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	cfg := config.Config{Worker: config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond, RefreshIntervalHours: 24}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	searchSvc := search.NewService(db)
+	runner := NewRunner(cfg.Worker, jobsSvc, library.NewService(cfg, db, registry, jobsSvc), metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc), probe.NewService(db, registry, config.FFprobeConfig{}), settingsSvc, searchSvc, schedule.NewService(db, schedule.WithJobs(jobsSvc)))
+
+	runner.RunOnce(context.Background())
+
+	var count int64
+	if err := db.WithContext(context.Background()).Model(&database.Job{}).Count(&count).Error; err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no legacy auto-scan jobs without schedules, got %d", count)
 	}
 }
 

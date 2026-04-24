@@ -13,6 +13,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
+	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 )
@@ -23,6 +24,7 @@ type Runner struct {
 	library  *library.Service
 	metadata *metadata.Service
 	probe    *probe.Service
+	schedule *schedule.Service
 	search   *search.Service
 	settings *settings.Service
 	interval time.Duration
@@ -47,6 +49,9 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 		if searchSvc, ok := arg.(*search.Service); ok {
 			runner.search = searchSvc
 		}
+		if scheduleSvc, ok := arg.(*schedule.Service); ok {
+			runner.schedule = scheduleSvc
+		}
 	}
 	return runner
 }
@@ -54,14 +59,6 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 func (r *Runner) Run(ctx context.Context) {
 	pollTicker := time.NewTicker(r.interval)
 	defer pollTicker.Stop()
-
-	// Initialize refresh interval from settings or config fallback
-	refreshInterval := r.getRefreshInterval(ctx)
-	var scanTicker *time.Ticker
-	if refreshInterval > 0 {
-		scanTicker = time.NewTicker(refreshInterval)
-		defer scanTicker.Stop()
-	}
 
 	r.runOnce(ctx)
 
@@ -71,15 +68,6 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case <-pollTicker.C:
 			r.runOnce(ctx)
-		case <-func() <-chan time.Time {
-			if scanTicker != nil {
-				return scanTicker.C
-			}
-			return nil
-		}():
-			if scanTicker != nil {
-				r.triggerScheduledScans(ctx)
-			}
 		}
 	}
 }
@@ -117,6 +105,7 @@ func (r *Runner) RunOnce(ctx context.Context) {
 }
 
 func (r *Runner) runOnce(ctx context.Context) {
+	r.enqueueDueSchedules(ctx)
 	for {
 		job, err := r.jobs.ClaimNext(ctx)
 		if err != nil {
@@ -129,6 +118,7 @@ func (r *Runner) runOnce(ctx context.Context) {
 
 		if err := r.handleJob(ctx, job); err != nil {
 			log.Printf("worker: job %d (%s) failed: %v", job.ID, job.Kind, err)
+			r.markScheduleRunFinished(ctx, job, schedule.StatusFailed, err.Error())
 			if failErr := r.jobs.Fail(ctx, job.ID, err); failErr != nil {
 				log.Printf("worker: mark job %d failed: %v", job.ID, failErr)
 			}
@@ -138,10 +128,12 @@ func (r *Runner) runOnce(ctx context.Context) {
 		if err := r.jobs.Complete(ctx, job.ID); err != nil {
 			log.Printf("worker: mark job %d completed: %v", job.ID, err)
 		}
+		r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, "completed")
 	}
 }
 
 func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
+	r.markScheduleRunRunning(ctx, job)
 	switch job.Kind {
 	case library.JobKindSyncLibrary:
 		return r.library.RunSyncLibrary(ctx, job)
@@ -194,8 +186,83 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.probe.ProbeFile(ctx, payload.MediaFileID)
+	case schedule.JobKindForSchedule(schedule.KindScan):
+		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
+		if err != nil {
+			return err
+		}
+		_, err = r.library.RunScheduledScan(ctx, due)
+		return err
+	case schedule.JobKindForSchedule(schedule.KindLibraryCleanup):
+		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
+		if err != nil {
+			return err
+		}
+		_, err = r.library.RunScheduledCleanup(ctx, due)
+		return err
+	case schedule.JobKindForSchedule(schedule.KindInvalidLinkCheck):
+		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
+		if err != nil {
+			return err
+		}
+		_, err = r.library.RunScheduledInvalidLinkCheck(ctx, due)
+		return err
+	case schedule.JobKindForSchedule(schedule.KindMetadataRefetch):
+		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
+		if err != nil {
+			return err
+		}
+		_, err = r.metadata.RunScheduledMetadataRefetch(ctx, due)
+		return err
+	case schedule.JobKindForSchedule(schedule.KindTrailerSync):
+		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
+		if err != nil {
+			return err
+		}
+		_, err = r.metadata.RunScheduledTrailerSync(ctx, due)
+		return err
+	case schedule.JobKindForSchedule(schedule.KindArtworkRefresh):
+		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
+		if err != nil {
+			return err
+		}
+		_, err = r.metadata.RunScheduledArtworkRefresh(ctx, due)
+		return err
 	default:
 		return errors.New("unsupported job kind: " + job.Kind)
+	}
+}
+
+func (r *Runner) enqueueDueSchedules(ctx context.Context) {
+	if r.schedule == nil {
+		return
+	}
+	if _, err := r.schedule.ClaimDueRuns(ctx, 20); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("worker: claim due schedules: %v", err)
+	}
+}
+
+func (r *Runner) markScheduleRunRunning(ctx context.Context, job database.Job) {
+	if r.schedule == nil {
+		return
+	}
+	if _, err := schedule.ParseSchedulePayload(job.PayloadJSON); err != nil {
+		return
+	}
+	if err := r.schedule.MarkRunRunning(ctx, job.ID); err != nil {
+		log.Printf("worker: mark schedule job %d running: %v", job.ID, err)
+	}
+}
+
+func (r *Runner) markScheduleRunFinished(ctx context.Context, job database.Job, status string, message string) {
+	if r.schedule == nil {
+		return
+	}
+	if _, err := schedule.ParseSchedulePayload(job.PayloadJSON); err != nil {
+		return
+	}
+	if err := r.schedule.MarkRunFinished(ctx, schedule.RunTransitionInput{JobID: job.ID, Status: status, Message: message, Finished: time.Now().UTC()}); err != nil {
+		log.Printf("worker: mark schedule job %d %s: %v", job.ID, status, err)
 	}
 }
 
