@@ -14,6 +14,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
@@ -623,6 +624,124 @@ func TestRunOnceProcessesTargetedRefreshJob(t *testing.T) {
 	}
 	if episodeCount != 2 {
 		t.Fatalf("expected targeted refresh to scan subtree files, got %d", episodeCount)
+	}
+}
+
+func TestRunOnceProcessesStorageEventRefreshJob(t *testing.T) {
+	t.Parallel()
+
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	movieDir := filepath.Join(mediaRoot, "Movies")
+	showDir := filepath.Join(movieDir, "ShowB")
+	if err := os.MkdirAll(showDir, 0o755); err != nil {
+		t.Fatalf("create media dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "MovieA.2024.mkv"), []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write movie file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(showDir, "ShowB.S01E02.mkv"), []byte("episode"), 0o644); err != nil {
+		t.Fatalf("write episode file: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ffprobePath := writeFakeFFprobe(t)
+	cfg := config.Config{
+		Local:   config.LocalStorageConfig{RootPath: mediaRoot},
+		FFprobe: config.FFprobeConfig{Enabled: true, Path: ffprobePath, Timeout: 2 * time.Second},
+		Worker:  config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond},
+	}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, metadata.NewService(db, cfg.Metadata, settingsSvc), probe.NewService(db, registry, cfg.FFprobe), settingsSvc, listenerSvc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	runner.RunOnce(ctx)
+
+	targetRoot := filepath.Join(movieDir, "ShowB")
+	listenerJob, err := jobsSvc.Enqueue(ctx, listener.JobKindApplyStorageEventRefresh, map[string]any{
+		"library_id":          record.ID,
+		"root_path":           targetRoot,
+		"fallback_full_sync":  false,
+		"reason":              "storage_event",
+		"window_started_at":   time.Now().UTC().Add(-time.Second),
+		"window_ends_at":      time.Now().UTC().Add(-time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("enqueue listener job: %v", err)
+	}
+
+	runner.RunOnce(ctx)
+
+	var storedListenerJob database.Job
+	if err := db.WithContext(ctx).First(&storedListenerJob, listenerJob.ID).Error; err != nil {
+		t.Fatalf("reload listener job: %v", err)
+	}
+	if storedListenerJob.Status != jobs.StatusCompleted {
+		t.Fatalf("expected listener job completed, got %q", storedListenerJob.Status)
+	}
+
+	var queuedJobs []database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindTargetedRefresh).Order("id asc").Find(&queuedJobs).Error; err != nil {
+		t.Fatalf("list targeted refresh jobs: %v", err)
+	}
+	if len(queuedJobs) == 0 {
+		t.Fatal("expected listener job to enqueue targeted_refresh")
+	}
+	var payload struct {
+		LibraryID uint   `json:"library_id"`
+		RootPath  string `json:"root_path"`
+	}
+	if err := json.Unmarshal([]byte(queuedJobs[len(queuedJobs)-1].PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode targeted payload: %v", err)
+	}
+	if payload.LibraryID != record.ID || payload.RootPath != targetRoot {
+		t.Fatalf("unexpected targeted refresh payload: %#v", payload)
+	}
+
+	fallbackJob, err := jobsSvc.Enqueue(ctx, listener.JobKindApplyStorageEventRefresh, map[string]any{
+		"library_id":          record.ID,
+		"root_path":           movieDir,
+		"fallback_full_sync":  true,
+		"reason":              "storage_event",
+		"window_started_at":   time.Now().UTC().Add(-time.Second),
+		"window_ends_at":      time.Now().UTC().Add(-time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("enqueue fallback listener job: %v", err)
+	}
+
+	runner.RunOnce(ctx)
+
+	var storedFallbackJob database.Job
+	if err := db.WithContext(ctx).First(&storedFallbackJob, fallbackJob.ID).Error; err != nil {
+		t.Fatalf("reload fallback listener job: %v", err)
+	}
+	if storedFallbackJob.Status != jobs.StatusCompleted {
+		t.Fatalf("expected fallback listener job completed, got %q", storedFallbackJob.Status)
+	}
+
+	var syncJobs []database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindSyncLibrary).Order("id asc").Find(&syncJobs).Error; err != nil {
+		t.Fatalf("list sync jobs: %v", err)
+	}
+	if len(syncJobs) < 2 {
+		t.Fatalf("expected fallback listener job to enqueue another sync_library, got %#v", syncJobs)
 	}
 }
 
