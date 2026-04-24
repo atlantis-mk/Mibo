@@ -15,7 +15,7 @@ v2 pushes Mibo from a solid media-system baseline into a stronger discovery and 
 - [x] **Phase 8: Native Search & Discovery Filters** - Let users find content through one product-native search and filtering experience. Completed 2026-04-24.
 - [x] **Phase 9: Trailer Discovery & Playback** - Surface and play trusted trailers from media detail pages. Completed 2026-04-24.
 - [x] **Phase 10: Scheduled Operations Control** - Let admins automate recurring maintenance through managed schedules. Completed 2026-04-24.
-- [ ] **Phase 11: Event-Driven Refresh Hardening** - Keep libraries fresh from storage changes through safe listener-driven refresh and reconciliation.
+- [x] **Phase 11: Event-Driven Refresh Hardening** - Keep libraries fresh from storage changes through safe listener-driven refresh and reconciliation. Completed 2026-04-24.
 
 ## Phase Details
 
@@ -89,8 +89,8 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [x] 11-01-PLAN.md — Add the listener-domain service with explicit debounce, path coalescing, and reconciliation coverage. Completed 2026-04-24.
-- [ ] 11-02-PLAN.md — Route `/api/v1/storage-events` through the listener service with conservative normalization and API regressions.
-- [ ] 11-03-PLAN.md — Extend the worker to apply coalesced listener jobs and maintain periodic reconciliation.
+- [x] 11-02-PLAN.md — Route `/api/v1/storage-events` through the listener service with conservative normalization and API regressions. Completed 2026-04-24.
+- [x] 11-03-PLAN.md — Extend the worker to apply coalesced listener jobs and maintain periodic reconciliation. Completed 2026-04-24.
 
 ## Progress
 
@@ -106,4 +106,4 @@ Plans:
 | 8. Native Search & Discovery Filters | v2 Product Discovery And Operations | 4/4 | Complete | 2026-04-24 |
 | 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 1/1 | Complete | 2026-04-24 |
 | 10. Scheduled Operations Control | v2 Product Discovery And Operations | 7/7 | Complete | 2026-04-24 |
-| 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 1/3 | In progress | - |
+| 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 3/3 | Complete | 2026-04-24 |
