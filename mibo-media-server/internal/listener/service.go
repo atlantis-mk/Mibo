@@ -73,15 +73,71 @@ func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput
 		return database.Job{}, err
 	}
 
-	jobKey := refreshJobKey(payload.LibraryID, payload.RootPath, payload.FallbackFullSync)
-	job, err := createQueuedJob(jobKey, JobKindApplyStorageEventRefresh, payload, payload.WindowEndsAt)
+	var stored database.Job
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing []database.Job
+		if err := tx.
+			Where("kind = ? AND status = ?", JobKindApplyStorageEventRefresh, jobs.StatusQueued).
+			Order("id asc").
+			Find(&existing).Error; err != nil {
+			return err
+		}
+
+		active := make([]database.Job, 0, len(existing))
+		for _, job := range existing {
+			current, err := decodeRefreshPayload(job.PayloadJSON)
+			if err != nil {
+				return err
+			}
+			if current.LibraryID != payload.LibraryID || !current.WindowEndsAt.After(payload.WindowStartedAt) {
+				continue
+			}
+			active = append(active, job)
+			payload = mergeRefreshPayload(record.RootPath, payload, current)
+		}
+
+		payload.WindowEndsAt = payload.WindowStartedAt.Add(mergeWindow)
+		jobKey := refreshJobKey(payload.LibraryID, payload.RootPath, payload.FallbackFullSync)
+		if len(active) == 0 {
+			created, err := createQueuedJob(jobKey, JobKindApplyStorageEventRefresh, payload, payload.WindowEndsAt)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(&created).Error; err != nil {
+				return err
+			}
+			stored = created
+			return nil
+		}
+
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal listener job payload: %w", err)
+		}
+		keeper := active[0]
+		if err := tx.Model(&database.Job{}).
+			Where("id = ?", keeper.ID).
+			Updates(map[string]any{"job_key": jobKey, "payload_json": string(payloadJSON), "available_at": payload.WindowEndsAt.UTC()}).Error; err != nil {
+			return err
+		}
+		if len(active) > 1 {
+			ids := make([]uint, 0, len(active)-1)
+			for _, duplicate := range active[1:] {
+				ids = append(ids, duplicate.ID)
+			}
+			if err := tx.Where("id IN ?", ids).Delete(&database.Job{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.First(&stored, keeper.ID).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		return database.Job{}, err
 	}
-	if err := s.db.WithContext(ctx).Create(&job).Error; err != nil {
-		return database.Job{}, err
-	}
-	return job, nil
+	return stored, nil
 }
 
 func (s *Service) EnsureReconcileCoverage(ctx context.Context, libraries []database.Library) error {
@@ -159,6 +215,28 @@ func buildStorageEventPayload(record database.Library, input EventIngestInput, n
 		WindowStartedAt:  windowStartedAt,
 		WindowEndsAt:     windowStartedAt.Add(mergeWindow),
 	}, nil
+}
+
+func mergeRefreshPayload(libraryRoot string, base storageEventRefreshPayload, other storageEventRefreshPayload) storageEventRefreshPayload {
+	if other.WindowStartedAt.Before(base.WindowStartedAt) {
+		base.WindowStartedAt = other.WindowStartedAt
+	}
+	base.FallbackFullSync = base.FallbackFullSync || other.FallbackFullSync
+	if base.FallbackFullSync {
+		base.RootPath = cleanPath(libraryRoot)
+		return base
+	}
+	base.RootPath = commonAncestorPath(base.RootPath, other.RootPath, libraryRoot)
+	base.RootPath = targetedEventRoot(base.RootPath, libraryRoot)
+	return base
+}
+
+func decodeRefreshPayload(raw string) (storageEventRefreshPayload, error) {
+	var payload storageEventRefreshPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return storageEventRefreshPayload{}, fmt.Errorf("decode listener refresh payload: %w", err)
+	}
+	return payload, nil
 }
 
 func normalizeStorageEventRoot(libraryRoot string, kind string, currentPath string, oldPath string) (string, bool, error) {

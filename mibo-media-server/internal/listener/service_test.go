@@ -33,8 +33,8 @@ func TestMergeWindowUsesOneQueuedIntentPerEvent(t *testing.T) {
 	if first.Kind != JobKindApplyStorageEventRefresh || second.Kind != JobKindApplyStorageEventRefresh {
 		t.Fatalf("expected %q job kind, got %q and %q", JobKindApplyStorageEventRefresh, first.Kind, second.Kind)
 	}
-	if first.ID == second.ID {
-		t.Fatalf("expected current implementation to still duplicate work before coalescing is implemented")
+	if first.ID != second.ID {
+		t.Fatalf("expected repeated events to reuse one queued listener job, got %d and %d", first.ID, second.ID)
 	}
 
 	var jobs []database.Job
@@ -45,7 +45,7 @@ func TestMergeWindowUsesOneQueuedIntentPerEvent(t *testing.T) {
 		t.Fatalf("expected one debounced listener job, got %d", len(jobs))
 	}
 
-	payload := decodeRefreshPayload(t, jobs[0].PayloadJSON)
+	payload := mustDecodeRefreshPayload(t, jobs[0].PayloadJSON)
 	if payload.RootPath != filepath.Join(record.RootPath, "Movies") {
 		t.Fatalf("expected merged root %q, got %q", filepath.Join(record.RootPath, "Movies"), payload.RootPath)
 	}
@@ -80,7 +80,7 @@ func TestAncestorPromotionStaysInsideLibraryRoot(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("expected one promoted listener job, got %d", len(jobs))
 	}
-	payload := decodeRefreshPayload(t, jobs[0].PayloadJSON)
+	payload := mustDecodeRefreshPayload(t, jobs[0].PayloadJSON)
 	if payload.RootPath != filepath.Join(record.RootPath, "Movies") {
 		t.Fatalf("expected common ancestor %q, got %q", filepath.Join(record.RootPath, "Movies"), payload.RootPath)
 	}
@@ -143,7 +143,7 @@ func newListenerTestService(t *testing.T) (*Service, *gorm.DB, database.Library)
 	return NewService(db, jobs.NewService(db), nil), db, record
 }
 
-func decodeRefreshPayload(t *testing.T, raw string) storageEventRefreshPayload {
+func mustDecodeRefreshPayload(t *testing.T, raw string) storageEventRefreshPayload {
 	t.Helper()
 	var payload storageEventRefreshPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
