@@ -124,8 +124,8 @@
 | META-04 | Phase 7 | Complete |
 | META-05 | Phase 7 | Complete |
 | META-06 | Phase 7 | Complete |
-| LIST-01 | Phase 11 | Pending |
-| LIST-02 | Phase 11 | Pending |
+| LIST-01 | Phase 11 | Complete |
+| LIST-02 | Phase 11 | Complete |
 | LIST-03 | Phase 11 | Complete |
 | LIST-04 | Phase 11 | Complete |
 | SJOB-01 | Phase 10 | Complete |
