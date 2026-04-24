@@ -745,6 +745,91 @@ func TestRunOnceProcessesStorageEventRefreshJob(t *testing.T) {
 	}
 }
 
+func TestRunOnceEnsuresAndReseedsListenerReconcileJobs(t *testing.T) {
+	t.Parallel()
+
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	movieDir := filepath.Join(mediaRoot, "Movies")
+	if err := os.MkdirAll(movieDir, 0o755); err != nil {
+		t.Fatalf("create media dir: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: mediaRoot}, Worker: config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, metadata.NewService(db, cfg.Metadata, settingsSvc), probe.NewService(db, registry, cfg.FFprobe), settingsSvc, listenerSvc)
+
+	ctx := context.Background()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.Library{}).Where("id = ?", record.ID).Update("status", "active").Error; err != nil {
+		t.Fatalf("activate library: %v", err)
+	}
+
+	runner.RunOnce(ctx)
+
+	var reconcileJobs []database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", listener.JobKindListenerReconcile).Order("id asc").Find(&reconcileJobs).Error; err != nil {
+		t.Fatalf("list reconcile jobs: %v", err)
+	}
+	if len(reconcileJobs) != 1 {
+		t.Fatalf("expected one listener_reconcile job, got %#v", reconcileJobs)
+	}
+	if !reconcileJobs[0].AvailableAt.After(time.Now().UTC()) {
+		t.Fatalf("expected future-dated reconcile job, got %s", reconcileJobs[0].AvailableAt)
+	}
+
+	if err := db.WithContext(ctx).Model(&database.Job{}).Where("id = ?", reconcileJobs[0].ID).Update("available_at", time.Now().UTC().Add(-time.Second)).Error; err != nil {
+		t.Fatalf("make reconcile due: %v", err)
+	}
+
+	runner.RunOnce(ctx)
+
+	var completed database.Job
+	if err := db.WithContext(ctx).First(&completed, reconcileJobs[0].ID).Error; err != nil {
+		t.Fatalf("reload original reconcile job: %v", err)
+	}
+	if completed.Status != jobs.StatusCompleted {
+		t.Fatalf("expected reconcile job completed, got %q", completed.Status)
+	}
+
+	reconcileJobs = nil
+	if err := db.WithContext(ctx).Where("kind = ?", listener.JobKindListenerReconcile).Order("id asc").Find(&reconcileJobs).Error; err != nil {
+		t.Fatalf("reload reconcile jobs: %v", err)
+	}
+	if len(reconcileJobs) != 2 {
+		t.Fatalf("expected completed + reseeded reconcile jobs, got %#v", reconcileJobs)
+	}
+	if reconcileJobs[1].Status != jobs.StatusQueued {
+		t.Fatalf("expected reseeded reconcile queued, got %q", reconcileJobs[1].Status)
+	}
+	if !reconcileJobs[1].AvailableAt.After(time.Now().UTC().Add(5 * time.Hour)) {
+		t.Fatalf("expected reseeded reconcile far in future, got %s", reconcileJobs[1].AvailableAt)
+	}
+
+	var syncJobs []database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindSyncLibrary).Order("id asc").Find(&syncJobs).Error; err != nil {
+		t.Fatalf("list sync jobs: %v", err)
+	}
+	if len(syncJobs) < 2 {
+		t.Fatalf("expected reconcile run to queue another sync_library, got %#v", syncJobs)
+	}
+}
+
 func newTMDBTestServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
