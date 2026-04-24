@@ -18,6 +18,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
@@ -192,7 +193,7 @@ func TestStorageEventEndpointRequiresAuth(t *testing.T) {
 	}
 }
 
-func TestStorageEventEndpointEnqueuesTargetedRefresh(t *testing.T) {
+func TestStorageEventEndpointEnqueuesListenerRefreshIntent(t *testing.T) {
 	t.Parallel()
 
 	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
@@ -212,8 +213,15 @@ func TestStorageEventEndpointEnqueuesTargetedRefresh(t *testing.T) {
 	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
 		t.Fatalf("load queued job: %v", err)
 	}
-	if queuedJob.Kind != library.JobKindTargetedRefresh {
-		t.Fatalf("expected targeted refresh job, got %q", queuedJob.Kind)
+	if queuedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected listener refresh job, got %q", queuedJob.Kind)
+	}
+	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
+	if payload.RootPath != filepath.Join(filepath.Dir(moviePath)) {
+		t.Fatalf("expected targeted listener root %q, got %q", filepath.Dir(moviePath), payload.RootPath)
+	}
+	if payload.FallbackFullSync {
+		t.Fatal("expected default storage event handling to stay targeted")
 	}
 }
 
@@ -233,7 +241,7 @@ func TestStorageEventEndpointRejectsEscapingPath(t *testing.T) {
 	}
 }
 
-func TestStorageEventEndpointFallsBackToFullSyncForUnsupportedKind(t *testing.T) {
+func TestStorageEventEndpointFallsBackToListenerFullSyncIntentForUnsupportedKind(t *testing.T) {
 	t.Parallel()
 
 	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
@@ -252,8 +260,45 @@ func TestStorageEventEndpointFallsBackToFullSyncForUnsupportedKind(t *testing.T)
 	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
 		t.Fatalf("load queued job: %v", err)
 	}
-	if queuedJob.Kind != library.JobKindSyncLibrary {
-		t.Fatalf("expected full sync fallback job, got %q", queuedJob.Kind)
+	if queuedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected listener fallback job, got %q", queuedJob.Kind)
+	}
+	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
+	if !payload.FallbackFullSync {
+		t.Fatal("expected unsupported kind to request fallback_full_sync")
+	}
+}
+
+func TestStorageEventEndpointMoveUsesCommonAncestorIntent(t *testing.T) {
+	t.Parallel()
+
+	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	movedPath := filepath.Join(filepath.Dir(moviePath), "Archived", filepath.Base(moviePath))
+	if err := os.MkdirAll(filepath.Dir(movedPath), 0o755); err != nil {
+		t.Fatalf("create moved dir: %v", err)
+	}
+	if err := os.WriteFile(movedPath, []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write moved movie file: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"move","path":%q,"old_path":%q}` , libraryID, movedPath, moviePath)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var queuedJob database.Job
+	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
+		t.Fatalf("load queued job: %v", err)
+	}
+	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
+	if payload.RootPath != filepath.Dir(moviePath) {
+		t.Fatalf("expected common ancestor %q, got %q", filepath.Dir(moviePath), payload.RootPath)
 	}
 }
 
@@ -3500,6 +3545,23 @@ func containsString(values []string, target string) bool {
 
 func timePtr(value time.Time) *time.Time {
 	return &value
+}
+
+func mustDecodeListenerRefreshPayload(t *testing.T, raw string) listenerPayloadView {
+	t.Helper()
+	var payload listenerPayloadView
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode listener payload: %v", err)
+	}
+	return payload
+}
+
+type listenerPayloadView struct {
+	LibraryID        uint      `json:"library_id"`
+	RootPath         string    `json:"root_path"`
+	FallbackFullSync bool      `json:"fallback_full_sync"`
+	WindowStartedAt  time.Time `json:"window_started_at"`
+	WindowEndsAt     time.Time `json:"window_ends_at"`
 }
 
 func assertDeletedCount(t *testing.T, ctx context.Context, db *gorm.DB, model any, query string, value any, want int64) {
