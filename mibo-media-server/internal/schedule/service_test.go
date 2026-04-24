@@ -164,6 +164,81 @@ func TestScheduleTablesAreMigrated(t *testing.T) {
 	}
 }
 
+func TestSetEnabledRecomputesDueEligibility(t *testing.T) {
+	now := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC)
+	svc, ctx, _ := newTestService(t, now)
+
+	schedule, err := svc.Create(ctx, CreateScheduleInput{
+		Name:      "Metadata refresh",
+		Kind:      KindMetadataRefetch,
+		ScopeKind: ScopeGlobal,
+		Enabled:   true,
+		Frequency: FrequencySpec{Kind: FrequencyDaily, TimeOfDay: "13:00"},
+	})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+
+	disabled, err := svc.SetEnabled(ctx, schedule.ID, false)
+	if err != nil {
+		t.Fatalf("disable schedule: %v", err)
+	}
+	if disabled.NextRunAt != nil {
+		t.Fatalf("expected nil next run when disabled, got %v", disabled.NextRunAt)
+	}
+
+	enabled, err := svc.SetEnabled(ctx, schedule.ID, true)
+	if err != nil {
+		t.Fatalf("enable schedule: %v", err)
+	}
+	if enabled.NextRunAt == nil {
+		t.Fatalf("expected next run after re-enable")
+	}
+	expected := time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)
+	if !enabled.NextRunAt.Equal(expected) {
+		t.Fatalf("expected next run %s, got %s", expected, enabled.NextRunAt)
+	}
+}
+
+func TestListHistoryReturnsRecentRunsNewestFirst(t *testing.T) {
+	now := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC)
+	svc, ctx, _ := newTestService(t, now)
+
+	schedule, err := svc.Create(ctx, CreateScheduleInput{
+		Name:      "Artwork refresh",
+		Kind:      KindArtworkRefresh,
+		ScopeKind: ScopeGlobal,
+		Enabled:   true,
+		Frequency: FrequencySpec{Kind: FrequencyMonthly, TimeOfDay: "09:00", DayOfMonth: intPtr(20)},
+	})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+
+	first, err := svc.RecordRunResult(ctx, schedule.ID, RecordRunResultInput{Status: StatusFailed, ErrorSummary: "tmdb timeout", StartedAt: now.Add(-2 * time.Hour), FinishedAt: now.Add(-110 * time.Minute)})
+	if err != nil {
+		t.Fatalf("record first run: %v", err)
+	}
+	second, err := svc.RecordRunResult(ctx, schedule.ID, RecordRunResultInput{Status: StatusCompleted, StartedAt: now.Add(-50 * time.Minute), FinishedAt: now.Add(-45 * time.Minute)})
+	if err != nil {
+		t.Fatalf("record second run: %v", err)
+	}
+
+	history, err := svc.ListHistory(ctx, schedule.ID, 5)
+	if err != nil {
+		t.Fatalf("list history: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(history))
+	}
+	if history[0].ID != second.ID || history[1].ID != first.ID {
+		t.Fatalf("expected newest-first history, got %#v", history)
+	}
+	if history[1].ErrorSummary != "tmdb timeout" {
+		t.Fatalf("expected preserved error summary, got %q", history[1].ErrorSummary)
+	}
+}
+
 func uintPtr(v uint) *uint { return &v }
 
 func intPtr(v int) *int { return &v }
