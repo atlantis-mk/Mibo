@@ -2,11 +2,13 @@ package schedule
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/jobs"
 	"gorm.io/gorm"
 )
 
@@ -32,8 +34,9 @@ const (
 )
 
 type Service struct {
-	db  *gorm.DB
-	now func() time.Time
+	db   *gorm.DB
+	jobs *jobs.Service
+	now  func() time.Time
 }
 
 type Option func(*Service)
@@ -54,6 +57,12 @@ func NewService(db *gorm.DB, opts ...Option) *Service {
 		}
 	}
 	return svc
+}
+
+func WithJobs(jobsSvc *jobs.Service) Option {
+	return func(s *Service) {
+		s.jobs = jobsSvc
+	}
 }
 
 type CreateScheduleInput struct {
@@ -118,6 +127,11 @@ type ScheduleRun struct {
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type RunNowResult struct {
+	Run ScheduleRun  `json:"run"`
+	Job database.Job `json:"job"`
 }
 
 func (s *Service) Create(ctx context.Context, input CreateScheduleInput) (Schedule, error) {
@@ -253,6 +267,55 @@ func (s *Service) ListHistory(ctx context.Context, scheduleID uint, limit int) (
 		projected = append(projected, projectRun(run))
 	}
 	return projected, nil
+}
+
+func (s *Service) RunNow(ctx context.Context, scheduleID uint) (RunNowResult, error) {
+	if s.jobs == nil {
+		return RunNowResult{}, fmt.Errorf("jobs service unavailable")
+	}
+	var schedule database.Schedule
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", scheduleID).First(&schedule).Error; err != nil {
+		return RunNowResult{}, err
+	}
+	payload := map[string]any{
+		"schedule_id": schedule.ID,
+		"kind":        schedule.Kind,
+		"scope_kind":  schedule.ScopeKind,
+	}
+	if schedule.LibraryID != nil {
+		payload["library_id"] = *schedule.LibraryID
+	}
+	jobKey := fmt.Sprintf("schedule-run:%d:%d", schedule.ID, s.now().UnixNano())
+	job, err := s.jobs.EnqueueUnique(ctx, JobKindForSchedule(schedule.Kind), jobKey, payload)
+	if err != nil {
+		return RunNowResult{}, err
+	}
+	run, err := s.RecordRunResult(ctx, schedule.ID, RecordRunResultInput{
+		Status:    StatusQueued,
+		JobID:     &job.ID,
+		StartedAt: s.now(),
+	})
+	if err != nil {
+		return RunNowResult{}, err
+	}
+	return RunNowResult{Run: run, Job: job}, nil
+}
+
+func JobKindForSchedule(scheduleKind string) string {
+	return "schedule_" + normalizeKind(scheduleKind)
+}
+
+func ParseSchedulePayload(payload string) (DueSchedule, error) {
+	var decoded struct {
+		ScheduleID uint   `json:"schedule_id"`
+		Kind       string `json:"kind"`
+		ScopeKind  string `json:"scope_kind"`
+		LibraryID  *uint  `json:"library_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return DueSchedule{}, err
+	}
+	return DueSchedule{ID: decoded.ScheduleID, Kind: decoded.Kind, ScopeKind: ScopeKind(decoded.ScopeKind), LibraryID: decoded.LibraryID}, nil
 }
 
 func (s *Service) RecordRunResult(ctx context.Context, scheduleID uint, input RecordRunResultInput) (ScheduleRun, error) {

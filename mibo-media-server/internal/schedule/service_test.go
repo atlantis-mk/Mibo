@@ -8,6 +8,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/jobs"
 )
 
 func newTestService(t *testing.T, now time.Time) (*Service, context.Context, *database.Schedule) {
@@ -236,6 +237,45 @@ func TestListHistoryReturnsRecentRunsNewestFirst(t *testing.T) {
 	}
 	if history[1].ErrorSummary != "tmdb timeout" {
 		t.Fatalf("expected preserved error summary, got %q", history[1].ErrorSummary)
+	}
+}
+
+func TestRunNowCreatesQueuedRunAndJob(t *testing.T) {
+	now := time.Date(2026, 4, 24, 10, 30, 0, 0, time.UTC)
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	svc := NewService(db, WithNow(func() time.Time { return now }), WithJobs(jobs.NewService(db)))
+
+	schedule, err := svc.Create(ctx, CreateScheduleInput{
+		Name:      "Run scan now",
+		Kind:      KindScan,
+		ScopeKind: ScopeGlobal,
+		Enabled:   true,
+		Frequency: FrequencySpec{Kind: FrequencyDaily, TimeOfDay: "14:00"},
+	})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+
+	result, err := svc.RunNow(ctx, schedule.ID)
+	if err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+	if result.Job.Kind != JobKindForSchedule(KindScan) {
+		t.Fatalf("expected job kind %q, got %q", JobKindForSchedule(KindScan), result.Job.Kind)
+	}
+	if result.Run.Status != StatusQueued {
+		t.Fatalf("expected queued run, got %q", result.Run.Status)
+	}
+	stored, err := svc.Get(ctx, schedule.ID)
+	if err != nil {
+		t.Fatalf("get schedule: %v", err)
+	}
+	if stored.LatestJobID == nil || *stored.LatestJobID != result.Job.ID {
+		t.Fatalf("expected latest job id %d, got %#v", result.Job.ID, stored.LatestJobID)
 	}
 }
 
