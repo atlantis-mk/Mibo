@@ -136,6 +136,15 @@ type Job struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+type JobActiveIntent struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	IntentKey string    `gorm:"size:255;not null;uniqueIndex" json:"intent_key"`
+	Kind      string    `gorm:"size:128;not null;index" json:"kind"`
+	JobID     uint      `gorm:"not null;index" json:"job_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type Schedule struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
 	Name                string     `gorm:"size:255;not null" json:"name"`

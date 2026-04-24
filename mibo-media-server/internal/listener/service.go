@@ -13,6 +13,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -20,6 +21,8 @@ const (
 	JobKindListenerReconcile        = "listener_reconcile"
 	mergeWindow                     = 15 * time.Second
 	defaultReconcileInterval        = 6 * time.Hour
+	refreshActiveIntentPrefix       = "listener-refresh-active"
+	reconcileActiveIntentPrefix     = "listener-reconcile-active"
 )
 
 type EventIngestInput struct {
@@ -30,12 +33,12 @@ type EventIngestInput struct {
 }
 
 type storageEventRefreshPayload struct {
-	LibraryID         uint      `json:"library_id"`
-	RootPath          string    `json:"root_path"`
-	FallbackFullSync  bool      `json:"fallback_full_sync"`
-	Reason            string    `json:"reason"`
-	WindowStartedAt   time.Time `json:"window_started_at"`
-	WindowEndsAt      time.Time `json:"window_ends_at"`
+	LibraryID        uint      `json:"library_id"`
+	RootPath         string    `json:"root_path"`
+	FallbackFullSync bool      `json:"fallback_full_sync"`
+	Reason           string    `json:"reason"`
+	WindowStartedAt  time.Time `json:"window_started_at"`
+	WindowEndsAt     time.Time `json:"window_ends_at"`
 }
 
 type reconcilePayload struct {
@@ -75,9 +78,14 @@ func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput
 
 	var stored database.Job
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		intentKey := refreshActiveIntentKey(payload.LibraryID)
+		if _, err := upsertActiveIntent(tx, intentKey, JobKindApplyStorageEventRefresh); err != nil {
+			return err
+		}
+
 		var existing []database.Job
 		if err := tx.
-			Where("kind = ? AND status = ?", JobKindApplyStorageEventRefresh, jobs.StatusQueued).
+			Where("kind = ? AND status IN ?", JobKindApplyStorageEventRefresh, []string{jobs.StatusQueued, jobs.StatusRunning}).
 			Order("id asc").
 			Find(&existing).Error; err != nil {
 			return err
@@ -106,6 +114,9 @@ func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput
 			if err := tx.Create(&created).Error; err != nil {
 				return err
 			}
+			if err := updateActiveIntentJob(tx, intentKey, created.ID); err != nil {
+				return err
+			}
 			stored = created
 			return nil
 		}
@@ -132,6 +143,9 @@ func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput
 		if err := tx.First(&stored, keeper.ID).Error; err != nil {
 			return err
 		}
+		if err := updateActiveIntentJob(tx, intentKey, stored.ID); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -145,26 +159,7 @@ func (s *Service) EnsureReconcileCoverage(ctx context.Context, libraries []datab
 		return errors.New("listener database unavailable")
 	}
 	for _, record := range libraries {
-		jobKey := reconcileJobKey(record.ID)
-		var existing database.Job
-		err := s.db.WithContext(ctx).
-			Where("job_key = ? AND kind = ? AND status IN ?", jobKey, JobKindListenerReconcile, []string{jobs.StatusQueued, jobs.StatusRunning}).
-			Order("id desc").
-			First(&existing).Error
-		if err == nil {
-			continue
-		}
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-
-		scheduledFor := s.now().Add(defaultReconcileInterval)
-		payload := reconcilePayload{LibraryID: record.ID, Reason: "listener_reconcile", ScheduledFor: scheduledFor}
-		job, err := createQueuedJob(jobKey, JobKindListenerReconcile, payload, scheduledFor)
-		if err != nil {
-			return err
-		}
-		if err := s.db.WithContext(ctx).Create(&job).Error; err != nil {
+		if err := s.ensureReconcileCoverageForLibrary(ctx, record); err != nil {
 			return err
 		}
 	}
@@ -212,6 +207,11 @@ func (s *Service) RunReconcile(ctx context.Context, job database.Job) error {
 	nextPayload := reconcilePayload{LibraryID: payload.LibraryID, Reason: payload.Reason, ScheduledFor: nextScheduledFor}
 	jobKey := reconcileJobKey(payload.LibraryID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		intentKey := reconcileActiveIntentKey(payload.LibraryID)
+		if _, err := upsertActiveIntent(tx, intentKey, JobKindListenerReconcile); err != nil {
+			return err
+		}
+
 		var existing database.Job
 		err := tx.
 			Where("job_key = ? AND kind = ? AND status = ? AND id <> ?", jobKey, JobKindListenerReconcile, jobs.StatusQueued, job.ID).
@@ -222,9 +222,12 @@ func (s *Service) RunReconcile(ctx context.Context, job database.Job) error {
 			if err != nil {
 				return fmt.Errorf("marshal listener reconcile payload: %w", err)
 			}
-			return tx.Model(&database.Job{}).
+			if err := tx.Model(&database.Job{}).
 				Where("id = ?", existing.ID).
-				Updates(map[string]any{"payload_json": string(payloadJSON), "available_at": nextScheduledFor.UTC(), "job_key": jobKey}).Error
+				Updates(map[string]any{"payload_json": string(payloadJSON), "available_at": nextScheduledFor.UTC(), "job_key": jobKey}).Error; err != nil {
+				return err
+			}
+			return updateActiveIntentJob(tx, intentKey, existing.ID)
 		}
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
@@ -233,7 +236,52 @@ func (s *Service) RunReconcile(ctx context.Context, job database.Job) error {
 		if err != nil {
 			return err
 		}
-		return tx.Create(&queued).Error
+		if err := tx.Create(&queued).Error; err != nil {
+			return err
+		}
+		return updateActiveIntentJob(tx, intentKey, queued.ID)
+	})
+}
+
+func (s *Service) ensureReconcileCoverageForLibrary(ctx context.Context, record database.Library) error {
+	jobKey := reconcileJobKey(record.ID)
+	intentKey := reconcileActiveIntentKey(record.ID)
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, err := upsertActiveIntent(tx, intentKey, JobKindListenerReconcile); err != nil {
+			return err
+		}
+
+		var existing []database.Job
+		if err := tx.
+			Where("job_key = ? AND kind = ? AND status IN ?", jobKey, JobKindListenerReconcile, []string{jobs.StatusQueued, jobs.StatusRunning}).
+			Order("id desc").
+			Find(&existing).Error; err != nil {
+			return err
+		}
+		if len(existing) > 0 {
+			keeper := existing[0]
+			if len(existing) > 1 {
+				ids := make([]uint, 0, len(existing)-1)
+				for _, duplicate := range existing[1:] {
+					ids = append(ids, duplicate.ID)
+				}
+				if err := tx.Where("id IN ?", ids).Delete(&database.Job{}).Error; err != nil {
+					return err
+				}
+			}
+			return updateActiveIntentJob(tx, intentKey, keeper.ID)
+		}
+
+		scheduledFor := s.now().Add(defaultReconcileInterval)
+		payload := reconcilePayload{LibraryID: record.ID, Reason: "listener_reconcile", ScheduledFor: scheduledFor}
+		job, err := createQueuedJob(jobKey, JobKindListenerReconcile, payload, scheduledFor)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&job).Error; err != nil {
+			return err
+		}
+		return updateActiveIntentJob(tx, intentKey, job.ID)
 	})
 }
 
@@ -243,6 +291,34 @@ func refreshJobKey(libraryID uint, rootPath string, fallback bool) string {
 		mode = "fallback"
 	}
 	return fmt.Sprintf("listener-refresh:%d:%s:%s", libraryID, mode, strings.TrimSpace(rootPath))
+}
+
+func refreshActiveIntentKey(libraryID uint) string {
+	return fmt.Sprintf("%s:%d", refreshActiveIntentPrefix, libraryID)
+}
+
+func reconcileActiveIntentKey(libraryID uint) string {
+	return fmt.Sprintf("%s:%d", reconcileActiveIntentPrefix, libraryID)
+}
+
+func upsertActiveIntent(tx *gorm.DB, intentKey string, kind string) (database.JobActiveIntent, error) {
+	intent := database.JobActiveIntent{IntentKey: intentKey, Kind: kind}
+	if err := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "intent_key"}},
+		DoUpdates: clause.Assignments(map[string]any{"kind": kind}),
+	}).Create(&intent).Error; err != nil {
+		return database.JobActiveIntent{}, err
+	}
+	if err := tx.Where("intent_key = ?", intentKey).First(&intent).Error; err != nil {
+		return database.JobActiveIntent{}, err
+	}
+	return intent, nil
+}
+
+func updateActiveIntentJob(tx *gorm.DB, intentKey string, jobID uint) error {
+	return tx.Model(&database.JobActiveIntent{}).
+		Where("intent_key = ?", intentKey).
+		Update("job_id", jobID).Error
 }
 
 func reconcileJobKey(libraryID uint) string {
