@@ -11,6 +11,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/schedule"
@@ -22,6 +23,7 @@ type Runner struct {
 	cfg      config.WorkerConfig
 	jobs     *jobs.Service
 	library  *library.Service
+	listener *listener.Service
 	metadata *metadata.Service
 	probe    *probe.Service
 	schedule *schedule.Service
@@ -51,6 +53,9 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 		}
 		if scheduleSvc, ok := arg.(*schedule.Service); ok {
 			runner.schedule = scheduleSvc
+		}
+		if listenerSvc, ok := arg.(*listener.Service); ok {
+			runner.listener = listenerSvc
 		}
 	}
 	return runner
@@ -139,6 +144,11 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 		return r.library.RunSyncLibrary(ctx, job)
 	case library.JobKindTargetedRefresh:
 		return r.library.RunTargetedRefresh(ctx, job)
+	case listener.JobKindApplyStorageEventRefresh:
+		if r.listener == nil {
+			return errors.New("listener service unavailable")
+		}
+		return r.listener.ApplyStorageEventRefresh(ctx, job)
 	case library.JobKindMatchMediaItem:
 		var payload struct {
 			MediaItemID uint `json:"media_item_id"`

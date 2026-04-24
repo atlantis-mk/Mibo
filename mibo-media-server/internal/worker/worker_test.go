@@ -14,8 +14,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
-	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/providers"
@@ -675,12 +675,12 @@ func TestRunOnceProcessesStorageEventRefreshJob(t *testing.T) {
 
 	targetRoot := filepath.Join(movieDir, "ShowB")
 	listenerJob, err := jobsSvc.Enqueue(ctx, listener.JobKindApplyStorageEventRefresh, map[string]any{
-		"library_id":          record.ID,
-		"root_path":           targetRoot,
-		"fallback_full_sync":  false,
-		"reason":              "storage_event",
-		"window_started_at":   time.Now().UTC().Add(-time.Second),
-		"window_ends_at":      time.Now().UTC().Add(-time.Millisecond),
+		"library_id":         record.ID,
+		"root_path":          targetRoot,
+		"fallback_full_sync": false,
+		"reason":             "storage_event",
+		"window_started_at":  time.Now().UTC().Add(-time.Second),
+		"window_ends_at":     time.Now().UTC().Add(-time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("enqueue listener job: %v", err)
@@ -715,12 +715,12 @@ func TestRunOnceProcessesStorageEventRefreshJob(t *testing.T) {
 	}
 
 	fallbackJob, err := jobsSvc.Enqueue(ctx, listener.JobKindApplyStorageEventRefresh, map[string]any{
-		"library_id":          record.ID,
-		"root_path":           movieDir,
-		"fallback_full_sync":  true,
-		"reason":              "storage_event",
-		"window_started_at":   time.Now().UTC().Add(-time.Second),
-		"window_ends_at":      time.Now().UTC().Add(-time.Millisecond),
+		"library_id":         record.ID,
+		"root_path":          movieDir,
+		"fallback_full_sync": true,
+		"reason":             "storage_event",
+		"window_started_at":  time.Now().UTC().Add(-time.Second),
+		"window_ends_at":     time.Now().UTC().Add(-time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("enqueue fallback listener job: %v", err)
