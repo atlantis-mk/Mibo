@@ -3,6 +3,7 @@ package listener
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/providers"
 	"gorm.io/gorm"
 )
 
@@ -124,6 +127,119 @@ func TestReconcileCoverageSchedulesOneFutureJobPerLibrary(t *testing.T) {
 	}
 }
 
+func TestRecordStorageEventFallsBackToFullSyncWhenNormalizationIsUnsafe(t *testing.T) {
+	t.Parallel()
+
+	svc, _, record := newListenerTestService(t)
+	ctx := context.Background()
+	job, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "rename", Path: filepath.Join(record.RootPath, "Movies", "MovieA.2024.mkv")})
+	if err != nil {
+		t.Fatalf("record rename event: %v", err)
+	}
+	if job.Kind != JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected listener job kind, got %q", job.Kind)
+	}
+	payload := mustDecodeRefreshPayload(t, job.PayloadJSON)
+	if !payload.FallbackFullSync {
+		t.Fatal("expected unsafe normalization to request full sync fallback")
+	}
+	if payload.RootPath != record.RootPath {
+		t.Fatalf("expected fallback root %q, got %q", record.RootPath, payload.RootPath)
+	}
+}
+
+func TestApplyStorageEventRefreshQueuesExistingTargetedRefreshWork(t *testing.T) {
+	t.Parallel()
+
+	svc, db, record := newListenerIntegrationService(t)
+	ctx := context.Background()
+	listenerJob, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "update", Path: filepath.Join(record.RootPath, "Movies", "MovieA.2024.mkv")})
+	if err != nil {
+		t.Fatalf("record storage event: %v", err)
+	}
+
+	if err := svc.ApplyStorageEventRefresh(ctx, listenerJob); err != nil {
+		t.Fatalf("apply storage event refresh: %v", err)
+	}
+
+	var queued []database.Job
+	if err := db.WithContext(ctx).Where("kind IN ?", []string{library.JobKindTargetedRefresh, library.JobKindSyncLibrary}).Order("id asc").Find(&queued).Error; err != nil {
+		t.Fatalf("list queued work: %v", err)
+	}
+	if len(queued) != 1 || queued[0].Kind != library.JobKindTargetedRefresh {
+		t.Fatalf("expected one targeted_refresh job, got %#v", queued)
+	}
+	var items int64
+	if err := db.WithContext(ctx).Model(&database.MediaItem{}).Count(&items).Error; err != nil {
+		t.Fatalf("count media items: %v", err)
+	}
+	if items != 0 {
+		t.Fatalf("expected listener application to queue work only, found %d media items", items)
+	}
+}
+
+func TestApplyStorageEventRefreshQueuesFullSyncForFallbackIntent(t *testing.T) {
+	t.Parallel()
+
+	svc, db, record := newListenerIntegrationService(t)
+	ctx := context.Background()
+	listenerJob, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "rename", Path: filepath.Join(record.RootPath, "Movies", "MovieA.2024.mkv")})
+	if err != nil {
+		t.Fatalf("record fallback event: %v", err)
+	}
+
+	if err := svc.ApplyStorageEventRefresh(ctx, listenerJob); err != nil {
+		t.Fatalf("apply fallback refresh: %v", err)
+	}
+
+	var queued database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindSyncLibrary).Order("id desc").First(&queued).Error; err != nil {
+		t.Fatalf("load sync job: %v", err)
+	}
+	if queued.Kind != library.JobKindSyncLibrary {
+		t.Fatalf("expected sync_library job, got %q", queued.Kind)
+	}
+}
+
+func TestRunReconcileQueuesLibrarySyncAndReseedsNextWindow(t *testing.T) {
+	t.Parallel()
+
+	svc, db, record := newListenerIntegrationService(t)
+	ctx := context.Background()
+	baseNow := time.Date(2026, time.April, 24, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return baseNow }
+	reconcileJob, err := createQueuedJob(reconcileJobKey(record.ID), JobKindListenerReconcile, reconcilePayload{LibraryID: record.ID, Reason: "listener_reconcile", ScheduledFor: baseNow}, baseNow.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("build reconcile job: %v", err)
+	}
+	reconcileJob.Status = jobs.StatusRunning
+	if err := db.WithContext(ctx).Create(&reconcileJob).Error; err != nil {
+		t.Fatalf("store reconcile job: %v", err)
+	}
+
+	if err := svc.RunReconcile(ctx, reconcileJob); err != nil {
+		t.Fatalf("run reconcile: %v", err)
+	}
+
+	var syncJobs []database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindSyncLibrary).Find(&syncJobs).Error; err != nil {
+		t.Fatalf("list sync jobs: %v", err)
+	}
+	if len(syncJobs) != 1 {
+		t.Fatalf("expected one sync_library job from reconcile, got %d", len(syncJobs))
+	}
+	var reconcileJobs []database.Job
+	if err := db.WithContext(ctx).Where("kind = ? AND status = ?", JobKindListenerReconcile, jobs.StatusQueued).Order("id asc").Find(&reconcileJobs).Error; err != nil {
+		t.Fatalf("list reseeded reconcile jobs: %v", err)
+	}
+	if len(reconcileJobs) != 1 {
+		t.Fatalf("expected one future queued reconcile job, got %d", len(reconcileJobs))
+	}
+	if reconcileJobs[0].AvailableAt.Sub(baseNow) != 6*time.Hour {
+		t.Fatalf("expected next reconcile 6h later, got %s", reconcileJobs[0].AvailableAt.Sub(baseNow))
+	}
+}
+
 func newListenerTestService(t *testing.T) (*Service, *gorm.DB, database.Library) {
 	t.Helper()
 
@@ -141,6 +257,39 @@ func newListenerTestService(t *testing.T) (*Service, *gorm.DB, database.Library)
 		t.Fatalf("create library: %v", err)
 	}
 	return NewService(db, jobs.NewService(db), nil), db, record
+}
+
+func newListenerIntegrationService(t *testing.T) (*Service, *gorm.DB, database.Library) {
+	t.Helper()
+
+	storageRoot := filepath.Join(t.TempDir(), "storage")
+	libraryRoot := filepath.Join(storageRoot, "Library")
+	if err := os.MkdirAll(filepath.Join(libraryRoot, "Movies"), 0o755); err != nil {
+		t.Fatalf("create library root: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: storageRoot}}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: storageRoot})
+	if err != nil {
+		t.Fatalf("create media source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: libraryRoot})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.Library{}).Where("id = ?", record.ID).Update("status", "active").Error; err != nil {
+		t.Fatalf("activate library: %v", err)
+	}
+	record.Status = "active"
+	return NewService(db, jobsSvc, librarySvc), db, record
 }
 
 func mustDecodeRefreshPayload(t *testing.T, raw string) storageEventRefreshPayload {
