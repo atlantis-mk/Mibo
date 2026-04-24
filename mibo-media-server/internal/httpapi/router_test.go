@@ -236,6 +236,67 @@ func TestStorageEventEndpointEnqueuesListenerRefreshIntent(t *testing.T) {
 	}
 }
 
+func TestStorageEventEndpointAcceptsOpenListRootChildPath(t *testing.T) {
+	t.Parallel()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Driver: "sqlite"},
+		Storage:  config.StorageConfig{Provider: "openlist"},
+		OpenList: config.OpenListConfig{RootPath: "/"},
+	}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc)
+
+	ctx := context.Background()
+	source := database.MediaSource{Provider: "openlist", Name: "OpenList", RootPath: "/", StorageRef: "/"}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create openlist source: %v", err)
+	}
+	record := database.Library{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/", Status: "active", ScannerEnabled: true}
+	if err := db.WithContext(ctx).Create(&record).Error; err != nil {
+		t.Fatalf("create openlist root library: %v", err)
+	}
+	authHeader := createAuthHeader(t, ctx, authSvc)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"update","path":"/MovieA.2024.mkv"}`, record.ID)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	acceptedJob := mustDecodeStorageEventResponseJob(t, recorder.Body.Bytes())
+	if acceptedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected response to return listener refresh job, got %q", acceptedJob.Kind)
+	}
+
+	var queuedJob database.Job
+	if err := db.WithContext(ctx).Order("id desc").First(&queuedJob).Error; err != nil {
+		t.Fatalf("load queued job: %v", err)
+	}
+	if queuedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected listener refresh job, got %q", queuedJob.Kind)
+	}
+	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
+	if payload.RootPath != "/" {
+		t.Fatalf("expected root path %q, got %q", "/", payload.RootPath)
+	}
+	if payload.FallbackFullSync {
+		t.Fatal("expected OpenList root child event to stay targeted")
+	}
+}
+
 func TestStorageEventEndpointRejectsEscapingPath(t *testing.T) {
 	t.Parallel()
 
