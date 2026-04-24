@@ -2,13 +2,13 @@
 
 ## What This Is
 
-Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-media-server/` 后端和作为存储接入底座的 `OpenList` 组成。当前产品已经具备从媒体源接入、语义目录浏览、播放入口、进度同步到增量刷新的完整主路径，并继续以 `mibo-media-server` 作为业务核心向 Web、移动端和 TV 统一接入能力演进。
+Mibo 是一个已经交付 v2 的家庭媒体系统，由 `web/` 前端、`mibo-media-server/` 后端和作为存储接入底座的 `OpenList` 组成。当前产品已经具备从媒体源接入、语义目录浏览、播放入口、进度同步、内容发现、预告片播放、计划任务运营到安全监听刷新的完整主路径，并继续以 `mibo-media-server` 作为业务核心向 Web、移动端和 TV 统一接入能力演进。
 
 ## Core Value
 
 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
 
-## Current Milestone: v2 Product Discovery And Operations
+## Completed Milestone: v2 Product Discovery And Operations
 
 **Goal:** 把 Mibo 从基础可用媒体系统推进到更完整的内容发现体验与后台运营能力，其中主线偏前台用户体验，但同时补齐管理员侧的自动化与治理能力。
 
@@ -23,6 +23,7 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 ## Current State
 
 - 已 shipped `v1 MVP`，覆盖 6 个阶段、13 个计划
+- 已 shipped `v2 Product Discovery And Operations`，覆盖 5 个阶段、18 个计划
 - 已具备本地存储与 OpenList 存储接入边界
 - 已具备电影/剧集语义目录、TV season/episode 详情和首页发现流
 - 已具备统一播放入口、续播/重播、能力感知播放决策和 canonical progress
@@ -44,13 +45,14 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 - ✓ 系统具备稳定文件身份、增量刷新和安全的存储事件驱动更新能力 — v1
 - ✓ 用户可以通过标题、演员、导演完成产品内全文搜索，并在结果中区分电影和剧集 — Validated in Phase 8
 - ✓ 用户可以通过类型、年份、地区、评分、是否看过、媒体库、分辨率等维度筛选媒体内容 — Validated in Phase 8 (current phase scope delivered FLTR-01..06; FLTR-07/08 remain future requirements)
+- ✓ 用户可以在媒体详情页直接观看来自 TMDB / 外部源的预告片 — Validated in Phase 9
+- ✓ 管理员可以人工编辑媒体元数据、锁定字段、重新匹配并重抓元数据 — Validated in Phase 7 (META-07 field locking remains future scope)
 - ✓ 系统可以基于存储变更自动触发安全的增量刷新 — Validated in Phase 11
+- ✓ 管理员可以管理后台计划任务，包括扫描、元数据、预告片和清理类调度任务 — Validated in Phase 10
 
 ### Active
 
-- [ ] 用户可以在媒体详情页直接观看来自 TMDB / 外部源的预告片
-- [ ] 管理员可以人工编辑媒体元数据、锁定字段、重新匹配并重抓元数据
-- [ ] 管理员可以管理后台计划任务，包括扫描、元数据、预告片和清理类调度任务
+- [ ] 下一 milestone 需求待定义
 
 ### Out of Scope
 
@@ -61,9 +63,8 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 
 ## Next Milestone Goals
 
-- 让用户更快找到想看的内容，补齐搜索、筛选和预告片等发现体验
-- 让管理员更高效地治理媒体库，补齐元数据管理、扫描监听和计划任务
-- 在不引入外部中间件的前提下，把这些能力沉淀为产品内原生能力
+- 下一 milestone 尚未定义
+- 候选方向应从已交付的 v2 发现、运营、监听能力出发，优先选择真实使用中暴露出的体验或运维瓶颈
 
 ## Context
 
@@ -90,6 +91,9 @@ Mibo 是一个已经交付 v1 的家庭媒体系统，由 `web/` 前端、`mibo-
 | 优先直链播放，转码只作为兜底能力 | 降低 V1 复杂度并优先满足家庭媒体播放主路径 | ✓ Good |
 | 稳定身份优先于路径匹配，增量刷新必须保守不误绑定 | 保证长期媒体连续性和进度安全 | ✓ Good |
 | v2 搜索与筛选先基于现有产品内数据能力实现，不接任何外部中间件 | 先验证体验和数据模型，避免过早引入部署与运维复杂度 | ✓ Good |
+| 计划任务复用现有 jobs/worker 生命周期 | 统一手动、定时和监听触发的后台工作状态与失败处理 | ✓ Good |
+| 监听刷新只入队 targeted/full scan，不直接修改 canonical media rows | 让存储事件与 reconciliation 共享既有扫描写入路径，降低数据漂移风险 | ✓ Good |
+| 使用 `JobActiveIntent` 管理活跃监听意图唯一性 | 保留历史 job key 复用能力，同时避免并发风暴产生重复活跃刷新 | ✓ Good |
 
 ## Evolution
 
@@ -109,4 +113,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-24 after Phase 11 completion*
+*Last updated: 2026-04-24 after v2 milestone completion*

@@ -1,3 +1,12 @@
+# Requirements Archive: v2 Product Discovery And Operations
+
+**Archived:** 2026-04-24
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Mibo
 
 **Defined:** 2026-04-23

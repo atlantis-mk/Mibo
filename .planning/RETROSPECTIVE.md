@@ -1,5 +1,42 @@
 # Retrospective
 
+## Milestone: v2 — Product Discovery And Operations
+
+**Shipped:** 2026-04-24
+**Phases:** 5 | **Plans:** 18
+
+### What Was Built
+
+- 元数据治理、重新匹配和重抓能力，为 discovery 质量提供管理员控制面
+- 原生搜索、搜索历史、共享筛选和 discovery projection 新鲜度链路
+- TMDB 预告片同步、详情页入口和页面内预告片播放体验
+- 产品内计划任务管理、run-now、历史记录和 worker 驱动的调度执行
+- 存储事件监听到 coalesced targeted refresh 的安全链路，并由 reconciliation 兜底
+
+### What Worked
+
+- 继续把媒体语义写入留在 `mibo-media-server`，前端和存储入口都只通过稳定 API/worker 边界协作
+- 计划任务和监听刷新都复用现有 jobs/worker 生命周期，减少了新的后台执行模型
+- Phase 11 的 verifier gaps 能够通过 `--gaps` 生成精确补强计划，并在重新验证中关闭到 10/10
+
+### What Was Inefficient
+
+- 多个规划文档在阶段完成后仍有 stale 状态，milestone closeout 需要额外同步 `PROJECT.md`、`REQUIREMENTS.md` 和 `ROADMAP.md`
+- `audit-open` 对 quick-task summary 文件名有严格约定，历史 quick task 需要补充标准 `SUMMARY.md` 才能通过 close audit
+- Phase 11 初次验证才暴露并发 coalescing 与 OpenList `/` root 边界问题，说明高风险监听语义应更早纳入并发/默认配置测试
+
+### Patterns Established
+
+- Discovery 能力优先使用产品内 projection 与 lifecycle refresh，不引入外部搜索中间件
+- 后台运营能力统一进入 schedules/jobs/worker 模型，避免为调度、监听、手动执行维护三套状态机
+- 活跃监听意图通过独立 guard table 控制唯一性，历史 job rows 保持可复用和可审计
+
+### Key Lessons
+
+- 默认 OpenList 根路径 `/` 是必须覆盖的真实配置，路径边界测试不能只覆盖非根目录
+- Listener/reconcile 这类 storm-prone 入口需要并发回归，不应只证明顺序 coalescing
+- Closeout 前应运行 open artifact audit，避免 milestone 归档时才发现历史 quick-task 元数据不规范
+
 ## Milestone: v1 — MVP
 
 **Shipped:** 2026-04-22
@@ -42,4 +79,5 @@
 
 | Milestone | Phases | Plans | Notes |
 |-----------|--------|-------|-------|
+| v2 | 5 | 18 | 发现、预告片、元数据治理、计划任务和监听刷新硬化全部归档 |
 | v1 | 6 | 13 | 首个完整可用里程碑，建立核心媒体平台边界与播放/同步基础 |
