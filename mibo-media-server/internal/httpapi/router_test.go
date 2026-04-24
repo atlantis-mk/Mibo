@@ -18,8 +18,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
-	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/probe"
@@ -196,32 +196,43 @@ func TestStorageEventEndpointRequiresAuth(t *testing.T) {
 func TestStorageEventEndpointEnqueuesListenerRefreshIntent(t *testing.T) {
 	t.Parallel()
 
-	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
-	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	for _, kind := range []string{"create", "update", "delete"} {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"update","path":%q}`, libraryID, moviePath)))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", authHeader)
-	router.ServeHTTP(recorder, request)
+			router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
+			authHeader := createAuthHeader(t, context.Background(), authSvc)
 
-	if recorder.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":%q,"path":%q}`, libraryID, kind, moviePath)))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", authHeader)
+			router.ServeHTTP(recorder, request)
 
-	var queuedJob database.Job
-	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
-		t.Fatalf("load queued job: %v", err)
-	}
-	if queuedJob.Kind != listener.JobKindApplyStorageEventRefresh {
-		t.Fatalf("expected listener refresh job, got %q", queuedJob.Kind)
-	}
-	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
-	if payload.RootPath != filepath.Join(filepath.Dir(moviePath)) {
-		t.Fatalf("expected targeted listener root %q, got %q", filepath.Dir(moviePath), payload.RootPath)
-	}
-	if payload.FallbackFullSync {
-		t.Fatal("expected default storage event handling to stay targeted")
+			if recorder.Code != http.StatusAccepted {
+				t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			acceptedJob := mustDecodeStorageEventResponseJob(t, recorder.Body.Bytes())
+			if acceptedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+				t.Fatalf("expected response to return listener refresh job, got %q", acceptedJob.Kind)
+			}
+
+			var queuedJob database.Job
+			if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
+				t.Fatalf("load queued job: %v", err)
+			}
+			if queuedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+				t.Fatalf("expected listener refresh job, got %q", queuedJob.Kind)
+			}
+			payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
+			if payload.RootPath != filepath.Join(filepath.Dir(moviePath)) {
+				t.Fatalf("expected targeted listener root %q, got %q", filepath.Dir(moviePath), payload.RootPath)
+			}
+			if payload.FallbackFullSync {
+				t.Fatal("expected default storage event handling to stay targeted")
+			}
+		})
 	}
 }
 
@@ -255,6 +266,10 @@ func TestStorageEventEndpointFallsBackToListenerFullSyncIntentForUnsupportedKind
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
+	acceptedJob := mustDecodeStorageEventResponseJob(t, recorder.Body.Bytes())
+	if acceptedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected response to return listener fallback job, got %q", acceptedJob.Kind)
+	}
 
 	var queuedJob database.Job
 	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
@@ -283,13 +298,17 @@ func TestStorageEventEndpointMoveUsesCommonAncestorIntent(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"move","path":%q,"old_path":%q}` , libraryID, movedPath, moviePath)))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"move","path":%q,"old_path":%q}`, libraryID, movedPath, moviePath)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", authHeader)
 	router.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	acceptedJob := mustDecodeStorageEventResponseJob(t, recorder.Body.Bytes())
+	if acceptedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected response to return listener move job, got %q", acceptedJob.Kind)
 	}
 
 	var queuedJob database.Job
@@ -299,6 +318,37 @@ func TestStorageEventEndpointMoveUsesCommonAncestorIntent(t *testing.T) {
 	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
 	if payload.RootPath != filepath.Dir(moviePath) {
 		t.Fatalf("expected common ancestor %q, got %q", filepath.Dir(moviePath), payload.RootPath)
+	}
+}
+
+func TestStorageEventEndpointRenameWithMissingOldPathFallsBackToListenerFullSyncIntent(t *testing.T) {
+	t.Parallel()
+
+	router, db, authSvc, _, libraryID, moviePath := newStorageEventTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	movedPath := filepath.Join(filepath.Dir(moviePath), "Renamed.MovieA.2024.mkv")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/storage-events", strings.NewReader(fmt.Sprintf(`{"library_id":%d,"kind":"rename","path":%q}`, libraryID, movedPath)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	acceptedJob := mustDecodeStorageEventResponseJob(t, recorder.Body.Bytes())
+	if acceptedJob.Kind != listener.JobKindApplyStorageEventRefresh {
+		t.Fatalf("expected response to return listener rename fallback job, got %q", acceptedJob.Kind)
+	}
+
+	var queuedJob database.Job
+	if err := db.WithContext(context.Background()).Order("id desc").First(&queuedJob).Error; err != nil {
+		t.Fatalf("load queued job: %v", err)
+	}
+	payload := mustDecodeListenerRefreshPayload(t, queuedJob.PayloadJSON)
+	if !payload.FallbackFullSync {
+		t.Fatal("expected missing rename old_path to request fallback_full_sync")
 	}
 }
 
@@ -3554,6 +3604,17 @@ func mustDecodeListenerRefreshPayload(t *testing.T, raw string) listenerPayloadV
 		t.Fatalf("decode listener payload: %v", err)
 	}
 	return payload
+}
+
+func mustDecodeStorageEventResponseJob(t *testing.T, raw []byte) database.Job {
+	t.Helper()
+	var response struct {
+		Data database.Job `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatalf("decode storage event response: %v", err)
+	}
+	return response.Data
 }
 
 type listenerPayloadView struct {
