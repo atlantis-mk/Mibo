@@ -15,6 +15,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as PlayIdRouteImport } from './routes/play.$id'
 import { Route as AppSearchRouteImport } from './routes/_app.search'
+import { Route as AppSchedulesIndexRouteImport } from './routes/_app.schedules.index'
 import { Route as AppMetadataIndexRouteImport } from './routes/_app.metadata.index'
 import { Route as AppMetadataIdRouteImport } from './routes/_app.metadata.$id'
 import { Route as AppMediaIdRouteImport } from './routes/_app.media.$id'
@@ -49,6 +50,11 @@ const AppSearchRoute = AppSearchRouteImport.update({
   path: '/search',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
+  id: '/schedules/',
+  path: '/schedules/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppMetadataIndexRoute = AppMetadataIndexRouteImport.update({
   id: '/metadata/',
   path: '/metadata/',
@@ -80,6 +86,7 @@ export interface FileRoutesByFullPath {
   '/media/$id': typeof AppMediaIdRoute
   '/metadata/$id': typeof AppMetadataIdRoute
   '/metadata/': typeof AppMetadataIndexRoute
+  '/schedules/': typeof AppSchedulesIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -91,6 +98,7 @@ export interface FileRoutesByTo {
   '/media/$id': typeof AppMediaIdRoute
   '/metadata/$id': typeof AppMetadataIdRoute
   '/metadata': typeof AppMetadataIndexRoute
+  '/schedules': typeof AppSchedulesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -104,6 +112,7 @@ export interface FileRoutesById {
   '/_app/media/$id': typeof AppMediaIdRoute
   '/_app/metadata/$id': typeof AppMetadataIdRoute
   '/_app/metadata/': typeof AppMetadataIndexRoute
+  '/_app/schedules/': typeof AppSchedulesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -117,6 +126,7 @@ export interface FileRouteTypes {
     | '/media/$id'
     | '/metadata/$id'
     | '/metadata/'
+    | '/schedules/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -128,6 +138,7 @@ export interface FileRouteTypes {
     | '/media/$id'
     | '/metadata/$id'
     | '/metadata'
+    | '/schedules'
   id:
     | '__root__'
     | '/_app'
@@ -140,6 +151,7 @@ export interface FileRouteTypes {
     | '/_app/media/$id'
     | '/_app/metadata/$id'
     | '/_app/metadata/'
+    | '/_app/schedules/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -193,6 +205,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSearchRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/schedules/': {
+      id: '/_app/schedules/'
+      path: '/schedules'
+      fullPath: '/schedules/'
+      preLoaderRoute: typeof AppSchedulesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/metadata/': {
       id: '/_app/metadata/'
       path: '/metadata'
@@ -231,6 +250,7 @@ interface AppRouteChildren {
   AppMediaIdRoute: typeof AppMediaIdRoute
   AppMetadataIdRoute: typeof AppMetadataIdRoute
   AppMetadataIndexRoute: typeof AppMetadataIndexRoute
+  AppSchedulesIndexRoute: typeof AppSchedulesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -240,6 +260,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppMediaIdRoute: AppMediaIdRoute,
   AppMetadataIdRoute: AppMetadataIdRoute,
   AppMetadataIndexRoute: AppMetadataIndexRoute,
+  AppSchedulesIndexRoute: AppSchedulesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

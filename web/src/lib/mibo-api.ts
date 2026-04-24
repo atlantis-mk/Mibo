@@ -318,6 +318,64 @@ export type Job = {
   updated_at: string
 }
 
+export type ScheduleFrequencyKind = 'daily' | 'weekly' | 'monthly'
+
+export type ScheduleScopeKind = 'global' | 'library'
+
+export type ScheduleRunStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export type ScheduleFrequency = {
+  kind: ScheduleFrequencyKind
+  time_of_day: string
+  weekday?: number
+  day_of_month?: number
+}
+
+export type ScheduleRun = {
+  id: number
+  schedule_id: number
+  status: ScheduleRunStatus
+  job_id?: number
+  error_summary: string
+  started_at?: string
+  finished_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type Schedule = {
+  id: number
+  name: string
+  kind: string
+  scope_kind: ScheduleScopeKind
+  library_id?: number
+  frequency: ScheduleFrequency
+  enabled: boolean
+  next_run_at?: string
+  latest_run_status?: ScheduleRunStatus | ''
+  latest_run_message: string
+  latest_job_id?: number
+  latest_run_started_at?: string
+  latest_run_finished_at?: string
+  recent_runs?: ScheduleRun[]
+  created_at: string
+  updated_at: string
+}
+
+export type ScheduleMutationInput = {
+  name: string
+  kind: string
+  scope_kind: ScheduleScopeKind
+  library_id?: number
+  enabled?: boolean
+  frequency: ScheduleFrequency
+}
+
+export type ScheduleRunNowResult = {
+  run: ScheduleRun
+  job: Job
+}
+
 type ApiOptions = {
   baseUrl: string
   token?: string | null
@@ -662,6 +720,38 @@ export function createMiboApi(options: ApiOptions) {
       return request<Job[]>(
         `/api/v1/jobs${queryString ? `?${queryString}` : ''}`,
       )
+    },
+    listSchedules() {
+      return request<Schedule[]>('/api/v1/schedules')
+    },
+    getSchedule(scheduleId: number) {
+      return request<Schedule>(`/api/v1/schedules/${scheduleId}`)
+    },
+    createSchedule(input: ScheduleMutationInput) {
+      return request<Schedule>('/api/v1/schedules', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+    },
+    updateSchedule(scheduleId: number, input: ScheduleMutationInput) {
+      return request<Schedule>(`/api/v1/schedules/${scheduleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      })
+    },
+    toggleSchedule(scheduleId: number, enabled: boolean) {
+      return request<Schedule>(`/api/v1/schedules/${scheduleId}/toggle`, {
+        method: 'POST',
+        body: JSON.stringify({ enabled }),
+      })
+    },
+    runScheduleNow(scheduleId: number) {
+      return request<ScheduleRunNowResult>(`/api/v1/schedules/${scheduleId}/run`, {
+        method: 'POST',
+      })
+    },
+    listScheduleHistory(scheduleId: number) {
+      return request<ScheduleRun[]>(`/api/v1/schedules/${scheduleId}/history`)
     },
     getPlayback(
       mediaItemId: number,

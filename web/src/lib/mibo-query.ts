@@ -14,6 +14,11 @@ export const miboQueryKeys = {
   mediaSources: (token: string) =>
     ['settings', 'media-sources', token] as const,
   libraries: (token: string) => ['settings', 'libraries', token] as const,
+  schedules: (token: string) => ['schedules', 'workspace', token] as const,
+  scheduleDetail: (token: string, scheduleId: number) =>
+    ['schedules', 'detail', token, scheduleId] as const,
+  scheduleHistory: (token: string, scheduleId: number) =>
+    ['schedules', 'history', token, scheduleId] as const,
 }
 
 export function createAuthedMiboApi(token: string) {
@@ -92,5 +97,28 @@ export function librariesQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.libraries(token),
     queryFn: () => createAuthedMiboApi(token).listLibraries(),
+  })
+}
+
+export function schedulesQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.schedules(token),
+    queryFn: () => createAuthedMiboApi(token).listSchedules(),
+  })
+}
+
+export function scheduleDetailQueryOptions(token: string, scheduleId: number) {
+  return queryOptions({
+    queryKey: miboQueryKeys.scheduleDetail(token, scheduleId),
+    queryFn: () => createAuthedMiboApi(token).getSchedule(scheduleId),
+    enabled: scheduleId > 0,
+  })
+}
+
+export function scheduleHistoryQueryOptions(token: string, scheduleId: number) {
+  return queryOptions({
+    queryKey: miboQueryKeys.scheduleHistory(token, scheduleId),
+    queryFn: () => createAuthedMiboApi(token).listScheduleHistory(scheduleId),
+    enabled: scheduleId > 0,
   })
 }
