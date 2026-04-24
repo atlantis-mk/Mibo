@@ -12,6 +12,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/httpapi"
 	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
@@ -43,15 +44,16 @@ func New(_ context.Context, cfg config.Config) (*App, error) {
 	jobsSvc := jobs.NewService(db)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
 	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
 	playbackSvc := playback.NewService(db, registry)
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
 	progressSvc := progress.NewService(db, searchSvc)
-	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, searchSvc, scheduleSvc)
+	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, searchSvc, scheduleSvc, listenerSvc)
 
-	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, scheduleSvc)
+	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, scheduleSvc, listenerSvc)
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,

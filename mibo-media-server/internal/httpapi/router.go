@@ -6,6 +6,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/auth"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
@@ -34,6 +35,7 @@ type Router struct {
 	storage  *providers.Registry
 	auth     *auth.Service
 	library  *library.Service
+	listener *listener.Service
 	jobs     *jobs.Service
 	playback *playback.Service
 	hls      *hlsService
@@ -52,9 +54,13 @@ type homeDiscoveryResponse struct {
 
 func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service, args ...any) http.Handler {
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
+	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
 	for _, arg := range args {
 		if provided, ok := arg.(*schedule.Service); ok && provided != nil {
 			scheduleSvc = provided
+		}
+		if provided, ok := arg.(*listener.Service); ok && provided != nil {
+			listenerSvc = provided
 		}
 	}
 	router := &Router{
@@ -63,6 +69,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 		storage:  registry,
 		auth:     authSvc,
 		library:  librarySvc,
+		listener: listenerSvc,
 		jobs:     jobsSvc,
 		playback: playbackSvc,
 		hls:      newHLSService(cfg, db, registry),
