@@ -133,6 +133,40 @@ type Job struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+type Schedule struct {
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	Name                string     `gorm:"size:255;not null" json:"name"`
+	Kind                string     `gorm:"size:64;not null;index" json:"kind"`
+	ScopeKind           string     `gorm:"size:32;not null;index" json:"scope_kind"`
+	LibraryID           *uint      `gorm:"index" json:"library_id,omitempty"`
+	FrequencyKind       string     `gorm:"size:32;not null" json:"frequency_kind"`
+	TimeOfDay           string     `gorm:"size:5;not null" json:"time_of_day"`
+	Weekday             *int       `json:"weekday,omitempty"`
+	DayOfMonth          *int       `json:"day_of_month,omitempty"`
+	Enabled             bool       `gorm:"not null;default:true;index" json:"enabled"`
+	NextRunAt           *time.Time `gorm:"index" json:"next_run_at,omitempty"`
+	LatestRunStatus     string     `gorm:"size:64" json:"latest_run_status"`
+	LatestRunMessage    string     `gorm:"type:text" json:"latest_run_message"`
+	LatestJobID         *uint      `gorm:"index" json:"latest_job_id,omitempty"`
+	LatestRunStartedAt  *time.Time `json:"latest_run_started_at,omitempty"`
+	LatestRunFinishedAt *time.Time `json:"latest_run_finished_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	DeletedAt           *time.Time `gorm:"index" json:"deleted_at,omitempty"`
+}
+
+type ScheduleRun struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	ScheduleID   uint       `gorm:"not null;index" json:"schedule_id"`
+	Status       string     `gorm:"size:64;not null;index" json:"status"`
+	JobID        *uint      `gorm:"index" json:"job_id,omitempty"`
+	ErrorSummary string     `gorm:"type:text" json:"error_summary"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
 type User struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	Username     string    `gorm:"size:128;not null;uniqueIndex" json:"username"`

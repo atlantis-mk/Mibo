@@ -47,6 +47,8 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&TVSeasonMetadataCache{},
 		&TVEpisodeMetadataCache{},
 		&Job{},
+		&Schedule{},
+		&ScheduleRun{},
 		&User{},
 		&Session{},
 		&PlaybackProgress{},
