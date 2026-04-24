@@ -24,6 +24,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/progress"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 	"github.com/atlan/mibo-media-server/internal/worker"
@@ -88,6 +89,93 @@ func TestReadyz(t *testing.T) {
 	if body.Data.Status != "ready" {
 		t.Fatalf("expected ready status, got %q", body.Data.Status)
 	}
+}
+
+func TestScheduleEndpointsRequireAuthAndValidatePayload(t *testing.T) {
+	router, _, _, _ := newScheduleTestRouter(t)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/schedules", strings.NewReader(`{"name":"Bad","kind":"scan","scope_kind":"global","frequency":{"kind":"weekly","time_of_day":"09:00"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected auth to be required before validation, got %d", recorder.Code)
+	}
+
+	router, authSvc, _, _ := newScheduleTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/schedules", strings.NewReader(`{"name":"Bad","kind":"scan","scope_kind":"global","frequency":{"kind":"weekly","time_of_day":"09:00"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed frequency payload, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestScheduleEndpointsCreateRunAndHistory(t *testing.T) {
+	router, authSvc, db, jobsSvc := newScheduleTestRouter(t)
+	authHeader := createAuthHeader(t, context.Background(), authSvc)
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", strings.NewReader(`{"name":"Nightly scan","kind":"scan","scope_kind":"global","enabled":true,"frequency":{"kind":"daily","time_of_day":"09:30"}}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+
+	var created struct {
+		Data schedule.Schedule `json:"data"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Data.ID == 0 || created.Data.NextRunAt == nil {
+		t.Fatalf("expected created schedule payload, got %#v", created.Data)
+	}
+
+	runRecorder := httptest.NewRecorder()
+	runRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/schedules/%d/run", created.Data.ID), nil)
+	runRequest.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for run-now, got %d body=%s", runRecorder.Code, runRecorder.Body.String())
+	}
+
+	var queuedJobs []database.Job
+	if err := db.WithContext(context.Background()).Order("id desc").Find(&queuedJobs).Error; err != nil {
+		t.Fatalf("load jobs: %v", err)
+	}
+	if len(queuedJobs) == 0 || queuedJobs[0].Kind != schedule.JobKindForSchedule(schedule.KindScan) {
+		t.Fatalf("expected queued schedule job, got %#v", queuedJobs)
+	}
+
+	historyRecorder := httptest.NewRecorder()
+	historyRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/schedules/%d/history", created.Data.ID), nil)
+	historyRequest.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(historyRecorder, historyRequest)
+	if historyRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for history, got %d body=%s", historyRecorder.Code, historyRecorder.Body.String())
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil)
+	listRequest.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for list, got %d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	_ = jobsSvc
 }
 
 func TestStorageEventEndpointRequiresAuth(t *testing.T) {
@@ -3376,6 +3464,25 @@ func newStorageEventTestRouter(t *testing.T) (http.Handler, *gorm.DB, *auth.Serv
 	}
 
 	return router, db, authSvc, librarySvc, record.ID, moviePath
+}
+
+func newScheduleTestRouter(t *testing.T) (http.Handler, *auth.Service, *gorm.DB, *jobs.Service) {
+	t.Helper()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	cfg := config.Config{Database: config.DatabaseConfig{Driver: "sqlite"}, Storage: config.StorageConfig{Provider: "local"}, Local: config.LocalStorageConfig{RootPath: t.TempDir()}, Worker: config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond}}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	searchSvc := search.NewService(db)
+	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db, searchSvc), searchSvc, metadataSvc, settingsSvc, scheduleSvc)
+	return router, authSvc, db, jobsSvc
 }
 
 func intPtr(value int) *int {

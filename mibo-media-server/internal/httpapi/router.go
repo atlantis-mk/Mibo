@@ -11,6 +11,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/progress"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 	"gorm.io/gorm"
@@ -39,6 +40,7 @@ type Router struct {
 	progress *progress.Service
 	search   *search.Service
 	metadata *metadata.Service
+	schedule *schedule.Service
 	settings *settings.Service
 }
 
@@ -48,7 +50,13 @@ type homeDiscoveryResponse struct {
 	LatestByLibrary  []library.LatestByLibrarySection `json:"latest_by_library"`
 }
 
-func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service) http.Handler {
+func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service, args ...any) http.Handler {
+	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
+	for _, arg := range args {
+		if provided, ok := arg.(*schedule.Service); ok && provided != nil {
+			scheduleSvc = provided
+		}
+	}
 	router := &Router{
 		cfg:      cfg,
 		db:       db,
@@ -61,6 +69,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 		progress: progressSvc,
 		search:   searchSvc,
 		metadata: metadataSvc,
+		schedule: scheduleSvc,
 		settings: settingsSvc,
 	}
 
@@ -116,6 +125,13 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/media-files/{id}/stream", router.handleStreamMediaFile)
 	mux.HandleFunc("GET /api/v1/jobs", router.handleListJobs)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", router.handleRetryJob)
+	mux.HandleFunc("GET /api/v1/schedules", router.handleListSchedules)
+	mux.HandleFunc("POST /api/v1/schedules", router.handleCreateSchedule)
+	mux.HandleFunc("GET /api/v1/schedules/{id}", router.handleGetSchedule)
+	mux.HandleFunc("PATCH /api/v1/schedules/{id}", router.handleUpdateSchedule)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/toggle", router.handleToggleSchedule)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/run", router.handleRunScheduleNow)
+	mux.HandleFunc("GET /api/v1/schedules/{id}/history", router.handleListScheduleHistory)
 
 	return corsMiddleware(cfg.CORS, loggingMiddleware(mux))
 }

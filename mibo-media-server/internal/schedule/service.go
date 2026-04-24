@@ -134,6 +134,13 @@ type RunNowResult struct {
 	Job database.Job `json:"job"`
 }
 
+type RunTransitionInput struct {
+	JobID    uint
+	Status   string
+	Message  string
+	Finished time.Time
+}
+
 func (s *Service) Create(ctx context.Context, input CreateScheduleInput) (Schedule, error) {
 	if err := validateCreateInput(input); err != nil {
 		return Schedule{}, err
@@ -299,6 +306,67 @@ func (s *Service) RunNow(ctx context.Context, scheduleID uint) (RunNowResult, er
 		return RunNowResult{}, err
 	}
 	return RunNowResult{Run: run, Job: job}, nil
+}
+
+func (s *Service) ClaimDueRuns(ctx context.Context, limit int) ([]RunNowResult, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	now := s.now()
+	var due []database.Schedule
+	if err := s.db.WithContext(ctx).
+		Where("deleted_at IS NULL AND enabled = ? AND next_run_at IS NOT NULL AND next_run_at <= ?", true, now).
+		Order("next_run_at asc, id asc").
+		Limit(limit).
+		Find(&due).Error; err != nil {
+		return nil, err
+	}
+	results := make([]RunNowResult, 0, len(due))
+	for _, record := range due {
+		if strings.TrimSpace(record.LatestRunStatus) == StatusQueued || strings.TrimSpace(record.LatestRunStatus) == StatusRunning {
+			continue
+		}
+		result, err := s.RunNow(ctx, record.ID)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (s *Service) MarkRunRunning(ctx context.Context, jobID uint) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run database.ScheduleRun
+		if err := tx.Where("job_id = ?", jobID).Order("id desc").First(&run).Error; err != nil {
+			return err
+		}
+		now := s.now()
+		if err := tx.Model(&database.ScheduleRun{}).Where("id = ?", run.ID).Updates(map[string]any{"status": StatusRunning, "started_at": now}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&database.Schedule{}).Where("id = ?", run.ScheduleID).Updates(map[string]any{"latest_run_status": StatusRunning, "latest_job_id": jobID, "latest_run_started_at": now}).Error
+	})
+}
+
+func (s *Service) MarkRunFinished(ctx context.Context, input RunTransitionInput) error {
+	if !isValidRunStatus(input.Status) {
+		return fmt.Errorf("invalid run status %q", input.Status)
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run database.ScheduleRun
+		if err := tx.Where("job_id = ?", input.JobID).Order("id desc").First(&run).Error; err != nil {
+			return err
+		}
+		finished := input.Finished
+		if finished.IsZero() {
+			finished = s.now()
+		}
+		if err := tx.Model(&database.ScheduleRun{}).Where("id = ?", run.ID).Updates(map[string]any{"status": input.Status, "error_summary": strings.TrimSpace(input.Message), "finished_at": finished}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&database.Schedule{}).Where("id = ?", run.ScheduleID).Updates(map[string]any{"latest_run_status": input.Status, "latest_run_message": strings.TrimSpace(input.Message), "latest_job_id": input.JobID, "latest_run_finished_at": finished}).Error
+	})
 }
 
 func JobKindForSchedule(scheduleKind string) string {
