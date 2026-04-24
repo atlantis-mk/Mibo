@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
   BellIcon,
+  CalendarClockIcon,
   DatabaseIcon,
   SparklesIcon,
   PlayCircleIcon,
@@ -215,6 +216,24 @@ export default function SettingsPage() {
                   <Separator className="bg-border" />
                   <CardContent className="px-5 py-5">
                     <FieldGroup>
+                      <div className="rounded-[1.25rem] border border-border/60 bg-background/60 px-4 py-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                              <CalendarClockIcon className="size-4" />
+                              计划任务工作台
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              在独立工作台中统一管理计划任务的启停、立即运行和最近运行历史。设置页仅保留摘要入口，不承载完整管理流。
+                            </div>
+                          </div>
+
+                          <Button asChild variant="outline" className="border-border/60 bg-card/80">
+                            <Link to="/schedules">进入工作台</Link>
+                          </Button>
+                        </div>
+                      </div>
+
                       <Field>
                         <FieldLabel htmlFor="notification-email">
                           通知邮箱
@@ -247,6 +266,7 @@ export default function SettingsPage() {
                   title="通知摘要"
                   description="当前任务与提醒相关的输出方式。"
                   items={[
+                    ['计划任务', '独立工作台管理'],
                     ['通知邮箱', 'admin@mibo.local'],
                     ['完成提醒', '已开启'],
                     ['失败提醒', '仅失败'],
