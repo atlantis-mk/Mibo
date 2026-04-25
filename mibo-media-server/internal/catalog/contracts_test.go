@@ -86,6 +86,10 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 	confidence := 0.92
 	segmentEnd := 3660.5
 	sourceID := uint(44)
+	sourceID2 := uint(45)
+	sourceID3 := uint(46)
+	sourceID4 := uint(47)
+	sourceID5 := uint(48)
 	editedByUserID := uint(7)
 
 	images := []database.ItemImage{
@@ -93,8 +97,50 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 		{ImageType: "backdrop", URL: "https://example.com/backdrop.jpg", IsSelected: false},
 	}
 	externalIDs := []database.CatalogExternalID{{Provider: "tmdb", ProviderType: "tv", ExternalID: "999", IsPrimary: true, Source: "provider", Confidence: &confidence}}
-	sources := []database.MetadataSource{{SourceType: SourceTypeProvider, SourceName: "tmdb", Language: "en", ExternalID: "999", PayloadJSON: `{"title":"The Example Show"}`, Confidence: &confidence, FetchedAt: now}}
-	fieldStates := []database.MetadataFieldState{{FieldKey: "title", SourceID: &sourceID, ValueJSON: `"The Example Show"`, IsLocked: true, LockReason: "operator lock", EditedByUserID: &editedByUserID, EditedAt: &now}}
+	sources := []database.MetadataSource{
+		{
+			SourceType: SourceTypeProvider,
+			SourceName: "tmdb",
+			Language:   "en",
+			ExternalID: "999",
+			PayloadJSON: `{
+				"title":"The Example Show",
+				"name":"Example Name",
+				"original_title":"Original Example",
+				"overview":"Provider overview",
+				"release_date":"2024-04-20",
+				"first_air_date":"2024-04-21",
+				"last_air_date":"2024-04-22",
+				"runtime":3600,
+				"status":"returning",
+				"season_number":1,
+				"episode_number":2,
+				"provider_blob":{"raw":"secret"},
+				"genres":["drama"],
+				"popularity":99.9
+			}`,
+			Confidence: &confidence,
+			FetchedAt:  now,
+		},
+		{
+			SourceType: SourceTypeProvider,
+			SourceName: "tvdb",
+			Language:   "en",
+			ExternalID: "888",
+			PayloadJSON: `{
+				"provider_blob":{"nested":true},
+				"genres":["mystery"]
+			}`,
+			FetchedAt: now,
+		},
+	}
+	fieldStates := []database.MetadataFieldState{
+		{FieldKey: "title", SourceID: &sourceID, ValueJSON: `"The Example Show"`, IsLocked: true, LockReason: "operator lock", EditedByUserID: &editedByUserID, EditedAt: &now},
+		{FieldKey: "runtime", SourceID: &sourceID2, ValueJSON: `3600`},
+		{FieldKey: "is_featured", SourceID: &sourceID3, ValueJSON: `true`},
+		{FieldKey: "provider_blob", SourceID: &sourceID4, ValueJSON: `{"raw":"secret"}`},
+		{FieldKey: "genres", SourceID: &sourceID5, ValueJSON: `["drama"]`},
+	}
 	rollup := &database.ItemRollup{ChildCount: 8, AvailableCount: 6, MissingCount: 1, UnairedCount: 1, PlayedCount: 2, InProgressCount: 1, LatestAirDate: &now, LatestAddedAt: &now}
 
 	assetDetail := BuildCatalogAssetDetail(CatalogAssetDetailInput{
@@ -243,7 +289,144 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 			if decoded[tc.statusKey] != tc.status {
 				t.Fatalf("expected %s %s %q, got %#v", tc.name, tc.statusKey, tc.status, decoded[tc.statusKey])
 			}
+			assertCuratedSourceEvidenceSummary(t, decoded)
+			assertCuratedFieldStateValues(t, decoded)
 		})
+	}
+}
+
+func assertCuratedSourceEvidenceSummary(t *testing.T, decoded map[string]any) {
+	t.Helper()
+
+	rawEvidence, ok := decoded["source_evidence"]
+	if !ok {
+		return
+	}
+
+	evidence, ok := rawEvidence.([]any)
+	if !ok {
+		t.Fatalf("expected source_evidence array, got %#v", rawEvidence)
+	}
+	if len(evidence) != 2 {
+		t.Fatalf("expected 2 source evidence entries, got %d", len(evidence))
+	}
+
+	first := sourceEvidenceEntry(t, evidence[0])
+	summary := nestedMap(t, first, "summary")
+	expected := map[string]any{
+		"title":          "The Example Show",
+		"name":           "Example Name",
+		"original_title": "Original Example",
+		"overview":       "Provider overview",
+		"release_date":   "2024-04-20",
+		"first_air_date": "2024-04-21",
+		"last_air_date":  "2024-04-22",
+		"runtime":        float64(3600),
+		"status":         "returning",
+		"season_number":  float64(1),
+		"episode_number": float64(2),
+	}
+	if len(summary) != len(expected) {
+		t.Fatalf("expected curated summary size %d, got %#v", len(expected), summary)
+	}
+	for key, want := range expected {
+		if got := summary[key]; got != want {
+			t.Fatalf("expected source_evidence.summary[%q] = %#v, got %#v", key, want, got)
+		}
+	}
+	for _, forbidden := range []string{"provider_blob", "genres", "popularity"} {
+		if _, ok := summary[forbidden]; ok {
+			t.Fatalf("expected source_evidence.summary to omit %q, got %#v", forbidden, summary)
+		}
+	}
+
+	second := sourceEvidenceEntry(t, evidence[1])
+	if _, ok := second["summary"]; ok {
+		t.Fatalf("expected source_evidence summary to be omitted when no allowlisted scalar keys exist, got %#v", second)
+	}
+}
+
+func assertCuratedFieldStateValues(t *testing.T, decoded map[string]any) {
+	t.Helper()
+
+	rawStates, ok := decoded["field_states"]
+	if !ok {
+		return
+	}
+
+	states, ok := rawStates.([]any)
+	if !ok {
+		t.Fatalf("expected field_states array, got %#v", rawStates)
+	}
+	if len(states) != 5 {
+		t.Fatalf("expected 5 field states, got %d", len(states))
+	}
+
+	byField := make(map[string]map[string]any, len(states))
+	for _, rawState := range states {
+		state, ok := rawState.(map[string]any)
+		if !ok {
+			t.Fatalf("expected field_states object, got %#v", rawState)
+		}
+		fieldKey, ok := state["field_key"].(string)
+		if !ok {
+			t.Fatalf("expected field_key string, got %#v", state["field_key"])
+		}
+		byField[fieldKey] = state
+	}
+
+	assertFieldStateValue(t, byField, "title", "The Example Show")
+	assertFieldStateValue(t, byField, "runtime", float64(3600))
+	assertFieldStateValue(t, byField, "is_featured", true)
+	assertFieldStateValueOmitted(t, byField, "provider_blob")
+	assertFieldStateValueOmitted(t, byField, "genres")
+}
+
+func sourceEvidenceEntry(t *testing.T, value any) map[string]any {
+	t.Helper()
+
+	entry, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("expected source_evidence object, got %#v", value)
+	}
+	return entry
+}
+
+func nestedMap(t *testing.T, parent map[string]any, key string) map[string]any {
+	t.Helper()
+
+	value, ok := parent[key]
+	if !ok {
+		t.Fatalf("expected %q to exist, got %#v", key, parent)
+	}
+	mapped, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("expected %q to be an object, got %#v", key, value)
+	}
+	return mapped
+}
+
+func assertFieldStateValue(t *testing.T, states map[string]map[string]any, fieldKey string, want any) {
+	t.Helper()
+
+	state, ok := states[fieldKey]
+	if !ok {
+		t.Fatalf("expected field state %q, got %#v", fieldKey, states)
+	}
+	if got := state["value"]; got != want {
+		t.Fatalf("expected field state %q value %#v, got %#v", fieldKey, want, got)
+	}
+}
+
+func assertFieldStateValueOmitted(t *testing.T, states map[string]map[string]any, fieldKey string) {
+	t.Helper()
+
+	state, ok := states[fieldKey]
+	if !ok {
+		t.Fatalf("expected field state %q, got %#v", fieldKey, states)
+	}
+	if _, ok := state["value"]; ok {
+		t.Fatalf("expected field state %q value to be omitted, got %#v", fieldKey, state)
 	}
 }
 
