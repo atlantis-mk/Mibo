@@ -45,12 +45,12 @@ func TestLegacyBackfillMovies(t *testing.T) {
 	}
 
 	skippedMovie := database.MediaItem{
-		LibraryID:  libraryID,
-		Type:       "movie",
-		Title:      "Movie Without File",
-		SourcePath: "/library/movies/movie-without-file.mkv",
-		MatchStatus:"pending",
-		Status:     "ready",
+		LibraryID:   libraryID,
+		Type:        "movie",
+		Title:       "Movie Without File",
+		SourcePath:  "/library/movies/movie-without-file.mkv",
+		MatchStatus: "pending",
+		Status:      "ready",
 	}
 	if err := svc.db.WithContext(ctx).Create(&skippedMovie).Error; err != nil {
 		t.Fatalf("create skipped movie: %v", err)
