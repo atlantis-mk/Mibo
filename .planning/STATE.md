@@ -1,36 +1,36 @@
 ---
 gsd_state_version: 1.0
-milestone: v2
-milestone_name: Product Discovery And Operations
-status: completed
-stopped_at: v2 milestone completed and archived
-last_updated: "2026-04-24T11:06:26.818Z"
-last_activity: 2026-04-24
+milestone: v3
+milestone_name: 剧集元数据治理 catalog kernel 迁移
+status: ready_to_plan
+stopped_at: milestone v3 started; Phase 12 not planned yet
+last_updated: "2026-04-25T04:19:16Z"
+last_activity: 2026-04-25
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 18
-  completed_plans: 18
-  percent: 100
+  total_phases: 9
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-24)
+See: .planning/PROJECT.md (updated 2026-04-25)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Planning next milestone
+**Current focus:** v3 剧集元数据治理 catalog kernel 迁移
 
 ## Current Position
 
-Phase: None
+Phase: 12 - Catalog Kernel Contracts & Migration Guards
 Plan: Not started
-Status: v2 milestone complete
-Last activity: 2026-04-24
+Status: Ready to plan Phase 12
+Last activity: 2026-04-25 - Started milestone v3: 剧集元数据治理 catalog kernel 迁移
 
-Progress: [██████████] 100%
+Progress: [----------] 0%
 
 ## Performance Metrics
 
@@ -82,6 +82,8 @@ Recent decisions affecting current work:
 - Special-case normalized non-local / roots in Mibo HTTP validation while preserving local filepath.Rel and non-root prefix checks.
 - Use JobActiveIntent.IntentKey for active listener uniqueness instead of making database.Job.JobKey globally unique.
 - Keep listener refresh and reconcile guards keyed at library scope so completed historical jobs can remain in the jobs table.
+- Use the Phase A catalog kernel as the target architecture for v3 instead of patching legacy `MediaItem` semantics further.
+- Migrate catalog governance in reversible steps: contract and backfill first, scanner and metadata writes next, API/playback/frontend reads after, legacy cleanup last.
 
 ### Pending Todos
 
@@ -90,6 +92,13 @@ None yet.
 ### Blockers/Concerns
 
 - None currently.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260424-stv | 扫描入库时应该使用ffmpeg获取背景图和封面图，这样如果没有元数据时还能显示这两张图片 | 2026-04-24 | uncommitted | | [260424-stv-ffmpeg](./quick/260424-stv-ffmpeg/) |
+| 260425-tvg | 基于已完成的 Phase A 新 catalog kernel，生成剩余剧集元数据治理实现计划 | 2026-04-25 | uncommitted | Verified | [260425-tvg-catalog-kernel-remaining-plan](./quick/260425-tvg-catalog-kernel-remaining-plan/) |
 
 ## Deferred Items
 
@@ -100,7 +109,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-04-24T11:06:26.818Z
-Stopped at: v2 milestone completed and archived; next milestone not defined
+Stopped at: milestone v3 started; Phase 12 not planned yet
 Resume file: None
 
-**Planned Phase:** 11 (event-driven-refresh-hardening) — 5 plans — 2026-04-24T10:06:15.484Z
+**Planned Phase:** 12 (catalog-kernel-contracts-migration-guards) — 0 plans — 2026-04-25T04:11:27Z

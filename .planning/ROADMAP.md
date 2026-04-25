@@ -1,9 +1,10 @@
-# Roadmap: Mibo
+# Roadmap: Mibo v3 剧集元数据治理 catalog kernel 迁移
 
 ## Milestones
 
 - ✅ **v1 MVP** — Phases 1-6 shipped 2026-04-22. Archive: `.planning/milestones/v1-ROADMAP.md`
 - ✅ **v2 Product Discovery And Operations** — Phases 7-11 shipped 2026-04-24. Archive: `.planning/milestones/v2-ROADMAP.md`
+- ◆ **v3 剧集元数据治理 catalog kernel 迁移** — Phases 12-20 planned 2026-04-25
 
 ## Phases
 
@@ -19,7 +20,7 @@
 
 </details>
 
-<details open>
+<details>
 <summary>✅ v2 Product Discovery And Operations (Phases 7-11) — SHIPPED 2026-04-24</summary>
 
 - [x] Phase 7: Metadata Governance & Matching (3/3 plans) — completed 2026-04-24
@@ -27,6 +28,21 @@
 - [x] Phase 9: Trailer Discovery & Playback (1/1 plans) — completed 2026-04-24
 - [x] Phase 10: Scheduled Operations Control (7/7 plans) — completed 2026-04-24
 - [x] Phase 11: Event-Driven Refresh Hardening (5/5 plans) — completed 2026-04-24
+
+</details>
+
+<details open>
+<summary>◆ v3 剧集元数据治理 catalog kernel 迁移 (Phases 12-20) — PLANNED</summary>
+
+- [ ] Phase 12: Catalog Kernel Contracts & Migration Guards — Goal: freeze DTOs, status flags, projection contracts, and minimum indexes before any cutover work. Requirements: KERN-01, KERN-02, PROD-01. Success criteria: catalog DTOs are explicit; migration flags exist; projection refresh entrypoints are defined; existing tests still boot empty and legacy databases.
+- [ ] Phase 13: Legacy Backfill Into Catalog Kernel — Goal: idempotently convert existing `MediaItem` / `MediaFile` / progress data into catalog items, assets, inventory files, images, external IDs, and migration reports. Requirements: MIGR-01, MIGR-02, MIGR-03. Success criteria: backfill is repeat-safe; movies and series hierarchy map correctly; conflicts are reported; all legacy playable rows map to assets.
+- [ ] Phase 14: Scanner Writes Catalog Assets — Goal: rebuild scanner writes so new scans create inventory files, media assets, asset files, catalog items, and asset-item links directly. Requirements: SCAN-01, SCAN-02, SCAN-03. Success criteria: scans no longer create legacy media rows; movies and episodes create catalog rows; multi-episode and multi-version files link correctly; deletes update availability only.
+- [ ] Phase 15: Series-Level Metadata Governance Engine — Goal: match and refresh metadata from the series root, generating governed seasons and episodes from provider evidence. Requirements: META-01, META-02, META-03, META-04. Success criteria: series match writes external IDs and sources; seasons/episodes are generated idempotently; locked fields are preserved; images/people/tags normalize into catalog tables.
+- [ ] Phase 16: Catalog API, Search, and Progress Cutover — Goal: expose catalog-backed items, series seasons, governance workspace, search, discovery, and progress APIs. Requirements: API-01, API-02, API-03, API-04. Success criteria: list/detail/search use catalog projections; series seasons come from catalog hierarchy; governance reads field states/sources/images/assets; progress writes `user_item_data`.
+- [ ] Phase 17: Playback Item-to-Asset Cutover — Goal: resolve playback from catalog item to selected asset/version and inventory file rather than legacy media file selection. Requirements: PLAY-01, PLAY-02, PLAY-03. Success criteria: default asset selection works; explicit asset playback works; HLS/direct streams resolve inventory files; missing files return explainable unplayable decisions.
+- [ ] Phase 18: Frontend Catalog Item Migration — Goal: migrate home, library, search, detail, series, and playback UI types and queries from `MediaItem` to `CatalogItem`. Requirements: UI-01, UI-02, UI-03, UI-04. Success criteria: `pnpm typecheck` and build pass; core pages render catalog items; missing/unaired/unavailable states are visible; playback can pass asset selection.
+- [ ] Phase 19: Metadata Governance UI Rebuild — Goal: rebuild governance UI around catalog field locks, source evidence, image candidates, external IDs, and asset links. Requirements: GOV-01, GOV-02, GOV-03, GOV-04. Success criteria: field locks persist and protect refreshes; source evidence is inspectable; image selection updates catalog display; asset links explain playability.
+- [ ] Phase 20: Legacy Model Retirement & Production Hardening — Goal: remove legacy main-path dependencies and harden the new kernel with constraints, indexes, consistency checkers, projection rebuilds, docs, and cleanup strategy. Requirements: PROD-02, PROD-03, PROD-04, MIGR-04. Success criteria: no main path writes legacy tables; constraints/indexes are applied safely; projection repair jobs exist; full backend and frontend validation passes.
 
 </details>
 
@@ -45,7 +61,16 @@
 | 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 1/1 | Complete | 2026-04-24 |
 | 10. Scheduled Operations Control | v2 Product Discovery And Operations | 7/7 | Complete | 2026-04-24 |
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 5/5 | Complete | 2026-04-24 |
+| 12. Catalog Kernel Contracts & Migration Guards | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 15. Series-Level Metadata Governance Engine | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 16. Catalog API, Search, and Progress Cutover | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 17. Playback Item-to-Asset Cutover | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 18. Frontend Catalog Item Migration | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 19. Metadata Governance UI Rebuild | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 20. Legacy Model Retirement & Production Hardening | v3 Catalog Kernel Migration | 0/0 | Planned | |
 
 ## Backlog
 
-Next milestone scope is not defined yet. Start it with `/gsd-new-milestone`.
+- Future client-specific polish for TV/mobile can start after the catalog kernel is the primary API and playback model.

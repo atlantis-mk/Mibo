@@ -20,6 +20,18 @@ Mibo 是一个已经交付 v2 的家庭媒体系统，由 `web/` 前端、`mibo-
 - 扫描监听：基于存储变更自动触发刷新，而不是仅依赖手动扫描
 - 计划任务管理：支持调度元数据重抓、预告片同步、库清理、失效链接检查、封面刷新等后台任务
 
+## Current Milestone: v3 剧集元数据治理 catalog kernel 迁移
+
+**Goal:** 把 Phase A 已落地的并行 catalog kernel 接入真实扫描、元数据、API、播放、搜索、前端和治理流程，最终从旧 `MediaItem` / `MediaFile` 主链路迁移到新内核。
+
+**Target features:**
+- 内核契约、回填与迁移护栏，让旧库可重复、安全地迁移到 `catalog_items` / `media_assets` / `asset_items`。
+- 扫描器直接写入新 catalog kernel，并支持剧集层级、多集文件、多版本和删除可用性更新。
+- 元数据引擎以 series 为治理根，匹配 TMDB/Provider 后生成 season/episode 目录项、证据快照、字段状态和图片候选。
+- API、播放、搜索、列表、详情和进度从旧 `MediaItem` 主链路切换到 `CatalogItem` / `MediaAsset`。
+- 元数据治理 UI 展示并管理字段锁、来源证据、图片选择、外部 ID 和资产链接。
+- 旧模型收口，补齐外键、唯一约束、索引、投影重建和一致性检查。
+
 ## Current State
 
 - 已 shipped `v1 MVP`，覆盖 6 个阶段、13 个计划
@@ -52,7 +64,13 @@ Mibo 是一个已经交付 v2 的家庭媒体系统，由 `web/` 前端、`mibo-
 
 ### Active
 
-- [ ] 下一 milestone 需求待定义
+- [ ] 管理员可以将现有旧媒体库安全回填到新 catalog kernel，并获得冲突和一致性报告
+- [ ] 扫描器可以直接生成 series / season / episode / movie catalog 项和可播放资产链接
+- [ ] 剧集元数据可以按 series 级别治理，并由 provider 生成完整 season / episode 目录
+- [ ] 用户和客户端可以通过新 `items`、`series`、播放、搜索和进度 API 使用 catalog 数据
+- [ ] Web 前端主流程可以从旧 `MediaItem` 切换到 `CatalogItem`，并正确展示缺失/未播/可播放状态
+- [ ] 管理员可以在治理 UI 中管理字段锁、来源证据、图片选择和资产链接
+- [ ] 系统可以在新内核完成切换后收口旧模型，并通过生产级约束和投影检查保持一致性
 
 ### Out of Scope
 
@@ -63,8 +81,9 @@ Mibo 是一个已经交付 v2 的家庭媒体系统，由 `web/` 前端、`mibo-
 
 ## Next Milestone Goals
 
-- 下一 milestone 尚未定义
-- 候选方向应从已交付的 v2 发现、运营、监听能力出发，优先选择真实使用中暴露出的体验或运维瓶颈
+- 当前 v3 milestone 聚焦“剧集元数据治理 catalog kernel 迁移”。
+- 目标不是新增浅层 UI 功能，而是把媒体目录、元数据证据、可播放资产和用户进度统一迁移到可治理的 catalog kernel。
+- 实现顺序必须保持可回填、可验证、可回滚：先契约和回填，再切扫描写入，再切元数据、API、播放和前端，最后收口旧模型。
 
 ## Context
 
@@ -113,4 +132,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-24 after v2 milestone completion*
+*Last updated: 2026-04-25 after starting v3 catalog kernel migration milestone*
