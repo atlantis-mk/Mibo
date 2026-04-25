@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 13-03-PLAN.md
-last_updated: "2026-04-25T07:51:24.207Z"
-last_activity: "2026-04-25 - Completed 13-03 legacy movie backfill mapping"
+status: ready_to_plan
+stopped_at: Completed 13-05-PLAN.md
+last_updated: "2026-04-25T08:28:03.071Z"
+last_activity: 2026-04-25
 progress:
   total_phases: 9
-  completed_phases: 1
-  total_plans: 18
-  completed_plans: 9
-  percent: 50
+  completed_phases: 3
+  total_plans: 39
+  completed_plans: 12
+  percent: 33
 ---
 
 # Project State
@@ -25,18 +25,18 @@ See: .planning/PROJECT.md (updated 2026-04-25)
 
 ## Current Position
 
-Phase: 13 - Legacy Backfill Into Catalog Kernel
-Plan: 4 of 5
-Status: Ready to execute
-Last activity: 2026-04-25 - Completed 13-03 legacy movie backfill mapping
+Phase: 14
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-25
 
-Progress: [█████░░░░░] 50%
+Progress: [███░░░░░░░] 31%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 40
+- Total plans completed: 45
 - Average duration: n/a
 - Total execution time: n/a
 
@@ -58,6 +58,8 @@ Progress: [█████░░░░░] 50%
 | Phase 13 P01 | 8 min | 2 tasks | 4 files |
 | Phase 13 P02 | 12 min | 2 tasks | 7 files |
 | Phase 13 P03 | 10 min | 2 tasks | 2 files |
+| Phase 13-legacy-backfill-into-catalog-kernel P05 | 7 min | 2 tasks | 5 files |
+| 13 | 5 | - | - |
 
 ## Accumulated Context
 
@@ -96,6 +98,9 @@ Recent decisions affecting current work:
 - Reuse legacy movies by library plus source_path and reuse assets by the item/file link tuple so reruns stay idempotent.
 - Persist only compact provider provenance JSON for migrated movie metadata evidence instead of copying raw legacy blobs.
 - Reuse selected item images and provider metadata rows on rerun so migrated movie artwork and evidence remain catalog-owned without duplication.
+- Backfill runs now execute movie, series, and progress slices before finalizing the persisted run status.
+- Legacy playback progress resolves asset ownership through migrated catalog item plus asset/file links before upserting user_item_data.
+- Worker success updates only catalog_backfill_completed_at and preserves catalog_read_enabled plus legacy_cleanup_completed_at from current settings.
 
 ### Pending Todos
 
@@ -120,10 +125,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T07:51:24.199Z
-Stopped at: Completed 13-03-PLAN.md
+Last session: 2026-04-25T08:28:03.066Z
+Stopped at: Completed 13-05-PLAN.md
 Resume file: None
 
 **Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25
 
-**Planned Phase:** 13 (Legacy Backfill Into Catalog Kernel) — 5 plans — 2026-04-25T07:00:48.629Z
+**Planned Phase:** 18 (Frontend Catalog Item Migration) — 4 plans — 2026-04-25T08:23:08.921Z
