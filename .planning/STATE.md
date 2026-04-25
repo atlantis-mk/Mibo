@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-04-25T07:18:44.071Z"
-last_activity: "2026-04-25 - Completed 13-01 durable backfill report contracts"
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-04-25T07:38:07.933Z"
+last_activity: "2026-04-25 - Completed 13-02 backfill trigger and worker dispatch"
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 11
-  completed_plans: 7
-  percent: 64
+  completed_plans: 8
+  percent: 73
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-25)
 ## Current Position
 
 Phase: 13 - Legacy Backfill Into Catalog Kernel
-Plan: 2 of 5
-Status: Ready for 13-02
-Last activity: 2026-04-25 - Completed 13-01 durable backfill report contracts
+Plan: 3 of 5
+Status: Ready for 13-03
+Last activity: 2026-04-25 - Completed 13-02 backfill trigger and worker dispatch
 
-Progress: [██████░░░░] 64%
+Progress: [███████░░░] 73%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [██████░░░░] 64%
 | Phase 11-event-driven-refresh-hardening P05 | 9min | 2 tasks | 5 files |
 | 11 | 5 | - | - |
 | Phase 13 P01 | 8 min | 2 tasks | 4 files |
+| Phase 13 P02 | 12 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Recent decisions affecting current work:
 - Keep legacy backfill run creation inside catalog service helpers that require a non-zero triggered_by_user_id.
 - Derive run counters from persisted CatalogMigrationEntry rows during finalization instead of trusting caller-supplied totals.
 - Sort run detail entries by entry_type, library_id, legacy IDs, and id so report output stays deterministic across reruns.
+- Reuse queued or running backfill jobs by job_key before creating a duplicate operator-visible run.
+- Return typed LegacyBackfillRun DTOs from queue/list/detail APIs instead of exposing raw jobs rows to operators.
+- Validate library-scoped worker payloads against the persisted run scope before advancing run lifecycle state.
 
 ### Pending Todos
 
@@ -112,8 +116,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T07:18:44.066Z
-Stopped at: Completed 13-01-PLAN.md
+Last session: 2026-04-25T07:38:07.928Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25

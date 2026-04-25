@@ -93,7 +93,7 @@
 | KERN-02 | Phase 12 | Pending |
 | PROD-01 | Phase 12 | Pending |
 | MIGR-01 | Phase 13 | Pending |
-| MIGR-02 | Phase 13 | Validated in 13-01 |
+| MIGR-02 | Phase 13 | Validated in 13-02 |
 | MIGR-03 | Phase 13 | Validated in 13-01 |
 | SCAN-01 | Phase 14 | Pending |
 | SCAN-02 | Phase 14 | Pending |

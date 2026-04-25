@@ -45,7 +45,7 @@
 - [ ] Phase 13: Legacy Backfill Into Catalog Kernel — Goal: idempotently convert existing `MediaItem` / `MediaFile` / progress data into catalog items, assets, inventory files, images, external IDs, and migration reports. Requirements: MIGR-01, MIGR-02, MIGR-03. **Plans:** 5 plans. Success criteria: backfill is repeat-safe; movies and series hierarchy map correctly; conflicts are reported; all legacy playable rows map to assets.
    Plans:
    - [x] 13-01-PLAN.md — Define durable backfill run/report schema and catalog service contracts.
-   - [ ] 13-02-PLAN.md — Add authenticated backfill trigger/report APIs and worker dispatch.
+   - [x] 13-02-PLAN.md — Add authenticated backfill trigger/report APIs and worker dispatch.
    - [ ] 13-03-PLAN.md — Backfill legacy movies into catalog items, inventory files, assets, images, and provider identity.
    - [ ] 13-04-PLAN.md — Backfill legacy series hierarchy with duplicate-slot and orphan-file reporting.
    - [ ] 13-05-PLAN.md — Migrate progress, refresh projections, and finalize repeat-safe backfill runs.
@@ -75,7 +75,7 @@
 | 10. Scheduled Operations Control | v2 Product Discovery And Operations | 7/7 | Complete | 2026-04-24 |
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 5/5 | Complete | 2026-04-24 |
 | 12. Catalog Kernel Contracts & Migration Guards | v3 Catalog Kernel Migration | 6/6 | Complete | 2026-04-25 |
-| 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 1/5 | In Progress | |
+| 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 2/5 | In Progress | |
 | 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 0/0 | Planned | |
 | 15. Series-Level Metadata Governance Engine | v3 Catalog Kernel Migration | 0/0 | Planned | |
 | 16. Catalog API, Search, and Progress Cutover | v3 Catalog Kernel Migration | 0/0 | Planned | |
