@@ -42,6 +42,7 @@ Mibo 是一个已经交付 v2 的家庭媒体系统，由 `web/` 前端、`mibo-
 - 已具备稳定身份、增量 targeted refresh 和存储事件驱动同步基础能力
 - 已完成 Phase 8：原生 discovery contract、全局搜索、搜索历史、共享筛选，以及由 projection + lifecycle refresh 保证的新鲜度验证链路
 - 已完成 Phase 11：存储事件监听会安全进入 targeted refresh，并由去重合并与 reconciliation 兜底保证刷新链路稳定
+- 已完成 Phase 13：旧 `MediaItem` / `MediaFile` 数据可安全回填到 catalog kernel，并具备可重复运行、冲突报告和进度迁移能力
 
 ## Requirements
 
@@ -61,10 +62,10 @@ Mibo 是一个已经交付 v2 的家庭媒体系统，由 `web/` 前端、`mibo-
 - ✓ 管理员可以人工编辑媒体元数据、锁定字段、重新匹配并重抓元数据 — Validated in Phase 7 (META-07 field locking remains future scope)
 - ✓ 系统可以基于存储变更自动触发安全的增量刷新 — Validated in Phase 11
 - ✓ 管理员可以管理后台计划任务，包括扫描、元数据、预告片和清理类调度任务 — Validated in Phase 10
+- ✓ 管理员可以将现有旧媒体库安全回填到新 catalog kernel，并获得冲突和一致性报告 — Validated in Phase 13
 
 ### Active
 
-- [ ] 管理员可以将现有旧媒体库安全回填到新 catalog kernel，并获得冲突和一致性报告
 - [ ] 扫描器可以直接生成 series / season / episode / movie catalog 项和可播放资产链接
 - [ ] 剧集元数据可以按 series 级别治理，并由 provider 生成完整 season / episode 目录
 - [ ] 用户和客户端可以通过新 `items`、`series`、播放、搜索和进度 API 使用 catalog 数据
@@ -132,4 +133,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-25 after starting v3 catalog kernel migration milestone*
+*Last updated: 2026-04-25 after completing Phase 13 legacy backfill into catalog kernel*
