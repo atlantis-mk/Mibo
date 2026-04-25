@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-04-25T09:39:31.470Z"
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-04-25T09:57:12.621Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 39
-  completed_plans: 13
-  percent: 33
+  completed_plans: 14
+  percent: 36
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-25)
 ## Current Position
 
 Phase: 14 (scanner-writes-catalog-assets) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-04-25
 
-Progress: [███░░░░░░░] 33%
+Progress: [████░░░░░░] 36%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 13-legacy-backfill-into-catalog-kernel P05 | 7 min | 2 tasks | 5 files |
 | 13 | 5 | - | - |
 | Phase 14 P02 | 10 min | 2 tasks | 9 files |
+| Phase 14 P03 | 13 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,8 @@ Recent decisions affecting current work:
 - Scanner traversal now writes only catalog and inventory rows for fresh scans.
 - Canonical episode paths use series-slug/season-XX/episode-XXXX keys so duplicate-slot files reuse one logical episode row.
 - Duplicate-slot files create version assets while new scan files queue inventory-file probe jobs.
+- Use inventory_file_id as the only probe job payload so worker dispatch no longer depends on legacy MediaFile IDs.
+- Persist normalized media_stream rows and a compact asset technical summary instead of storing raw ffprobe blobs.
 
 ### Pending Todos
 
@@ -129,8 +132,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T09:39:31.465Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-04-25T09:57:12.615Z
+Stopped at: Completed 14-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25
