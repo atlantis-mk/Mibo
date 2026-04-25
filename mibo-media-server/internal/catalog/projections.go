@@ -234,7 +234,7 @@ func (s *Service) buildCatalogSearchDocuments(ctx context.Context, tx *gorm.DB, 
 		docs = append(docs, database.CatalogSearchDocument{
 			ItemID:             item.ID,
 			LibraryID:          item.LibraryID,
-			ItemType:           strings.TrimSpace(item.Type),
+			ItemType:           normalizeCatalogType(item.Type),
 			Title:              strings.TrimSpace(item.Title),
 			OriginalTitle:      strings.TrimSpace(item.OriginalTitle),
 			PeopleText:         joinProjectionText(peopleByItem[item.ID]),
@@ -242,7 +242,7 @@ func (s *Service) buildCatalogSearchDocuments(ctx context.Context, tx *gorm.DB, 
 			ProviderIDsText:    joinProjectionText(externalIDsByItem[item.ID]),
 			Year:               item.Year,
 			OfficialRating:     strings.TrimSpace(item.OfficialRating),
-			AvailabilityStatus: strings.TrimSpace(item.AvailabilityStatus),
+			AvailabilityStatus: normalizeAvailabilityStatus(item.AvailabilityStatus),
 			UpdatedAt:          updatedAt,
 		})
 	}
