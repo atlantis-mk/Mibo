@@ -47,6 +47,8 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&MetadataSource{},
 		&MetadataFieldState{},
 		&ItemImage{},
+		&CatalogMigrationRun{},
+		&CatalogMigrationEntry{},
 		&Person{},
 		&ItemPerson{},
 		&Tag{},
