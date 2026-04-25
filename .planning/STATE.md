@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Completed 13-05-PLAN.md
-last_updated: "2026-04-25T08:28:03.071Z"
+status: executing
+stopped_at: Completed 14-02-PLAN.md
+last_updated: "2026-04-25T09:39:31.470Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 2
   total_plans: 39
-  completed_plans: 12
+  completed_plans: 13
   percent: 33
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-25)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Phase 13 — Legacy Backfill Into Catalog Kernel
+**Current focus:** Phase 14 — scanner-writes-catalog-assets
 
 ## Current Position
 
-Phase: 14
-Plan: Not started
-Status: Ready to plan
+Phase: 14 (scanner-writes-catalog-assets) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-04-25
 
-Progress: [███░░░░░░░] 31%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [███░░░░░░░] 31%
 | Phase 13 P03 | 10 min | 2 tasks | 2 files |
 | Phase 13-legacy-backfill-into-catalog-kernel P05 | 7 min | 2 tasks | 5 files |
 | 13 | 5 | - | - |
+| Phase 14 P02 | 10 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,9 @@ Recent decisions affecting current work:
 - Backfill runs now execute movie, series, and progress slices before finalizing the persisted run status.
 - Legacy playback progress resolves asset ownership through migrated catalog item plus asset/file links before upserting user_item_data.
 - Worker success updates only catalog_backfill_completed_at and preserves catalog_read_enabled plus legacy_cleanup_completed_at from current settings.
+- Scanner traversal now writes only catalog and inventory rows for fresh scans.
+- Canonical episode paths use series-slug/season-XX/episode-XXXX keys so duplicate-slot files reuse one logical episode row.
+- Duplicate-slot files create version assets while new scan files queue inventory-file probe jobs.
 
 ### Pending Todos
 
@@ -125,8 +129,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T08:28:03.066Z
-Stopped at: Completed 13-05-PLAN.md
+Last session: 2026-04-25T09:39:31.465Z
+Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25

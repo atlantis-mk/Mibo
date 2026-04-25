@@ -52,7 +52,7 @@
 - [ ] Phase 14: Scanner Writes Catalog Assets — Goal: rebuild scanner writes so new scans create inventory files, media assets, asset files, catalog items, and asset-item links directly. Requirements: SCAN-01, SCAN-02, SCAN-03. **Plans:** 4 plans. Success criteria: scans no longer create legacy media rows; movies and episodes create catalog rows; multi-episode and multi-version files link correctly; deletes update availability only.
    Plans:
    - [ ] 14-01-PLAN.md — Define the catalog-first scan writer boundary and direct-write contracts.
-   - [ ] 14-02-PLAN.md — Switch scan traversal to catalog writes with multi-episode and version asset modeling.
+   - [x] 14-02-PLAN.md — Switch scan traversal to catalog writes with multi-episode and version asset modeling.
    - [ ] 14-03-PLAN.md — Replace legacy media-file probe jobs with inventory-file probe and media-stream enrichment.
    - [ ] 14-04-PLAN.md — Preserve governed catalog metadata across deletes and stable-identity rescans by updating availability only.
 - [ ] Phase 15: Series-Level Metadata Governance Engine — Goal: match and refresh metadata from the series root, generating governed seasons and episodes from provider evidence. Requirements: META-01, META-02, META-03, META-04. Success criteria: series match writes external IDs and sources; seasons/episodes are generated idempotently; locked fields are preserved; images/people/tags normalize into catalog tables.
@@ -107,7 +107,7 @@
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 5/5 | Complete | 2026-04-24 |
 | 12. Catalog Kernel Contracts & Migration Guards | v3 Catalog Kernel Migration | 6/6 | Complete | 2026-04-25 |
 | 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 5/5 | Complete    | 2026-04-25 |
-| 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 0/4 | Planned | |
+| 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 1/4 | In Progress | |
 | 15. Series-Level Metadata Governance Engine | v3 Catalog Kernel Migration | 0/0 | Planned | |
 | 16. Catalog API, Search, and Progress Cutover | v3 Catalog Kernel Migration | 0/4 | Planned | |
 | 17. Playback Item-to-Asset Cutover | v3 Catalog Kernel Migration | 0/3 | Planned | |

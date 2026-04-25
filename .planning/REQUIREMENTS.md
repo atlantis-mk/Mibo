@@ -19,9 +19,12 @@
 
 ### Scanner
 
-- [ ] **SCAN-01**: System can scan movies and create or reuse `catalog_items(type=movie)`, `inventory_files`, `media_assets`, `asset_files`, and `asset_items` without creating new legacy media rows.
-- [ ] **SCAN-02**: System can scan TV episode files and create or reuse series, season, and episode catalog hierarchy with local evidence and pending governance status.
-- [ ] **SCAN-03**: System can model multi-episode files, multi-version episode files, and file deletion by updating asset links and availability instead of deleting governed catalog metadata.
+- [x] **SCAN-01
+**: System can scan movies and create or reuse `catalog_items(type=movie)`, `inventory_files`, `media_assets`, `asset_files`, and `asset_items` without creating new legacy media rows.
+- [x] **SCAN-02
+**: System can scan TV episode files and create or reuse series, season, and episode catalog hierarchy with local evidence and pending governance status.
+- [x] **SCAN-03
+**: System can model multi-episode files, multi-version episode files, and file deletion by updating asset links and availability instead of deleting governed catalog metadata.
 
 ### Metadata Governance Engine
 
