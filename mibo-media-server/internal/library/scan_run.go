@@ -49,6 +49,9 @@ func (s *Service) RunSyncLibrary(ctx context.Context, job database.Job) error {
 	if _, err := s.QueueLibrarySearchReindex(ctx, record.ID, rootPath); err != nil {
 		return err
 	}
+	if _, err := s.QueueCatalogLibraryProjectionRefresh(ctx, record.ID, rootPath); err != nil {
+		return err
+	}
 	_ = result
 	return nil
 }
@@ -78,6 +81,9 @@ func (s *Service) RunTargetedRefresh(ctx context.Context, job database.Job) erro
 		return err
 	}
 	if _, err := s.QueueLibrarySearchReindex(ctx, record.ID, rootPath); err != nil {
+		return err
+	}
+	if _, err := s.QueueCatalogLibraryProjectionRefresh(ctx, record.ID, rootPath); err != nil {
 		return err
 	}
 	_ = result
