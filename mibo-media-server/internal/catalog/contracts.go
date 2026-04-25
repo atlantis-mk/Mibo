@@ -114,11 +114,11 @@ type CatalogItemDetail struct {
 	ChildSummary       *CatalogChildSummary      `json:"child_summary,omitempty"`
 	SelectedImages     []CatalogSelectedImage    `json:"selected_images,omitempty"`
 	ExternalIdentities []CatalogExternalIdentity `json:"external_identities,omitempty"`
-	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence,omitempty"`
-	FieldStates        []CatalogFieldState       `json:"field_states,omitempty"`
-	Seasons            []CatalogSeasonDetail     `json:"seasons,omitempty"`
-	Episodes           []CatalogEpisodeDetail    `json:"episodes,omitempty"`
-	Assets             []CatalogAssetDetail      `json:"assets,omitempty"`
+	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence"`
+	FieldStates        []CatalogFieldState       `json:"field_states"`
+	Seasons            []CatalogSeasonDetail     `json:"seasons"`
+	Episodes           []CatalogEpisodeDetail    `json:"episodes"`
+	Assets             []CatalogAssetDetail      `json:"assets"`
 }
 
 type CatalogSeasonDetail struct {
@@ -135,9 +135,9 @@ type CatalogSeasonDetail struct {
 	ChildSummary       *CatalogChildSummary      `json:"child_summary,omitempty"`
 	SelectedImages     []CatalogSelectedImage    `json:"selected_images,omitempty"`
 	ExternalIdentities []CatalogExternalIdentity `json:"external_identities,omitempty"`
-	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence,omitempty"`
-	FieldStates        []CatalogFieldState       `json:"field_states,omitempty"`
-	Episodes           []CatalogEpisodeDetail    `json:"episodes,omitempty"`
+	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence"`
+	FieldStates        []CatalogFieldState       `json:"field_states"`
+	Episodes           []CatalogEpisodeDetail    `json:"episodes"`
 }
 
 type CatalogEpisodeDetail struct {
@@ -158,9 +158,9 @@ type CatalogEpisodeDetail struct {
 	FirstAirDate       *time.Time                `json:"first_air_date,omitempty"`
 	SelectedImages     []CatalogSelectedImage    `json:"selected_images,omitempty"`
 	ExternalIdentities []CatalogExternalIdentity `json:"external_identities,omitempty"`
-	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence,omitempty"`
-	FieldStates        []CatalogFieldState       `json:"field_states,omitempty"`
-	Assets             []CatalogAssetDetail      `json:"assets,omitempty"`
+	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence"`
+	FieldStates        []CatalogFieldState       `json:"field_states"`
+	Assets             []CatalogAssetDetail      `json:"assets"`
 }
 
 type CatalogAssetDetail struct {
@@ -173,7 +173,7 @@ type CatalogAssetDetail struct {
 	DurationSeconds *float64           `json:"duration_seconds,omitempty"`
 	Status          string             `json:"status"`
 	ProbeStatus     string             `json:"probe_status"`
-	Links           []CatalogAssetLink `json:"links,omitempty"`
+	Links           []CatalogAssetLink `json:"links"`
 }
 
 type CatalogGovernanceWorkspace struct {
@@ -185,10 +185,10 @@ type CatalogGovernanceWorkspace struct {
 	GovernanceStatus    string                    `json:"governance_status"`
 	SelectedImages      []CatalogSelectedImage    `json:"selected_images,omitempty"`
 	ExternalIdentities  []CatalogExternalIdentity `json:"external_identities,omitempty"`
-	SourceEvidence      []CatalogSourceEvidence   `json:"source_evidence,omitempty"`
-	FieldStates         []CatalogFieldState       `json:"field_states,omitempty"`
-	Assets              []CatalogAssetDetail      `json:"assets,omitempty"`
-	RecommendedChildren []CatalogListItem         `json:"recommended_children,omitempty"`
+	SourceEvidence      []CatalogSourceEvidence   `json:"source_evidence"`
+	FieldStates         []CatalogFieldState       `json:"field_states"`
+	Assets              []CatalogAssetDetail      `json:"assets"`
+	RecommendedChildren []CatalogListItem         `json:"recommended_children"`
 }
 
 type CatalogListItemInput struct {
@@ -249,7 +249,7 @@ func BuildCatalogListItem(input CatalogListItemInput) CatalogListItem {
 	return CatalogListItem{
 		ID:                 item.ID,
 		LibraryID:          item.LibraryID,
-		Type:               item.Type,
+		Type:               normalizeCatalogType(item.Type),
 		Title:              strings.TrimSpace(item.Title),
 		OriginalTitle:      strings.TrimSpace(item.OriginalTitle),
 		SortTitle:          strings.TrimSpace(item.SortTitle),
@@ -275,7 +275,7 @@ func BuildCatalogItemDetail(input CatalogItemDetailInput) CatalogItemDetail {
 	return CatalogItemDetail{
 		ID:                 item.ID,
 		LibraryID:          item.LibraryID,
-		Type:               item.Type,
+		Type:               normalizeCatalogType(item.Type),
 		Title:              strings.TrimSpace(item.Title),
 		OriginalTitle:      strings.TrimSpace(item.OriginalTitle),
 		SortTitle:          strings.TrimSpace(item.SortTitle),
@@ -296,9 +296,9 @@ func BuildCatalogItemDetail(input CatalogItemDetailInput) CatalogItemDetail {
 		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
 		SourceEvidence:     buildCatalogSourceEvidence(input.Sources),
 		FieldStates:        buildCatalogFieldStates(input.FieldStates),
-		Seasons:            input.Seasons,
-		Episodes:           input.Episodes,
-		Assets:             input.Assets,
+		Seasons:            ensureCatalogSeasonDetails(input.Seasons),
+		Episodes:           ensureCatalogEpisodeDetails(input.Episodes),
+		Assets:             ensureCatalogAssetDetails(input.Assets),
 	}
 }
 
@@ -307,7 +307,7 @@ func BuildCatalogSeasonDetail(input CatalogSeasonDetailInput) CatalogSeasonDetai
 	return CatalogSeasonDetail{
 		ID:                 item.ID,
 		LibraryID:          item.LibraryID,
-		Type:               item.Type,
+		Type:               normalizeCatalogType(item.Type),
 		Title:              strings.TrimSpace(item.Title),
 		Overview:           item.Overview,
 		Year:               item.Year,
@@ -320,7 +320,7 @@ func BuildCatalogSeasonDetail(input CatalogSeasonDetailInput) CatalogSeasonDetai
 		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
 		SourceEvidence:     buildCatalogSourceEvidence(input.Sources),
 		FieldStates:        buildCatalogFieldStates(input.FieldStates),
-		Episodes:           input.Episodes,
+		Episodes:           ensureCatalogEpisodeDetails(input.Episodes),
 	}
 }
 
@@ -329,7 +329,7 @@ func BuildCatalogEpisodeDetail(input CatalogEpisodeDetailInput) CatalogEpisodeDe
 	return CatalogEpisodeDetail{
 		ID:                 item.ID,
 		LibraryID:          item.LibraryID,
-		Type:               item.Type,
+		Type:               normalizeCatalogType(item.Type),
 		Title:              strings.TrimSpace(item.Title),
 		Overview:           item.Overview,
 		Year:               item.Year,
@@ -346,7 +346,7 @@ func BuildCatalogEpisodeDetail(input CatalogEpisodeDetailInput) CatalogEpisodeDe
 		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
 		SourceEvidence:     buildCatalogSourceEvidence(input.Sources),
 		FieldStates:        buildCatalogFieldStates(input.FieldStates),
-		Assets:             input.Assets,
+		Assets:             ensureCatalogAssetDetails(input.Assets),
 	}
 }
 
@@ -371,7 +371,7 @@ func BuildCatalogGovernanceWorkspace(input CatalogGovernanceWorkspaceInput) Cata
 	return CatalogGovernanceWorkspace{
 		ItemID:              item.ID,
 		LibraryID:           item.LibraryID,
-		Type:                item.Type,
+		Type:                normalizeCatalogType(item.Type),
 		Title:               strings.TrimSpace(item.Title),
 		AvailabilityStatus:  normalizeAvailabilityStatus(item.AvailabilityStatus),
 		GovernanceStatus:    normalizeGovernanceStatus(item.GovernanceStatus),
@@ -379,12 +379,15 @@ func BuildCatalogGovernanceWorkspace(input CatalogGovernanceWorkspaceInput) Cata
 		ExternalIdentities:  buildCatalogExternalIdentities(input.ExternalIDs),
 		SourceEvidence:      buildCatalogSourceEvidence(input.Sources),
 		FieldStates:         buildCatalogFieldStates(input.FieldStates),
-		Assets:              input.Assets,
-		RecommendedChildren: input.RecommendedChildren,
+		Assets:              ensureCatalogAssetDetails(input.Assets),
+		RecommendedChildren: ensureCatalogListItems(input.RecommendedChildren),
 	}
 }
 
 func buildCatalogSelectedImages(images []database.ItemImage) []CatalogSelectedImage {
+	if images == nil {
+		return []CatalogSelectedImage{}
+	}
 	selected := make([]CatalogSelectedImage, 0, len(images))
 	for _, image := range images {
 		if !image.IsSelected {
@@ -402,6 +405,9 @@ func buildCatalogSelectedImages(images []database.ItemImage) []CatalogSelectedIm
 }
 
 func buildCatalogExternalIdentities(externalIDs []database.CatalogExternalID) []CatalogExternalIdentity {
+	if externalIDs == nil {
+		return []CatalogExternalIdentity{}
+	}
 	identities := make([]CatalogExternalIdentity, 0, len(externalIDs))
 	for _, externalID := range externalIDs {
 		identities = append(identities, CatalogExternalIdentity{
@@ -417,6 +423,9 @@ func buildCatalogExternalIdentities(externalIDs []database.CatalogExternalID) []
 }
 
 func buildCatalogSourceEvidence(sources []database.MetadataSource) []CatalogSourceEvidence {
+	if sources == nil {
+		return []CatalogSourceEvidence{}
+	}
 	evidence := make([]CatalogSourceEvidence, 0, len(sources))
 	for _, source := range sources {
 		evidence = append(evidence, CatalogSourceEvidence{
@@ -434,6 +443,9 @@ func buildCatalogSourceEvidence(sources []database.MetadataSource) []CatalogSour
 }
 
 func buildCatalogFieldStates(states []database.MetadataFieldState) []CatalogFieldState {
+	if states == nil {
+		return []CatalogFieldState{}
+	}
 	fieldStates := make([]CatalogFieldState, 0, len(states))
 	for _, state := range states {
 		fieldStates = append(fieldStates, CatalogFieldState{
@@ -466,6 +478,9 @@ func buildCatalogChildSummary(rollup *database.ItemRollup) *CatalogChildSummary 
 }
 
 func buildCatalogAssetLinks(links []database.AssetItem) []CatalogAssetLink {
+	if links == nil {
+		return []CatalogAssetLink{}
+	}
 	assetLinks := make([]CatalogAssetLink, 0, len(links))
 	for _, link := range links {
 		assetLinks = append(assetLinks, CatalogAssetLink{
@@ -479,6 +494,34 @@ func buildCatalogAssetLinks(links []database.AssetItem) []CatalogAssetLink {
 		})
 	}
 	return assetLinks
+}
+
+func ensureCatalogListItems(items []CatalogListItem) []CatalogListItem {
+	if items == nil {
+		return []CatalogListItem{}
+	}
+	return items
+}
+
+func ensureCatalogSeasonDetails(items []CatalogSeasonDetail) []CatalogSeasonDetail {
+	if items == nil {
+		return []CatalogSeasonDetail{}
+	}
+	return items
+}
+
+func ensureCatalogEpisodeDetails(items []CatalogEpisodeDetail) []CatalogEpisodeDetail {
+	if items == nil {
+		return []CatalogEpisodeDetail{}
+	}
+	return items
+}
+
+func ensureCatalogAssetDetails(items []CatalogAssetDetail) []CatalogAssetDetail {
+	if items == nil {
+		return []CatalogAssetDetail{}
+	}
+	return items
 }
 
 func summarizeJSON(raw string) any {
@@ -507,4 +550,13 @@ func normalizeGovernanceStatus(status string) string {
 		return GovernancePending
 	}
 	return status
+}
+
+func normalizeCatalogType(itemType string) string {
+	itemType = strings.TrimSpace(itemType)
+	legacySeriesType := "sh" + "ow"
+	if itemType == legacySeriesType {
+		return ItemTypeSeries
+	}
+	return itemType
 }
