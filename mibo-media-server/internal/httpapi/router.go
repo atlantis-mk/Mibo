@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/atlan/mibo-media-server/internal/auth"
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
@@ -34,6 +35,7 @@ type Router struct {
 	db       *gorm.DB
 	storage  *providers.Registry
 	auth     *auth.Service
+	catalog  *catalog.Service
 	library  *library.Service
 	listener *listener.Service
 	jobs     *jobs.Service
@@ -55,7 +57,11 @@ type homeDiscoveryResponse struct {
 func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service, args ...any) http.Handler {
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
 	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
+	var catalogSvc *catalog.Service
 	for _, arg := range args {
+		if provided, ok := arg.(*catalog.Service); ok && provided != nil {
+			catalogSvc = provided
+		}
 		if provided, ok := arg.(*schedule.Service); ok && provided != nil {
 			scheduleSvc = provided
 		}
@@ -68,6 +74,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 		db:       db,
 		storage:  registry,
 		auth:     authSvc,
+		catalog:  catalogSvc,
 		library:  librarySvc,
 		listener: listenerSvc,
 		jobs:     jobsSvc,
@@ -97,6 +104,9 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/system/info", router.handleSystemInfo)
 	mux.HandleFunc("GET /api/v1/settings/catalog-migration", router.handleGetCatalogMigrationSettings)
 	mux.HandleFunc("PUT /api/v1/settings/catalog-migration", router.handleUpdateCatalogMigrationSettings)
+	mux.HandleFunc("POST /api/v1/catalog-migration/backfill", router.handleQueueCatalogLegacyBackfill)
+	mux.HandleFunc("GET /api/v1/catalog-migration/runs", router.handleListCatalogMigrationRuns)
+	mux.HandleFunc("GET /api/v1/catalog-migration/runs/{id}", router.handleGetCatalogMigrationRun)
 	mux.HandleFunc("GET /api/v1/settings/metadata", router.handleGetMetadataSettings)
 	mux.HandleFunc("PUT /api/v1/settings/metadata", router.handleUpdateMetadataSettings)
 	mux.HandleFunc("GET /api/v1/settings/scan", router.handleGetScanSettings)

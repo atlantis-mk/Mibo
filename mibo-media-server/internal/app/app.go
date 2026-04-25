@@ -55,7 +55,7 @@ func New(_ context.Context, cfg config.Config) (*App, error) {
 	progressSvc := progress.NewService(db, searchSvc)
 	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, catalogSvc, searchSvc, scheduleSvc, listenerSvc)
 
-	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, scheduleSvc, listenerSvc)
+	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, scheduleSvc, listenerSvc)
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,
