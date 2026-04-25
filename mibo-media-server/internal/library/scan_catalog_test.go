@@ -14,6 +14,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
 )
 
@@ -120,6 +121,196 @@ func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) 
 	}
 	if assetItems[1].Role != "version" {
 		t.Fatalf("expected duplicate slot link to use version role, got %#v", assetItems[1])
+	}
+}
+
+func TestRunSyncLibraryMarksMissingInventoryWithoutDeletingCatalogItem(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	filePath := filepath.Join(moviesRoot, "Movie A (2024)", "Movie.A.2024.mkv")
+	mustWriteFixtureFile(t, filePath)
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run initial movie sync: %v", err)
+	}
+	if err := os.Remove(filePath); err != nil {
+		t.Fatalf("remove scanned movie file: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run missing-file sync: %v", err)
+	}
+
+	assertTableCount(t, ctx, db, &database.CatalogItem{}, 1)
+	assertTableCount(t, ctx, db, &database.InventoryFile{}, 1)
+	assertTableCount(t, ctx, db, &database.MediaAsset{}, 1)
+	assertTableCount(t, ctx, db, &database.AssetItem{}, 1)
+	assertTableCount(t, ctx, db, &database.AssetFile{}, 1)
+	assertTableCount(t, ctx, db, &database.MetadataSource{}, 1)
+	assertTableCount(t, ctx, db, &database.MediaItem{}, 0)
+	assertTableCount(t, ctx, db, &database.MediaFile{}, 0)
+
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).
+		Where("library_id = ? AND type = ?", movieLibrary.ID, catalog.ItemTypeMovie).
+		First(&item).Error; err != nil {
+		t.Fatalf("load movie catalog item: %v", err)
+	}
+	if item.AvailabilityStatus != catalog.AvailabilityMissing {
+		t.Fatalf("expected missing movie availability after delete, got %#v", item)
+	}
+	if item.DeletedAt != nil {
+		t.Fatalf("expected movie catalog item to remain undeleted, got deleted_at=%v", item.DeletedAt)
+	}
+
+	var file database.InventoryFile
+	if err := db.WithContext(ctx).
+		Where("library_id = ?", movieLibrary.ID).
+		First(&file).Error; err != nil {
+		t.Fatalf("load inventory file: %v", err)
+	}
+	if file.Status != "missing" {
+		t.Fatalf("expected missing inventory status after delete, got %#v", file)
+	}
+	if file.DeletedAt != nil {
+		t.Fatalf("expected inventory file to remain undeleted, got deleted_at=%v", file.DeletedAt)
+	}
+
+	var asset database.MediaAsset
+	if err := db.WithContext(ctx).
+		Where("library_id = ?", movieLibrary.ID).
+		First(&asset).Error; err != nil {
+		t.Fatalf("load media asset: %v", err)
+	}
+	if asset.Status != "missing" {
+		t.Fatalf("expected missing asset status after delete, got %#v", asset)
+	}
+	if asset.DeletedAt != nil {
+		t.Fatalf("expected media asset to remain undeleted, got deleted_at=%v", asset.DeletedAt)
+	}
+}
+
+func TestRunSyncLibraryKeepsEpisodeAvailableWhenAnotherVersionRemains(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	firstPath := filepath.Join(showsRoot, "Show One", "Season 1", "Show.One.S01E02.mkv")
+	secondPath := filepath.Join(showsRoot, "Show One", "Season 1", "Show.One.S01E02.Directors.Cut.mkv")
+	mustWriteFixtureFile(t, firstPath)
+	mustWriteFixtureFile(t, secondPath)
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run initial show sync: %v", err)
+	}
+	if err := os.Remove(firstPath); err != nil {
+		t.Fatalf("remove first version file: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run version delete sync: %v", err)
+	}
+
+	var episode database.CatalogItem
+	if err := db.WithContext(ctx).
+		Where("library_id = ? AND type = ?", showLibrary.ID, catalog.ItemTypeEpisode).
+		First(&episode).Error; err != nil {
+		t.Fatalf("load episode catalog item: %v", err)
+	}
+	if episode.AvailabilityStatus != catalog.AvailabilityAvailable {
+		t.Fatalf("expected episode to stay available while another version remains, got %#v", episode)
+	}
+
+	var files []database.InventoryFile
+	if err := db.WithContext(ctx).
+		Where("library_id = ?", showLibrary.ID).
+		Order("storage_path asc").
+		Find(&files).Error; err != nil {
+		t.Fatalf("list inventory files: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected two inventory files to remain recorded, got %#v", files)
+	}
+	if files[0].Status != "missing" && files[1].Status != "missing" {
+		t.Fatalf("expected deleted version to be marked missing, got %#v", files)
+	}
+	if files[0].Status != "available" && files[1].Status != "available" {
+		t.Fatalf("expected surviving version to remain available, got %#v", files)
+	}
+
+	var assets []database.MediaAsset
+	if err := db.WithContext(ctx).
+		Where("library_id = ?", showLibrary.ID).
+		Order("id asc").
+		Find(&assets).Error; err != nil {
+		t.Fatalf("list media assets: %v", err)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("expected two media assets to remain recorded, got %#v", assets)
+	}
+	if assets[0].Status != "missing" && assets[1].Status != "missing" {
+		t.Fatalf("expected one version asset to be marked missing, got %#v", assets)
+	}
+	if assets[0].Status != "available" && assets[1].Status != "available" {
+		t.Fatalf("expected one version asset to remain available, got %#v", assets)
+	}
+}
+
+func TestRunSyncLibraryReusesStableIdentityCatalogRowsOnRename(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, svc, libraryRecord := newIdentityScanService(t)
+	provider := &stableIdentityProvider{objects: [][]storage.Object{
+		{{Name: "MovieA.2024.mkv", Path: "/library/MovieA.2024.mkv", Size: 2048, StableIdentity: "provider-object-1", Modified: timePtr(time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))}},
+		{{Name: "Renamed.Movie.2024.mkv", Path: "/library/Renamed.Movie.2024.mkv", Size: 2048, StableIdentity: "provider-object-1", Modified: timePtr(time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))}},
+	}}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
+		t.Fatalf("run initial scan: %v", err)
+	}
+
+	var firstFile database.InventoryFile
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&firstFile).Error; err != nil {
+		t.Fatalf("load first inventory file: %v", err)
+	}
+	var firstAsset database.MediaAsset
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&firstAsset).Error; err != nil {
+		t.Fatalf("load first media asset: %v", err)
+	}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
+		t.Fatalf("run rename scan: %v", err)
+	}
+
+	assertTableCount(t, ctx, db, &database.InventoryFile{}, 1)
+	assertTableCount(t, ctx, db, &database.MediaAsset{}, 1)
+	assertTableCount(t, ctx, db, &database.AssetFile{}, 1)
+
+	var file database.InventoryFile
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&file).Error; err != nil {
+		t.Fatalf("reload inventory file: %v", err)
+	}
+	if file.ID != firstFile.ID {
+		t.Fatalf("expected stable identity rename to reuse inventory file id %d, got %d", firstFile.ID, file.ID)
+	}
+	if file.StoragePath != "/library/Renamed.Movie.2024.mkv" {
+		t.Fatalf("expected reused inventory file to move to renamed path, got %#v", file)
+	}
+
+	var asset database.MediaAsset
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&asset).Error; err != nil {
+		t.Fatalf("reload media asset: %v", err)
+	}
+	if asset.ID != firstAsset.ID {
+		t.Fatalf("expected stable identity rename to reuse asset id %d, got %d", firstAsset.ID, asset.ID)
+	}
+	if asset.Status != "available" {
+		t.Fatalf("expected reused asset to stay available after rename, got %#v", asset)
 	}
 }
 
