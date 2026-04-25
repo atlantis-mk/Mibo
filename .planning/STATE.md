@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-04-25T07:38:07.933Z"
-last_activity: "2026-04-25 - Completed 13-02 backfill trigger and worker dispatch"
+stopped_at: Completed 13-03-PLAN.md
+last_updated: "2026-04-25T07:51:24.207Z"
+last_activity: "2026-04-25 - Completed 13-03 legacy movie backfill mapping"
 progress:
   total_phases: 9
   completed_phases: 1
-  total_plans: 11
-  completed_plans: 8
-  percent: 73
+  total_plans: 18
+  completed_plans: 9
+  percent: 50
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-25)
 ## Current Position
 
 Phase: 13 - Legacy Backfill Into Catalog Kernel
-Plan: 3 of 5
-Status: Ready for 13-03
-Last activity: 2026-04-25 - Completed 13-02 backfill trigger and worker dispatch
+Plan: 4 of 5
+Status: Ready to execute
+Last activity: 2026-04-25 - Completed 13-03 legacy movie backfill mapping
 
-Progress: [███████░░░] 73%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [███████░░░] 73%
 | 11 | 5 | - | - |
 | Phase 13 P01 | 8 min | 2 tasks | 4 files |
 | Phase 13 P02 | 12 min | 2 tasks | 7 files |
+| Phase 13 P03 | 10 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Recent decisions affecting current work:
 - Reuse queued or running backfill jobs by job_key before creating a duplicate operator-visible run.
 - Return typed LegacyBackfillRun DTOs from queue/list/detail APIs instead of exposing raw jobs rows to operators.
 - Validate library-scoped worker payloads against the persisted run scope before advancing run lifecycle state.
+- Reuse legacy movies by library plus source_path and reuse assets by the item/file link tuple so reruns stay idempotent.
+- Persist only compact provider provenance JSON for migrated movie metadata evidence instead of copying raw legacy blobs.
+- Reuse selected item images and provider metadata rows on rerun so migrated movie artwork and evidence remain catalog-owned without duplication.
 
 ### Pending Todos
 
@@ -116,8 +120,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T07:38:07.928Z
-Stopped at: Completed 13-02-PLAN.md
+Last session: 2026-04-25T07:51:24.199Z
+Stopped at: Completed 13-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25

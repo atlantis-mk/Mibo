@@ -12,7 +12,7 @@
 
 ### Migration
 
-- [ ] **MIGR-01**: Administrator can run an idempotent backfill that maps legacy movies, series, seasons, episodes, files, artwork, external IDs, and progress into the catalog kernel.
+- [x] **MIGR-01**: Administrator can run an idempotent backfill that maps legacy movies, series, seasons, episodes, files, artwork, external IDs, and progress into the catalog kernel.
 - [x] **MIGR-02**: Administrator can inspect a migration report that lists successful rows, skipped rows, conflicts, orphan files, and duplicate episode candidates.
 - [x] **MIGR-03**: System can safely run catalog backfill repeatedly without creating duplicate catalog items, assets, files, or links.
 - [ ] **MIGR-04**: Administrator can keep a read-only legacy migration path until cleanup is complete, while normal runtime no longer depends on legacy main-path writes.
