@@ -13,8 +13,8 @@
 ### Migration
 
 - [ ] **MIGR-01**: Administrator can run an idempotent backfill that maps legacy movies, series, seasons, episodes, files, artwork, external IDs, and progress into the catalog kernel.
-- [ ] **MIGR-02**: Administrator can inspect a migration report that lists successful rows, skipped rows, conflicts, orphan files, and duplicate episode candidates.
-- [ ] **MIGR-03**: System can safely run catalog backfill repeatedly without creating duplicate catalog items, assets, files, or links.
+- [x] **MIGR-02**: Administrator can inspect a migration report that lists successful rows, skipped rows, conflicts, orphan files, and duplicate episode candidates.
+- [x] **MIGR-03**: System can safely run catalog backfill repeatedly without creating duplicate catalog items, assets, files, or links.
 - [ ] **MIGR-04**: Administrator can keep a read-only legacy migration path until cleanup is complete, while normal runtime no longer depends on legacy main-path writes.
 
 ### Scanner
@@ -93,8 +93,8 @@
 | KERN-02 | Phase 12 | Pending |
 | PROD-01 | Phase 12 | Pending |
 | MIGR-01 | Phase 13 | Pending |
-| MIGR-02 | Phase 13 | Pending |
-| MIGR-03 | Phase 13 | Pending |
+| MIGR-02 | Phase 13 | Validated in 13-01 |
+| MIGR-03 | Phase 13 | Validated in 13-01 |
 | SCAN-01 | Phase 14 | Pending |
 | SCAN-02 | Phase 14 | Pending |
 | SCAN-03 | Phase 14 | Pending |

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 12 complete; Phase 13 ready to plan
-last_updated: "2026-04-25T07:00:48.634Z"
-last_activity: "2026-04-25 - Completed Phase 12: Catalog Kernel Contracts & Migration Guards"
+status: executing
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-04-25T07:18:44.071Z"
+last_activity: "2026-04-25 - Completed 13-01 durable backfill report contracts"
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 11
-  completed_plans: 6
-  percent: 55
+  completed_plans: 7
+  percent: 64
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-25)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** v3 剧集元数据治理 catalog kernel 迁移
+**Current focus:** Phase 13 — Legacy Backfill Into Catalog Kernel
 
 ## Current Position
 
 Phase: 13 - Legacy Backfill Into Catalog Kernel
-Plan: Not started
-Status: Ready to plan Phase 13
-Last activity: 2026-04-25 - Completed Phase 12: Catalog Kernel Contracts & Migration Guards
+Plan: 2 of 5
+Status: Ready for 13-02
+Last activity: 2026-04-25 - Completed 13-01 durable backfill report contracts
 
-Progress: [#---------] 11%
+Progress: [██████░░░░] 64%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [#---------] 11%
 | Phase 11-event-driven-refresh-hardening P04 | 6min | 2 tasks | 3 files |
 | Phase 11-event-driven-refresh-hardening P05 | 9min | 2 tasks | 5 files |
 | 11 | 5 | - | - |
+| Phase 13 P01 | 8 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting current work:
 - Keep listener refresh and reconcile guards keyed at library scope so completed historical jobs can remain in the jobs table.
 - Use the Phase A catalog kernel as the target architecture for v3 instead of patching legacy `MediaItem` semantics further.
 - Migrate catalog governance in reversible steps: contract and backfill first, scanner and metadata writes next, API/playback/frontend reads after, legacy cleanup last.
+- Keep legacy backfill run creation inside catalog service helpers that require a non-zero triggered_by_user_id.
+- Derive run counters from persisted CatalogMigrationEntry rows during finalization instead of trusting caller-supplied totals.
+- Sort run detail entries by entry_type, library_id, legacy IDs, and id so report output stays deterministic across reruns.
 
 ### Pending Todos
 
@@ -108,8 +112,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-24T11:06:26.818Z
-Stopped at: Phase 12 complete; Phase 13 ready to plan
+Last session: 2026-04-25T07:18:44.066Z
+Stopped at: Completed 13-01-PLAN.md
 Resume file: None
 
 **Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25
