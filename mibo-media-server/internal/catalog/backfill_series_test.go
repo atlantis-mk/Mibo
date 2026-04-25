@@ -304,7 +304,7 @@ func TestLegacyBackfillSeriesConflicts(t *testing.T) {
 		MatchStatus:   "pending",
 		Status:        "ready",
 	}
-	for _, legacyEpisode := range []*database.MediaItem{&duplicateA, &duplicateB, &fallbackTitleOnly, &missingIdentity} {
+	for _, legacyEpisode := range []*database.MediaItem{&duplicateB, &duplicateA, &fallbackTitleOnly, &missingIdentity} {
 		if err := svc.db.WithContext(ctx).Create(legacyEpisode).Error; err != nil {
 			t.Fatalf("create legacy episode %q: %v", legacyEpisode.Title, err)
 		}
