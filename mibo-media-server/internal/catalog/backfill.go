@@ -121,11 +121,106 @@ func (s *Service) RunLegacyBackfill(ctx context.Context, payload LegacyBackfillP
 	if payload.RunID == 0 {
 		return errors.New("run id is required")
 	}
-	if _, err := s.markLegacyBackfillRunRunning(ctx, payload.RunID, payload.LibraryID); err != nil {
+	run, err := s.markLegacyBackfillRunRunning(ctx, payload.RunID, payload.LibraryID)
+	if err != nil {
 		return err
 	}
-	_, err := s.finalizeLegacyBackfillRun(ctx, payload.RunID, LegacyBackfillStatusCompleted, "")
+
+	err = s.executeLegacyBackfill(ctx, run)
+	status := LegacyBackfillStatusCompleted
+	fatalError := ""
+	if err != nil {
+		status = LegacyBackfillStatusFailed
+		fatalError = err.Error()
+	}
+
+	if _, finalizeErr := s.finalizeLegacyBackfillRun(ctx, payload.RunID, status, fatalError); finalizeErr != nil {
+		if err != nil {
+			return fmt.Errorf("%w; finalize legacy backfill run: %v", err, finalizeErr)
+		}
+		return finalizeErr
+	}
+
 	return err
+}
+
+func (s *Service) executeLegacyBackfill(ctx context.Context, run database.CatalogMigrationRun) error {
+	libraries, err := s.loadLegacyBackfillLibraries(ctx, run)
+	if err != nil {
+		return err
+	}
+	if err := s.backfillMovies(ctx, run); err != nil {
+		return err
+	}
+	if err := s.backfillSeries(ctx, run); err != nil {
+		return err
+	}
+	if err := s.backfillProgress(ctx, run); err != nil {
+		return err
+	}
+	for _, library := range libraries {
+		if err := s.RefreshLibraryProjection(ctx, library.ID, library.RootPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) loadLegacyBackfillLibraries(ctx context.Context, run database.CatalogMigrationRun) ([]database.Library, error) {
+	if run.ScopeKind == LegacyBackfillScopeLibrary && run.LibraryID != nil {
+		var library database.Library
+		if err := s.db.WithContext(ctx).First(&library, *run.LibraryID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return []database.Library{library}, nil
+	}
+
+	libraryIDs := make(map[uint]struct{})
+	var mediaItemLibraryIDs []uint
+	if err := s.db.WithContext(ctx).
+		Model(&database.MediaItem{}).
+		Where("deleted_at IS NULL").
+		Distinct("library_id").
+		Pluck("library_id", &mediaItemLibraryIDs).Error; err != nil {
+		return nil, err
+	}
+	for _, libraryID := range mediaItemLibraryIDs {
+		if libraryID != 0 {
+			libraryIDs[libraryID] = struct{}{}
+		}
+	}
+
+	var mediaFileLibraryIDs []uint
+	if err := s.db.WithContext(ctx).
+		Model(&database.MediaFile{}).
+		Where("deleted_at IS NULL").
+		Distinct("library_id").
+		Pluck("library_id", &mediaFileLibraryIDs).Error; err != nil {
+		return nil, err
+	}
+	for _, libraryID := range mediaFileLibraryIDs {
+		if libraryID != 0 {
+			libraryIDs[libraryID] = struct{}{}
+		}
+	}
+
+	if len(libraryIDs) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]uint, 0, len(libraryIDs))
+	for libraryID := range libraryIDs {
+		ids = append(ids, libraryID)
+	}
+
+	var libraries []database.Library
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Order("id asc").Find(&libraries).Error; err != nil {
+		return nil, err
+	}
+	return libraries, nil
 }
 
 func (s *Service) ListLegacyBackfillRuns(ctx context.Context) ([]LegacyBackfillRun, error) {

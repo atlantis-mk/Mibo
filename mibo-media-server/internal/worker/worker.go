@@ -225,7 +225,31 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
 			return err
 		}
-		return r.catalog.RunLegacyBackfill(ctx, payload)
+		if err := r.catalog.RunLegacyBackfill(ctx, payload); err != nil {
+			return err
+		}
+		if r.settings == nil {
+			return nil
+		}
+		run, err := r.catalog.GetLegacyBackfillRun(ctx, payload.RunID)
+		if err != nil {
+			return err
+		}
+		state, err := r.settings.GetCatalogMigrationState(ctx)
+		if err != nil {
+			return err
+		}
+		completedAt := run.FinishedAt
+		if completedAt == nil {
+			now := time.Now().UTC()
+			completedAt = &now
+		}
+		_, err = r.settings.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{
+			CatalogBackfillCompletedAt: completedAt,
+			CatalogReadEnabled:         state.CatalogReadEnabled,
+			LegacyCleanupCompletedAt:   state.LegacyCleanupCompletedAt,
+		})
+		return err
 	case "probe_media_file":
 		var payload struct {
 			MediaFileID uint `json:"media_file_id"`
