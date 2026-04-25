@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v3
-milestone_name: 剧集元数据治理 catalog kernel 迁移
-status: ready_to_plan
-stopped_at: milestone v3 started; Phase 12 not planned yet
-last_updated: "2026-04-25T04:19:16Z"
-last_activity: 2026-04-25
+milestone: v1.0
+milestone_name: milestone
+status: planning
+stopped_at: Phase 12 complete; Phase 13 ready to plan
+last_updated: "2026-04-25T07:00:48.634Z"
+last_activity: "2026-04-25 - Completed Phase 12: Catalog Kernel Contracts & Migration Guards"
 progress:
   total_phases: 9
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 11
+  completed_plans: 6
+  percent: 55
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-04-25)
 
 ## Current Position
 
-Phase: 12 - Catalog Kernel Contracts & Migration Guards
+Phase: 13 - Legacy Backfill Into Catalog Kernel
 Plan: Not started
-Status: Ready to plan Phase 12
-Last activity: 2026-04-25 - Started milestone v3: 剧集元数据治理 catalog kernel 迁移
+Status: Ready to plan Phase 13
+Last activity: 2026-04-25 - Completed Phase 12: Catalog Kernel Contracts & Migration Guards
 
-Progress: [----------] 0%
+Progress: [#---------] 11%
 
 ## Performance Metrics
 
@@ -109,7 +109,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-04-24T11:06:26.818Z
-Stopped at: milestone v3 started; Phase 12 not planned yet
+Stopped at: Phase 12 complete; Phase 13 ready to plan
 Resume file: None
 
-**Planned Phase:** 12 (catalog-kernel-contracts-migration-guards) — 0 plans — 2026-04-25T04:11:27Z
+**Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25
+
+**Planned Phase:** 13 (Legacy Backfill Into Catalog Kernel) — 5 plans — 2026-04-25T07:00:48.629Z

@@ -34,8 +34,21 @@
 <details open>
 <summary>◆ v3 剧集元数据治理 catalog kernel 迁移 (Phases 12-20) — PLANNED</summary>
 
-- [ ] Phase 12: Catalog Kernel Contracts & Migration Guards — Goal: freeze DTOs, status flags, projection contracts, and minimum indexes before any cutover work. Requirements: KERN-01, KERN-02, PROD-01. Success criteria: catalog DTOs are explicit; migration flags exist; projection refresh entrypoints are defined; existing tests still boot empty and legacy databases.
-- [ ] Phase 13: Legacy Backfill Into Catalog Kernel — Goal: idempotently convert existing `MediaItem` / `MediaFile` / progress data into catalog items, assets, inventory files, images, external IDs, and migration reports. Requirements: MIGR-01, MIGR-02, MIGR-03. Success criteria: backfill is repeat-safe; movies and series hierarchy map correctly; conflicts are reported; all legacy playable rows map to assets.
+- [x] Phase 12: Catalog Kernel Contracts & Migration Guards (6/6 plans) — completed 2026-04-25. Goal: freeze DTOs, status flags, projection contracts, and minimum indexes before any cutover work. Requirements: KERN-01, KERN-02, PROD-01. **Plans:** 6 plans. Success criteria: catalog DTOs are explicit; migration flags exist; projection refresh entrypoints are defined; existing tests still boot empty and legacy databases.
+   Plans:
+   - [x] 12-01-PLAN.md — Freeze explicit catalog DTO contracts for list/detail/season/episode/asset/governance responses.
+   - [x] 12-02-PLAN.md — Add durable catalog migration state settings and authenticated observability endpoints.
+   - [x] 12-03-PLAN.md — Define catalog projection refresh queue/worker entrypoints and scan-trigger wiring.
+   - [x] 12-04-PLAN.md — Add minimum composite indexes plus empty/legacy startup regression coverage.
+   - [x] 12-05-PLAN.md — Close DTO summary/value leakage so frozen catalog contracts never expose raw provider blobs.
+   - [x] 12-06-PLAN.md — Canonicalize projection rebuild search documents for legacy `show` rows and blank availability states.
+- [ ] Phase 13: Legacy Backfill Into Catalog Kernel — Goal: idempotently convert existing `MediaItem` / `MediaFile` / progress data into catalog items, assets, inventory files, images, external IDs, and migration reports. Requirements: MIGR-01, MIGR-02, MIGR-03. **Plans:** 5 plans. Success criteria: backfill is repeat-safe; movies and series hierarchy map correctly; conflicts are reported; all legacy playable rows map to assets.
+   Plans:
+   - [ ] 13-01-PLAN.md — Define durable backfill run/report schema and catalog service contracts.
+   - [ ] 13-02-PLAN.md — Add authenticated backfill trigger/report APIs and worker dispatch.
+   - [ ] 13-03-PLAN.md — Backfill legacy movies into catalog items, inventory files, assets, images, and provider identity.
+   - [ ] 13-04-PLAN.md — Backfill legacy series hierarchy with duplicate-slot and orphan-file reporting.
+   - [ ] 13-05-PLAN.md — Migrate progress, refresh projections, and finalize repeat-safe backfill runs.
 - [ ] Phase 14: Scanner Writes Catalog Assets — Goal: rebuild scanner writes so new scans create inventory files, media assets, asset files, catalog items, and asset-item links directly. Requirements: SCAN-01, SCAN-02, SCAN-03. Success criteria: scans no longer create legacy media rows; movies and episodes create catalog rows; multi-episode and multi-version files link correctly; deletes update availability only.
 - [ ] Phase 15: Series-Level Metadata Governance Engine — Goal: match and refresh metadata from the series root, generating governed seasons and episodes from provider evidence. Requirements: META-01, META-02, META-03, META-04. Success criteria: series match writes external IDs and sources; seasons/episodes are generated idempotently; locked fields are preserved; images/people/tags normalize into catalog tables.
 - [ ] Phase 16: Catalog API, Search, and Progress Cutover — Goal: expose catalog-backed items, series seasons, governance workspace, search, discovery, and progress APIs. Requirements: API-01, API-02, API-03, API-04. Success criteria: list/detail/search use catalog projections; series seasons come from catalog hierarchy; governance reads field states/sources/images/assets; progress writes `user_item_data`.
@@ -61,8 +74,8 @@
 | 9. Trailer Discovery & Playback | v2 Product Discovery And Operations | 1/1 | Complete | 2026-04-24 |
 | 10. Scheduled Operations Control | v2 Product Discovery And Operations | 7/7 | Complete | 2026-04-24 |
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 5/5 | Complete | 2026-04-24 |
-| 12. Catalog Kernel Contracts & Migration Guards | v3 Catalog Kernel Migration | 0/0 | Planned | |
-| 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 0/0 | Planned | |
+| 12. Catalog Kernel Contracts & Migration Guards | v3 Catalog Kernel Migration | 6/6 | Complete | 2026-04-25 |
+| 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 0/5 | Planned | |
 | 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 0/0 | Planned | |
 | 15. Series-Level Metadata Governance Engine | v3 Catalog Kernel Migration | 0/0 | Planned | |
 | 16. Catalog API, Search, and Progress Cutover | v3 Catalog Kernel Migration | 0/0 | Planned | |
