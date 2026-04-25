@@ -15,8 +15,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
-	openliststorage "github.com/atlan/mibo-media-server/internal/storage/openlist"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	openliststorage "github.com/atlan/mibo-media-server/internal/storage/openlist"
 	"gorm.io/gorm"
 )
 
@@ -37,12 +37,12 @@ func TestRunSyncLibraryUsesStableIdentityEvidence(t *testing.T) {
 		t.Fatalf("second sync: %v", err)
 	}
 
-	var files []database.MediaFile
+	var files []database.InventoryFile
 	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("id asc").Find(&files).Error; err != nil {
-		t.Fatalf("list media files: %v", err)
+		t.Fatalf("list inventory files: %v", err)
 	}
 	if len(files) != 1 {
-		t.Fatalf("expected one persisted media file identity, got %d", len(files))
+		t.Fatalf("expected one persisted inventory file identity, got %d", len(files))
 	}
 	if files[0].StoragePath != "/library/Renamed.Movie.2024.mkv" {
 		t.Fatalf("expected storage path to move with stable identity, got %q", files[0].StoragePath)
@@ -97,7 +97,7 @@ func TestOpenListAdapterPreservesIdentityEvidence(t *testing.T) {
 	}
 }
 
-func TestRunSyncLibraryCreatesFallbackCandidateWithoutPathRebind(t *testing.T) {
+func TestRunSyncLibraryUpsertsInventoryFileForSamePathRescan(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -114,34 +114,25 @@ func TestRunSyncLibraryCreatesFallbackCandidateWithoutPathRebind(t *testing.T) {
 		t.Fatalf("second sync: %v", err)
 	}
 
-	var files []database.MediaFile
+	var files []database.InventoryFile
 	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("id asc").Find(&files).Error; err != nil {
-		t.Fatalf("list media files: %v", err)
+		t.Fatalf("list inventory files: %v", err)
 	}
-	if len(files) != 2 {
-		t.Fatalf("expected deleted candidate plus provisional replacement, got %d rows", len(files))
+	if len(files) != 1 {
+		t.Fatalf("expected same-path rescans to update one inventory file row, got %d rows", len(files))
 	}
-	if files[0].DeletedAt == nil {
-		t.Fatalf("expected original file row to be soft deleted when only path matched")
+	if files[0].DeletedAt != nil {
+		t.Fatalf("expected upserted inventory file to remain active, got deleted_at=%v", files[0].DeletedAt)
 	}
-	if files[0].MediaItemID == nil {
-		t.Fatalf("expected deleted candidate to keep prior media item for later reconciliation")
+	if files[0].SizeBytes != 4096 {
+		t.Fatalf("expected rescan to refresh size bytes, got %d", files[0].SizeBytes)
 	}
-	if files[1].DeletedAt != nil {
-		t.Fatalf("expected new fallback candidate to stay active, got deleted_at=%v", files[1].DeletedAt)
-	}
-	if files[1].MediaItemID != nil {
-		t.Fatalf("expected fallback candidate to remain detached from playback continuity, got media_item_id=%v", *files[1].MediaItemID)
-	}
-	if files[1].IdentityStatus != mediaFileIdentityStatusProvisional {
-		t.Fatalf("expected provisional identity status, got %q", files[1].IdentityStatus)
-	}
-	if files[1].ReviewStatus != mediaFileReviewStatusPending {
-		t.Fatalf("expected pending review status, got %q", files[1].ReviewStatus)
+	if files[0].HashesJSON != `{"sha256":"new"}` {
+		t.Fatalf("expected rescan to refresh hashes, got %q", files[0].HashesJSON)
 	}
 }
 
-func TestRunSyncLibraryPreservesMatchedMetadataAcrossRescan(t *testing.T) {
+func TestRunSyncLibraryReusesCatalogItemAcrossRescan(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -154,49 +145,30 @@ func TestRunSyncLibraryPreservesMatchedMetadataAcrossRescan(t *testing.T) {
 		t.Fatalf("first sync: %v", err)
 	}
 
-	var item database.MediaItem
+	var item database.CatalogItem
 	if err := db.WithContext(ctx).
-		Where("library_id = ? AND source_path = ?", libraryRecord.ID, "/library/MovieA.2024.mkv").
+		Where("library_id = ? AND path = ?", libraryRecord.ID, "/library/MovieA.2024.mkv").
 		First(&item).Error; err != nil {
-		t.Fatalf("load scanned item: %v", err)
-	}
-
-	confidence := 0.98
-	if err := db.WithContext(ctx).
-		Model(&database.MediaItem{}).
-		Where("id = ?", item.ID).
-		Updates(map[string]any{
-			"title":               "A Remote Title",
-			"original_title":      "Original Remote Title",
-			"overview":            "Remote overview",
-			"poster_url":          "https://image.test/poster.jpg",
-			"metadata_provider":   "tmdb",
-			"external_id":         "movie:101",
-			"metadata_confidence": &confidence,
-			"match_status":        "matched",
-		}).Error; err != nil {
-		t.Fatalf("seed matched metadata: %v", err)
+		t.Fatalf("load scanned catalog item: %v", err)
 	}
 
 	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 
-	var stored database.MediaItem
-	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
-		t.Fatalf("reload item: %v", err)
+	var itemCount int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id = ?", libraryRecord.ID).Count(&itemCount).Error; err != nil {
+		t.Fatalf("count catalog items: %v", err)
 	}
-	if stored.Title != "A Remote Title" {
-		t.Fatalf("expected remote title to survive rescan, got %q", stored.Title)
+	if itemCount != 1 {
+		t.Fatalf("expected one catalog item across rescans, got %d", itemCount)
 	}
-	if stored.Overview != "Remote overview" {
-		t.Fatalf("expected overview to survive rescan, got %q", stored.Overview)
+	var fileCount int64
+	if err := db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id = ?", libraryRecord.ID).Count(&fileCount).Error; err != nil {
+		t.Fatalf("count inventory files: %v", err)
 	}
-	if stored.MetadataProvider != "tmdb" || stored.ExternalID != "movie:101" {
-		t.Fatalf("expected matched metadata identity to survive rescan, got provider=%q external_id=%q", stored.MetadataProvider, stored.ExternalID)
-	}
-	if stored.MatchStatus != "matched" {
-		t.Fatalf("expected matched status to survive rescan, got %q", stored.MatchStatus)
+	if fileCount != 1 {
+		t.Fatalf("expected one inventory file across rescans, got %d", fileCount)
 	}
 }
 

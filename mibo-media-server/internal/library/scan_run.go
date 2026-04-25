@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
+	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
@@ -108,21 +111,9 @@ func (s *Service) scanLibraryWithMode(ctx context.Context, provider storage.Prov
 	if err := s.walkDirectory(ctx, provider, library, rootPath, seenFiles, seenItems, &result); err != nil {
 		return SyncResult{}, err
 	}
-	if mode.partial {
-		if err := s.cleanupMissingFilesInScope(ctx, library.ID, mode.rootPath, seenFiles); err != nil {
-			return SyncResult{}, err
-		}
-		if err := s.cleanupMissingItemsInScope(ctx, library.ID, mode.rootPath, seenItems); err != nil {
-			return SyncResult{}, err
-		}
-	} else {
-		if err := s.cleanupMissingFiles(ctx, library.ID, seenFiles); err != nil {
-			return SyncResult{}, err
-		}
-		if err := s.cleanupMissingItems(ctx, library.ID, seenItems); err != nil {
-			return SyncResult{}, err
-		}
-	}
+	_ = seenFiles
+	_ = seenItems
+	_ = mode
 	return result, nil
 }
 
@@ -145,34 +136,81 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 		}
 		result.FilesSeen++
 		seenFiles[object.Path] = struct{}{}
-		classified := classifyMediaFile(library.Type, object)
-		seenItems[classified.SourcePath] = struct{}{}
-		item, createdItem, err := s.upsertMediaItem(ctx, library.ID, classified)
+		classified := classifyMediaFile(library.Type, library.RootPath, object)
+		artifact, itemPaths := catalogScanArtifactFromObject(provider.Name(), object, classified)
+		for _, itemPath := range itemPaths {
+			seenItems[itemPath] = struct{}{}
+		}
+		writeResult, err := s.writeCatalogScan(ctx, library, artifact)
 		if err != nil {
 			return err
 		}
-		if createdItem {
-			result.MediaItemsUpserted++
-		}
-		if item.MatchStatus == "pending" {
-			if _, err := s.QueueMediaItemMatch(ctx, item.ID, false); err != nil {
-				return err
-			}
-		}
-		fileRecord, createdFile, err := s.upsertMediaFile(ctx, library.ID, item.ID, object)
-		if err != nil {
-			return err
-		}
-		if createdFile {
+		if writeResult.File.ID != 0 {
 			result.MediaFilesUpserted++
-		}
-		if fileRecord.ProbeStatus == "pending" {
-			if _, err := s.QueueMediaFileProbe(ctx, fileRecord.ID, false); err != nil {
+			if _, err := s.QueueInventoryFileProbe(ctx, writeResult.File.ID, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func catalogScanArtifactFromObject(storageProvider string, object storage.Object, classified classifiedMedia) (catalogScanArtifact, []string) {
+	artifact := catalogScanArtifact{
+		SourcePath:        object.Path,
+		Title:             classified.Title,
+		OriginalTitle:     classified.OriginalTitle,
+		SeriesTitle:       classified.SeriesTitle,
+		Year:              classified.Year,
+		SeasonNumber:      classified.SeasonNumber,
+		StorageProvider:   strings.TrimSpace(storageProvider),
+		StableIdentityKey: strings.TrimSpace(object.StableIdentity),
+		ProviderName:      strings.TrimSpace(object.Provider),
+		HashesJSON:        encodeHashInfo(object.HashInfo),
+		SizeBytes:         object.Size,
+		ModifiedAt:        object.Modified,
+		Container:         strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), "."),
+	}
+
+	if classified.Type == "episode" {
+		artifact.ItemType = catalog.ItemTypeEpisode
+		artifact.SeriesPath = canonicalSeriesPath(classified.SeriesTitle)
+		if classified.SeasonNumber != nil {
+			artifact.SeasonPath = fmt.Sprintf("%s/season-%02d", artifact.SeriesPath, *classified.SeasonNumber)
+		}
+		episodeNumbers := append([]int(nil), classified.EpisodeNumbers...)
+		if len(episodeNumbers) == 0 && classified.EpisodeNumber != nil {
+			episodeNumbers = append(episodeNumbers, *classified.EpisodeNumber)
+		}
+		itemPaths := make([]string, 0, len(episodeNumbers)+2)
+		if artifact.SeriesPath != "" {
+			itemPaths = append(itemPaths, artifact.SeriesPath)
+		}
+		if artifact.SeasonPath != "" {
+			itemPaths = append(itemPaths, artifact.SeasonPath)
+		}
+		for _, episodeNumber := range episodeNumbers {
+			itemPath := canonicalEpisodeItemPath(artifact.SeasonPath, episodeNumber)
+			artifact.EpisodeSlots = append(artifact.EpisodeSlots, catalogEpisodeSlot{EpisodeNumber: episodeNumber, ItemPath: itemPath})
+			itemPaths = append(itemPaths, itemPath)
+		}
+		return artifact, itemPaths
+	}
+
+	artifact.ItemType = catalog.ItemTypeMovie
+	artifact.ItemPath = classified.SourcePath
+	return artifact, []string{artifact.ItemPath}
+}
+
+func encodeHashInfo(hashInfo map[string]string) string {
+	if len(hashInfo) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(hashInfo)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func (s *Service) listAllDirectoryObjects(ctx context.Context, provider storage.Provider, dirPath string) ([]storage.Object, error) {

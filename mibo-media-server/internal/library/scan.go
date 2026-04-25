@@ -7,8 +7,16 @@ import (
 )
 
 var (
-	episodePattern = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:s(\d{1,2})e(\d{1,2})|(\d{1,2})x(\d{1,2}))(?:[\s._-]+.*)?$`)
-	yearPattern    = regexp.MustCompile(`(?i)(?:^|[\s._\-(])((?:19|20)\d{2})(?:$|[\s._\-)])`)
+	episodePattern             = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:s(\d{1,2})e(\d{1,2})|(\d{1,2})x(\d{1,2}))(?:[\s._-]+.*)?$`)
+	yearPattern                = regexp.MustCompile(`(?i)(?:^|[\s._\-(])((?:19|20)\d{2})(?:$|[\s._\-)])`)
+	seasonDirectoryPattern     = regexp.MustCompile(`(?i)^(?:season|s)[\s._-]*0*(\d{1,2})$|^第?\s*([0-9一二三四五六七八九十两零]+)\s*季$`)
+	episodeOnlyPattern         = regexp.MustCompile(`(?i)^(?:e|ep|episode)[\s._-]*0*(\d{1,3})(?:[\s._-]+.*)?$`)
+	numericEpisodePattern      = regexp.MustCompile(`^0*([1-9]\d{0,2})(?:[\s._-]+.*)?$`)
+	chineseEpisodePattern      = regexp.MustCompile(`^第?\s*(\d{1,3})\s*[集话話](?:[\s._-]+.*)?$`)
+	trailingEpisodePattern     = regexp.MustCompile(`(?i)^.*?[\s._-]+(?:e|ep|episode)?[\s._-]*0*([1-9]\d{0,2})(?:v\d+)?(?:[\s._-]+.*)?$`)
+	trailingSeasonTitlePattern = regexp.MustCompile(`(?i)(?:[\s._-]+(?:season[\s._-]*0*\d{1,2}|s0*\d{1,2})|第\s*[0-9一二三四五六七八九十两零]+\s*季)$`)
+	scanNoisePattern           = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(【(])(2160p|1080p|720p|480p|4k|hdr10\+?|dv|dolby[\s._-]?vision|atmos|dts(?:hd)?|truehd|aac\d?(?:\.\d)?|x26[45]|h\.?26[45]|hevc|avc|bluray|blu[\s._-]?ray|bdrip|brrip|bdrmux|remux|web[\s._-]?dl|webrip|hdtv|uhd|nf|amzn|dsnp|hmax|proper|repack|extended|unrated|limited|dual[\s._-]?audio|multi(?:sub|subs)?|sub(?:bed|s)?|dub(?:bed)?|chs|cht|eng|jpn|gb|big5)(?:$|[\s._\-)\]】])`)
+	genericMediaNamePattern    = regexp.MustCompile(`(?i)^(movie|video|feature|main|full|default|film|media|sample)$`)
 )
 
 var videoExtensions = map[string]struct{}{
@@ -40,15 +48,42 @@ const (
 )
 
 type classifiedMedia struct {
-	Type          string
-	Title         string
-	OriginalTitle string
-	SeriesTitle   string
-	Year          *int
-	SeasonNumber  *int
-	EpisodeNumber *int
-	SourcePath    string
-	Status        string
+	Type           string
+	Title          string
+	OriginalTitle  string
+	SeriesTitle    string
+	Year           *int
+	SeasonNumber   *int
+	EpisodeNumber  *int
+	EpisodeNumbers []int
+	SourcePath     string
+	Status         string
+}
+
+type catalogEpisodeSlot struct {
+	EpisodeNumber int
+	ItemPath      string
+}
+
+type catalogScanArtifact struct {
+	ItemType          string
+	ItemPath          string
+	SourcePath        string
+	SeriesPath        string
+	SeasonPath        string
+	Title             string
+	OriginalTitle     string
+	SeriesTitle       string
+	Year              *int
+	SeasonNumber      *int
+	EpisodeSlots      []catalogEpisodeSlot
+	StorageProvider   string
+	StableIdentityKey string
+	ProviderName      string
+	HashesJSON        string
+	SizeBytes         int64
+	ModifiedAt        *time.Time
+	Container         string
 }
 
 type SyncResult struct {

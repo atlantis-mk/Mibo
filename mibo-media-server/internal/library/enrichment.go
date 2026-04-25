@@ -50,3 +50,9 @@ func (s *Service) QueueMediaFileProbe(ctx context.Context, mediaFileID uint, for
 		"media_file_id": mediaFileID,
 	})
 }
+
+func (s *Service) QueueInventoryFileProbe(ctx context.Context, inventoryFileID uint, _ bool) (database.Job, error) {
+	return s.jobs.EnqueueUnique(ctx, JobKindProbeInventoryFile, fmt.Sprintf("probe_inventory_file:%d", inventoryFileID), map[string]any{
+		"inventory_file_id": inventoryFileID,
+	})
+}
