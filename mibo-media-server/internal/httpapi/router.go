@@ -6,8 +6,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/auth"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/jobs"
-	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/progress"
@@ -95,6 +95,8 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/home/latest-by-library", router.handleLatestByLibrary)
 	mux.HandleFunc("GET /api/v1/home/recently-added", router.handleRecentlyAdded)
 	mux.HandleFunc("GET /api/v1/system/info", router.handleSystemInfo)
+	mux.HandleFunc("GET /api/v1/settings/catalog-migration", router.handleGetCatalogMigrationSettings)
+	mux.HandleFunc("PUT /api/v1/settings/catalog-migration", router.handleUpdateCatalogMigrationSettings)
 	mux.HandleFunc("GET /api/v1/settings/metadata", router.handleGetMetadataSettings)
 	mux.HandleFunc("PUT /api/v1/settings/metadata", router.handleUpdateMetadataSettings)
 	mux.HandleFunc("GET /api/v1/settings/scan", router.handleGetScanSettings)
