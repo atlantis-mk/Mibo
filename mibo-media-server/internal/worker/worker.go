@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
@@ -22,6 +23,7 @@ import (
 type Runner struct {
 	cfg      config.WorkerConfig
 	jobs     *jobs.Service
+	catalog  *catalog.Service
 	library  *library.Service
 	listener *listener.Service
 	metadata *metadata.Service
@@ -48,6 +50,9 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 		interval: interval,
 	}
 	for _, arg := range args {
+		if catalogSvc, ok := arg.(*catalog.Service); ok {
+			runner.catalog = catalogSvc
+		}
 		if searchSvc, ok := arg.(*search.Service); ok {
 			runner.search = searchSvc
 		}
@@ -194,6 +199,24 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.search.ReindexLibrary(ctx, payload.LibraryID, payload.RootPath)
+	case library.JobKindCatalogRefreshItemProjection:
+		if r.catalog == nil {
+			return errors.New("catalog service unavailable")
+		}
+		var payload catalog.ItemProjectionRefreshPayload
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.catalog.RefreshItemProjection(ctx, payload.ItemID)
+	case library.JobKindCatalogRefreshLibraryProjection:
+		if r.catalog == nil {
+			return errors.New("catalog service unavailable")
+		}
+		var payload catalog.LibraryProjectionRefreshPayload
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.catalog.RefreshLibraryProjection(ctx, payload.LibraryID, payload.RootPath)
 	case "probe_media_file":
 		var payload struct {
 			MediaFileID uint `json:"media_file_id"`

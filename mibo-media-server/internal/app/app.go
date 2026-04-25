@@ -8,12 +8,13 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/auth"
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/httpapi"
 	"github.com/atlan/mibo-media-server/internal/jobs"
-	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/probe"
@@ -43,6 +44,7 @@ func New(_ context.Context, cfg config.Config) (*App, error) {
 	authSvc := auth.NewService(db)
 	jobsSvc := jobs.NewService(db)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
+	catalogSvc := catalog.NewService(db)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
 	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
 	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
@@ -51,7 +53,7 @@ func New(_ context.Context, cfg config.Config) (*App, error) {
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
 	progressSvc := progress.NewService(db, searchSvc)
-	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, searchSvc, scheduleSvc, listenerSvc)
+	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, catalogSvc, searchSvc, scheduleSvc, listenerSvc)
 
 	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, scheduleSvc, listenerSvc)
 

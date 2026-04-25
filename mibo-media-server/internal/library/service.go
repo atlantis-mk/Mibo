@@ -55,12 +55,14 @@ type targetedRefreshPayload struct {
 }
 
 const (
-	JobKindSyncLibrary           = "sync_library"
-	JobKindTargetedRefresh       = "targeted_refresh"
-	JobKindMatchMediaItem        = "match_media_item"
-	JobKindRefetchMediaItem      = "refetch_media_item"
-	JobKindReindexSearchDocument = "reindex_search_document"
-	JobKindReindexLibrarySearch  = "reindex_library_search"
+	JobKindSyncLibrary                     = "sync_library"
+	JobKindTargetedRefresh                 = "targeted_refresh"
+	JobKindMatchMediaItem                  = "match_media_item"
+	JobKindRefetchMediaItem                = "refetch_media_item"
+	JobKindReindexSearchDocument           = "reindex_search_document"
+	JobKindReindexLibrarySearch            = "reindex_library_search"
+	JobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
+	JobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
 )
 
 func NewService(cfg config.Config, db *gorm.DB, registry *providers.Registry, jobs *jobs.Service) *Service {

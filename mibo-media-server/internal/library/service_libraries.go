@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
@@ -81,6 +82,30 @@ func (s *Service) QueueLibrarySearchReindex(ctx context.Context, libraryID uint,
 	payload := targetedRefreshPayload{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)}
 	jobKey := fmt.Sprintf("reindex-library-search:%d:%s", libraryID, payload.RootPath)
 	return s.jobs.EnqueueUnique(ctx, JobKindReindexLibrarySearch, jobKey, payload)
+}
+
+func (s *Service) QueueCatalogItemProjectionRefresh(ctx context.Context, itemID uint) (database.Job, error) {
+	if s.jobs == nil {
+		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	}
+	if itemID == 0 {
+		return database.Job{}, fmt.Errorf("item id is required")
+	}
+	payload := catalog.ItemProjectionRefreshPayload{ItemID: itemID}
+	jobKey := fmt.Sprintf("catalog-refresh-item-projection:%d", itemID)
+	return s.jobs.EnqueueUnique(ctx, JobKindCatalogRefreshItemProjection, jobKey, payload)
+}
+
+func (s *Service) QueueCatalogLibraryProjectionRefresh(ctx context.Context, libraryID uint, rootPath string) (database.Job, error) {
+	if s.jobs == nil {
+		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	}
+	if libraryID == 0 {
+		return database.Job{}, fmt.Errorf("library id is required")
+	}
+	payload := catalog.LibraryProjectionRefreshPayload{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)}
+	jobKey := fmt.Sprintf("catalog-refresh-library-projection:%d:%s", libraryID, payload.RootPath)
+	return s.jobs.EnqueueUnique(ctx, JobKindCatalogRefreshLibraryProjection, jobKey, payload)
 }
 
 func (s *Service) providerForLibrary(ctx context.Context, libraryID uint) (database.Library, database.MediaSource, storage.Provider, error) {
