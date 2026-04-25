@@ -11,26 +11,7 @@ import (
 func TestCatalogKernelTablesAreMigrated(t *testing.T) {
 	db := openCatalogTestDB(t)
 
-	expected := []any{
-		&CatalogItem{},
-		&CatalogExternalID{},
-		&MetadataSource{},
-		&MetadataFieldState{},
-		&ItemImage{},
-		&Person{},
-		&ItemPerson{},
-		&Tag{},
-		&ItemTag{},
-		&MediaAsset{},
-		&AssetItem{},
-		&InventoryFile{},
-		&AssetFile{},
-		&MediaStream{},
-		&UserItemData{},
-		&ItemRollup{},
-		&CatalogSearchDocument{},
-	}
-	for _, model := range expected {
+	for _, model := range requiredFreshStartupModels() {
 		if !db.Migrator().HasTable(model) {
 			t.Fatalf("expected table for %T to exist", model)
 		}
