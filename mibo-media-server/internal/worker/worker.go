@@ -258,6 +258,17 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.probe.ProbeFile(ctx, payload.MediaFileID)
+	case library.JobKindProbeInventoryFile:
+		if r.probe == nil {
+			return errors.New("probe service unavailable")
+		}
+		var payload struct {
+			InventoryFileID uint `json:"inventory_file_id"`
+		}
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.probe.ProbeInventoryFile(ctx, payload.InventoryFileID)
 	case schedule.JobKindForSchedule(schedule.KindScan):
 		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
 		if err != nil {

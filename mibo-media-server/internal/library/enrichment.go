@@ -51,7 +51,29 @@ func (s *Service) QueueMediaFileProbe(ctx context.Context, mediaFileID uint, for
 	})
 }
 
-func (s *Service) QueueInventoryFileProbe(ctx context.Context, inventoryFileID uint, _ bool) (database.Job, error) {
+func (s *Service) QueueInventoryFileProbe(ctx context.Context, inventoryFileID uint, force bool) (database.Job, error) {
+	if force {
+		var assetIDs []uint
+		if err := s.db.WithContext(ctx).
+			Model(&database.AssetFile{}).
+			Distinct("asset_id").
+			Where("file_id = ?", inventoryFileID).
+			Pluck("asset_id", &assetIDs).Error; err != nil {
+			return database.Job{}, err
+		}
+		if len(assetIDs) > 0 {
+			if err := s.db.WithContext(ctx).
+				Model(&database.MediaAsset{}).
+				Where("id IN ?", assetIDs).
+				Updates(map[string]any{
+					"probe_status":           "pending",
+					"technical_summary_json": "",
+				}).Error; err != nil {
+				return database.Job{}, err
+			}
+		}
+	}
+
 	return s.jobs.EnqueueUnique(ctx, JobKindProbeInventoryFile, fmt.Sprintf("probe_inventory_file:%d", inventoryFileID), map[string]any{
 		"inventory_file_id": inventoryFileID,
 	})

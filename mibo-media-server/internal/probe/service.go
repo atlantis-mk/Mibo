@@ -11,6 +11,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/inventory"
 	librarysvc "github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
@@ -131,6 +132,56 @@ func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
 	return nil
 }
 
+func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) error {
+	var file database.InventoryFile
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", inventoryFileID).
+		First(&file).Error; err != nil {
+		return err
+	}
+
+	provider, err := s.providerForFile(ctx, file.LibraryID)
+	if err != nil {
+		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+	}
+
+	target, err := s.resolveProbeTarget(ctx, provider, file.StoragePath)
+	if err != nil {
+		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+	}
+
+	if !s.cfg.Enabled {
+		return s.markInventoryUnavailable(ctx, inventoryFileID, "ffprobe disabled")
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
+	defer cancel()
+
+	output, err := exec.CommandContext(probeCtx, s.cfg.Path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", target).Output()
+	if err != nil {
+		var execErr *exec.Error
+		if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
+			return s.markInventoryUnavailable(ctx, inventoryFileID, "ffprobe not found")
+		}
+		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+	}
+
+	var parsed ffprobeOutput
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+	}
+
+	updates, runtimeSeconds, err := buildProbeUpdates(parsed)
+	if err != nil {
+		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+	}
+	if err := s.applyInventoryProbeUpdates(ctx, inventoryFileID, parsed, updates, runtimeSeconds); err != nil {
+		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+	}
+
+	return nil
+}
+
 func (s *Service) resolveProbeTarget(ctx context.Context, provider storage.Provider, storagePath string) (string, error) {
 	link, err := provider.Link(ctx, storage.LinkRequest{Path: storagePath})
 	if err == nil && strings.TrimSpace(link.URL) != "" {
@@ -225,6 +276,178 @@ func buildProbeUpdates(parsed ffprobeOutput) (map[string]any, *int, error) {
 		"audio_tracks_json":    string(audioJSON),
 		"subtitle_tracks_json": string(subtitleJSON),
 	}, runtimeSeconds, nil
+}
+
+func (s *Service) applyInventoryProbeUpdates(ctx context.Context, inventoryFileID uint, parsed ffprobeOutput, updates map[string]any, runtimeSeconds *int) error {
+	streams := buildInventoryMediaStreams(inventoryFileID, parsed, updates)
+	technicalSummaryJSON, err := buildTechnicalSummaryJSON(parsed, updates)
+	if err != nil {
+		return err
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("file_id = ?", inventoryFileID).Delete(&database.MediaStream{}).Error; err != nil {
+			return err
+		}
+		if len(streams) > 0 {
+			if err := tx.Create(&streams).Error; err != nil {
+				return err
+			}
+		}
+
+		assetIDs, err := assetIDsForInventoryFile(tx, inventoryFileID)
+		if err != nil {
+			return err
+		}
+		if len(assetIDs) > 0 {
+			assetUpdates := map[string]any{
+				"probe_status":           StatusReady,
+				"technical_summary_json": technicalSummaryJSON,
+			}
+			if durationSeconds, ok := updates["duration_seconds"].(*float64); ok {
+				assetUpdates["duration_seconds"] = durationSeconds
+			}
+			if err := tx.Model(&database.MediaAsset{}).Where("id IN ?", assetIDs).Updates(assetUpdates).Error; err != nil {
+				return err
+			}
+		}
+
+		if runtimeSeconds != nil {
+			if err := updateCatalogRuntimeForInventoryFile(tx, inventoryFileID, *runtimeSeconds); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func buildInventoryMediaStreams(inventoryFileID uint, parsed ffprobeOutput, updates map[string]any) []database.MediaStream {
+	streams := make([]database.MediaStream, 0, len(parsed.Streams))
+	durationSeconds, _ := updates["duration_seconds"].(*float64)
+	bitRate, _ := updates["bit_rate"].(*int64)
+	for index, stream := range parsed.Streams {
+		row := database.MediaStream{
+			FileID:          inventoryFileID,
+			StreamIndex:     index,
+			StreamType:      strings.TrimSpace(stream.CodecType),
+			Codec:           strings.TrimSpace(stream.CodecName),
+			Language:        strings.TrimSpace(stream.Tags.Language),
+			Title:           strings.TrimSpace(stream.Tags.Title),
+			BitRate:         bitRate,
+			DurationSeconds: durationSeconds,
+		}
+		if stream.Width > 0 {
+			width := stream.Width
+			row.Width = &width
+		}
+		if stream.Height > 0 {
+			height := stream.Height
+			row.Height = &height
+		}
+		if stream.Channels > 0 {
+			channels := stream.Channels
+			row.Channels = &channels
+		}
+		streams = append(streams, row)
+	}
+	return streams
+}
+
+func buildTechnicalSummaryJSON(parsed ffprobeOutput, updates map[string]any) (string, error) {
+	audioTrackCount := 0
+	subtitleTrackCount := 0
+	for _, stream := range parsed.Streams {
+		switch strings.TrimSpace(stream.CodecType) {
+		case "audio":
+			audioTrackCount++
+		case "subtitle":
+			subtitleTrackCount++
+		}
+	}
+
+	summary := map[string]any{
+		"audio_track_count":    audioTrackCount,
+		"subtitle_track_count": subtitleTrackCount,
+	}
+	if videoCodec, ok := updates["video_codec"].(string); ok && strings.TrimSpace(videoCodec) != "" {
+		summary["video_codec"] = videoCodec
+	}
+	if durationSeconds, ok := updates["duration_seconds"].(*float64); ok {
+		summary["duration_seconds"] = *durationSeconds
+	}
+	if bitRate, ok := updates["bit_rate"].(*int64); ok {
+		summary["bit_rate"] = *bitRate
+	}
+	if width, ok := updates["width"].(*int); ok {
+		summary["width"] = *width
+	}
+	if height, ok := updates["height"].(*int); ok {
+		summary["height"] = *height
+	}
+
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func assetIDsForInventoryFile(tx *gorm.DB, inventoryFileID uint) ([]uint, error) {
+	var assetIDs []uint
+	err := tx.Model(&database.AssetFile{}).
+		Distinct("asset_id").
+		Where("file_id = ?", inventoryFileID).
+		Pluck("asset_id", &assetIDs).Error
+	return assetIDs, err
+}
+
+func updateCatalogRuntimeForInventoryFile(tx *gorm.DB, inventoryFileID uint, runtimeSeconds int) error {
+	subquery := tx.Table("asset_items").
+		Distinct("asset_items.item_id").
+		Joins("JOIN asset_files ON asset_files.asset_id = asset_items.asset_id").
+		Where("asset_files.file_id = ?", inventoryFileID).
+		Where("asset_items.role IN ?", []string{inventory.AssetItemRolePrimary, inventory.AssetItemRoleVersion})
+
+	return tx.Model(&database.CatalogItem{}).
+		Where("id IN (?)", subquery).
+		Where("type IN ?", []string{"movie", "episode"}).
+		Update("runtime_seconds", runtimeSeconds).Error
+}
+
+func (s *Service) markInventoryUnavailable(ctx context.Context, inventoryFileID uint, message string) error {
+	assetIDs, err := assetIDsForInventoryFile(s.db.WithContext(ctx), inventoryFileID)
+	if err != nil {
+		return err
+	}
+	if len(assetIDs) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).
+		Model(&database.MediaAsset{}).
+		Where("id IN ?", assetIDs).
+		Updates(map[string]any{
+			"probe_status":           StatusUnavailable,
+			"technical_summary_json": "",
+		}).Error
+}
+
+func (s *Service) markInventoryProbeError(ctx context.Context, inventoryFileID uint, err error) error {
+	assetIDs, queryErr := assetIDsForInventoryFile(s.db.WithContext(ctx), inventoryFileID)
+	if queryErr != nil {
+		return queryErr
+	}
+	if len(assetIDs) > 0 {
+		if updateErr := s.db.WithContext(ctx).
+			Model(&database.MediaAsset{}).
+			Where("id IN ?", assetIDs).
+			Updates(map[string]any{
+				"probe_status": StatusError,
+			}).Error; updateErr != nil {
+			return updateErr
+		}
+	}
+	return err
 }
 
 func (s *Service) markUnavailable(ctx context.Context, mediaFileID uint, message string) error {
