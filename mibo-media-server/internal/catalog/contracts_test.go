@@ -8,6 +8,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/atlan/mibo-media-server/internal/database"
 )
 
 func TestCatalogDTOContractExportsRequiredTypes(t *testing.T) {
@@ -67,6 +70,199 @@ func TestCatalogTypeContractKeepsSeriesCanonical(t *testing.T) {
 	if strings.Contains(text, `"type":"show"`) {
 		t.Fatalf("expected marshaled dto to avoid legacy show type, got %s", text)
 	}
+}
+
+func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
+	now := time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC)
+	year := 2024
+	seasonNumber := 1
+	episodeNumber := 2
+	absoluteNumber := 2
+	runtimeSeconds := 3600
+	seasonRuntime := 3200
+	durationSeconds := 3660.5
+	width := 1280
+	height := 720
+	confidence := 0.92
+	segmentEnd := 3660.5
+	sourceID := uint(44)
+	editedByUserID := uint(7)
+
+	images := []database.ItemImage{
+		{ImageType: "poster", URL: "https://example.com/poster.jpg", Width: &width, Height: &height, Language: "en", IsSelected: true},
+		{ImageType: "backdrop", URL: "https://example.com/backdrop.jpg", IsSelected: false},
+	}
+	externalIDs := []database.CatalogExternalID{{Provider: "tmdb", ProviderType: "tv", ExternalID: "999", IsPrimary: true, Source: "provider", Confidence: &confidence}}
+	sources := []database.MetadataSource{{SourceType: SourceTypeProvider, SourceName: "tmdb", Language: "en", ExternalID: "999", PayloadJSON: `{"title":"The Example Show"}`, Confidence: &confidence, FetchedAt: now}}
+	fieldStates := []database.MetadataFieldState{{FieldKey: "title", SourceID: &sourceID, ValueJSON: `"The Example Show"`, IsLocked: true, LockReason: "operator lock", EditedByUserID: &editedByUserID, EditedAt: &now}}
+	rollup := &database.ItemRollup{ChildCount: 8, AvailableCount: 6, MissingCount: 1, UnairedCount: 1, PlayedCount: 2, InProgressCount: 1, LatestAirDate: &now, LatestAddedAt: &now}
+
+	assetDetail := BuildCatalogAssetDetail(CatalogAssetDetailInput{
+		Asset: database.MediaAsset{ID: 21, LibraryID: 3, AssetType: "main", DisplayName: "4K HDR", Edition: "Director's Cut", QualityLabel: "2160p", DurationSeconds: &durationSeconds, Status: AvailabilityAvailable, ProbeStatus: "ready"},
+		Links: []database.AssetItem{{ItemID: 13, Role: "primary", SegmentIndex: 0, EndSeconds: &segmentEnd, Confidence: &confidence, Source: "scanner"}},
+	})
+
+	seasonDetail := BuildCatalogSeasonDetail(CatalogSeasonDetailInput{
+		Item:        database.CatalogItem{ID: 11, LibraryID: 3, Type: ItemTypeSeason, Title: "Season 1", Overview: "Season overview", IndexNumber: &seasonNumber, RuntimeSeconds: &seasonRuntime, AvailabilityStatus: AvailabilityAvailable, GovernanceStatus: GovernanceMatched},
+		Rollup:      rollup,
+		Images:      images,
+		ExternalIDs: externalIDs,
+		Sources:     sources,
+		FieldStates: fieldStates,
+	})
+
+	episodeDetail := BuildCatalogEpisodeDetail(CatalogEpisodeDetailInput{
+		Item: database.CatalogItem{
+			ID:                 12,
+			LibraryID:          3,
+			Type:               ItemTypeEpisode,
+			Title:              "Episode 2",
+			Overview:           "Episode overview",
+			Year:               &year,
+			ParentIndexNumber:  &seasonNumber,
+			IndexNumber:        &episodeNumber,
+			AbsoluteNumber:     &absoluteNumber,
+			RuntimeSeconds:     &runtimeSeconds,
+			AvailabilityStatus: AvailabilityUnaired,
+			GovernanceStatus:   GovernanceNeedsReview,
+			FirstAirDate:       &now,
+		},
+		Images:      images,
+		ExternalIDs: externalIDs,
+		Sources:     sources,
+		FieldStates: fieldStates,
+		Assets:      []CatalogAssetDetail{assetDetail},
+	})
+
+	legacySeriesType := "show"
+	cases := []struct {
+		name      string
+		value     any
+		required  []string
+		forbidden []string
+		typeValue string
+		statusKey string
+		status    string
+	}{
+		{
+			name: "list item",
+			value: BuildCatalogListItem(CatalogListItemInput{
+				Item:        database.CatalogItem{ID: 10, LibraryID: 3, Type: legacySeriesType, Title: "The Example Show", Year: &year, AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernancePending},
+				Rollup:      rollup,
+				Images:      images,
+				ExternalIDs: externalIDs,
+			}),
+			required:  []string{"id", "library_id", "type", "availability_status", "governance_status", "child_summary", "selected_images", "external_identities"},
+			forbidden: []string{"deleted_at", "parent_id", "root_id", "payload_json", "value_json"},
+			typeValue: ItemTypeSeries,
+			statusKey: "availability_status",
+			status:    AvailabilityMissing,
+		},
+		{
+			name: "item detail",
+			value: BuildCatalogItemDetail(CatalogItemDetailInput{
+				Item:        database.CatalogItem{ID: 10, LibraryID: 3, Type: legacySeriesType, Title: "The Example Show", Year: &year, AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernanceMatched},
+				Rollup:      rollup,
+				Images:      images,
+				ExternalIDs: externalIDs,
+				Sources:     sources,
+				FieldStates: fieldStates,
+				Seasons:     []CatalogSeasonDetail{seasonDetail},
+				Episodes:    []CatalogEpisodeDetail{episodeDetail},
+				Assets:      []CatalogAssetDetail{assetDetail},
+			}),
+			required:  []string{"id", "library_id", "type", "availability_status", "governance_status", "assets", "source_evidence", "field_states", "seasons", "episodes"},
+			forbidden: []string{"deleted_at", "parent_id", "root_id", "payload_json", "value_json"},
+			typeValue: ItemTypeSeries,
+			statusKey: "availability_status",
+			status:    AvailabilityMissing,
+		},
+		{
+			name:      "season detail",
+			value:     seasonDetail,
+			required:  []string{"id", "library_id", "type", "availability_status", "governance_status", "episodes", "source_evidence", "field_states"},
+			forbidden: []string{"deleted_at", "parent_id", "root_id", "payload_json", "value_json"},
+			typeValue: ItemTypeSeason,
+			statusKey: "availability_status",
+			status:    AvailabilityAvailable,
+		},
+		{
+			name:      "episode detail",
+			value:     episodeDetail,
+			required:  []string{"id", "library_id", "type", "availability_status", "governance_status", "assets", "source_evidence", "field_states"},
+			forbidden: []string{"deleted_at", "parent_id", "root_id", "payload_json", "value_json"},
+			typeValue: ItemTypeEpisode,
+			statusKey: "availability_status",
+			status:    AvailabilityUnaired,
+		},
+		{
+			name:      "asset detail",
+			value:     assetDetail,
+			required:  []string{"id", "library_id", "asset_type", "status", "probe_status", "links"},
+			forbidden: []string{"deleted_at", "payload_json", "value_json"},
+			statusKey: "status",
+			status:    AvailabilityAvailable,
+		},
+		{
+			name: "governance workspace",
+			value: BuildCatalogGovernanceWorkspace(CatalogGovernanceWorkspaceInput{
+				Item:                database.CatalogItem{ID: 10, LibraryID: 3, Type: legacySeriesType, Title: "The Example Show", AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernanceManual},
+				Images:              images,
+				ExternalIDs:         externalIDs,
+				Sources:             sources,
+				FieldStates:         fieldStates,
+				Assets:              []CatalogAssetDetail{assetDetail},
+				RecommendedChildren: []CatalogListItem{BuildCatalogListItem(CatalogListItemInput{Item: database.CatalogItem{ID: 12, LibraryID: 3, Type: ItemTypeEpisode, Title: "Episode 2", AvailabilityStatus: AvailabilityUnaired, GovernanceStatus: GovernanceNeedsReview}})},
+			}),
+			required:  []string{"item_id", "library_id", "type", "availability_status", "governance_status", "assets", "source_evidence", "field_states", "recommended_children"},
+			forbidden: []string{"deleted_at", "parent_id", "root_id", "payload_json", "value_json"},
+			typeValue: ItemTypeSeries,
+			statusKey: "availability_status",
+			status:    AvailabilityMissing,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := marshalContractJSON(t, tc.value)
+			decoded := unmarshalContractJSON(t, payload)
+
+			for _, key := range tc.required {
+				if _, ok := decoded[key]; !ok {
+					t.Fatalf("expected %s payload to include %q, got %s", tc.name, key, payload)
+				}
+			}
+			for _, key := range tc.forbidden {
+				if strings.Contains(payload, `"`+key+`"`) {
+					t.Fatalf("expected %s payload to exclude %q, got %s", tc.name, key, payload)
+				}
+			}
+			if tc.typeValue != "" && decoded["type"] != tc.typeValue {
+				t.Fatalf("expected %s type %q, got %#v", tc.name, tc.typeValue, decoded["type"])
+			}
+			if decoded[tc.statusKey] != tc.status {
+				t.Fatalf("expected %s %s %q, got %#v", tc.name, tc.statusKey, tc.status, decoded[tc.statusKey])
+			}
+		})
+	}
+}
+
+func marshalContractJSON(t *testing.T, value any) string {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal contract: %v", err)
+	}
+	return string(payload)
+}
+
+func unmarshalContractJSON(t *testing.T, payload string) map[string]any {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("unmarshal contract: %v", err)
+	}
+	return decoded
 }
 
 func assertDTOsDoNotExposeRawRows(t *testing.T, path string) {
