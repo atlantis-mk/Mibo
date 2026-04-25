@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 14-03-PLAN.md
-last_updated: "2026-04-25T09:57:12.621Z"
+stopped_at: Completed 14-04-PLAN.md
+last_updated: "2026-04-25T10:20:57.039Z"
 last_activity: 2026-04-25
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 39
-  completed_plans: 14
-  percent: 36
+  completed_plans: 15
+  percent: 38
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-25)
 
 **Core value:** 无论底层媒体文件来自本地磁盘、NAS 还是云盘，用户都能稳定地完成媒体库接入、内容浏览、播放和进度同步。
-**Current focus:** Phase 14 — scanner-writes-catalog-assets
+**Current focus:** Phase 14 — scanner-writes-catalog-assets (completed)
 
 ## Current Position
 
-Phase: 14 (scanner-writes-catalog-assets) — EXECUTING
-Plan: 3 of 4
-Status: Ready to execute
+Phase: 14 (scanner-writes-catalog-assets) — COMPLETE
+Plan: 4 of 4
+Status: Phase complete
 Last activity: 2026-04-25
 
-Progress: [████░░░░░░] 36%
+Progress: [████░░░░░░] 38%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [████░░░░░░] 36%
 | 13 | 5 | - | - |
 | Phase 14 P02 | 10 min | 2 tasks | 9 files |
 | Phase 14 P03 | 13 min | 2 tasks | 5 files |
+| Phase 14-scanner-writes-catalog-assets P04 | 10 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,8 @@ Recent decisions affecting current work:
 - Duplicate-slot files create version assets while new scan files queue inventory-file probe jobs.
 - Use inventory_file_id as the only probe job payload so worker dispatch no longer depends on legacy MediaFile IDs.
 - Persist normalized media_stream rows and a compact asset technical summary instead of storing raw ffprobe blobs.
+- Catalog-first missing-file handling flips inventory, asset, and leaf availability state instead of deleting governed catalog records.
+- Leaf availability is recomputed from linked asset availability so multi-version episodes stay playable while any version remains available.
 
 ### Pending Todos
 
@@ -132,10 +135,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T09:57:12.615Z
-Stopped at: Completed 14-03-PLAN.md
+Last session: 2026-04-25T10:20:57.033Z
+Stopped at: Completed 14-04-PLAN.md
 Resume file: None
 
-**Completed Phase:** 12 (Catalog Kernel Contracts & Migration Guards) — 6 plans — verified 2026-04-25
+**Completed Phase:** 14 (Scanner Writes Catalog Assets) — 4 plans — completed 2026-04-25
 
 **Planned Phase:** 18 (Frontend Catalog Item Migration) — 4 plans — 2026-04-25T08:23:08.921Z
