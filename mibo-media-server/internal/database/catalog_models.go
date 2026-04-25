@@ -4,16 +4,16 @@ import "time"
 
 type CatalogItem struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
-	LibraryID           uint       `gorm:"not null;index" json:"library_id"`
-	Type                string     `gorm:"size:32;not null;index" json:"type"`
-	ParentID            *uint      `gorm:"index" json:"parent_id,omitempty"`
-	RootID              *uint      `gorm:"index" json:"root_id,omitempty"`
+	LibraryID           uint       `gorm:"not null;index;index:idx_catalog_items_library_type_availability_sort,priority:1" json:"library_id"`
+	Type                string     `gorm:"size:32;not null;index;index:idx_catalog_items_library_type_availability_sort,priority:2;index:idx_catalog_items_root_type_order,priority:2" json:"type"`
+	ParentID            *uint      `gorm:"index;index:idx_catalog_items_parent_order,priority:1" json:"parent_id,omitempty"`
+	RootID              *uint      `gorm:"index;index:idx_catalog_items_root_type_order,priority:1" json:"root_id,omitempty"`
 	Path                string     `gorm:"size:2048;index" json:"path"`
-	SortKey             string     `gorm:"size:512;index" json:"sort_key"`
+	SortKey             string     `gorm:"size:512;index;index:idx_catalog_items_library_type_availability_sort,priority:4" json:"sort_key"`
 	DisplayOrder        string     `gorm:"size:32;not null;default:aired" json:"display_order"`
-	IndexNumber         *int       `gorm:"index" json:"index_number,omitempty"`
+	IndexNumber         *int       `gorm:"index;index:idx_catalog_items_parent_order,priority:3;index:idx_catalog_items_root_type_order,priority:4" json:"index_number,omitempty"`
 	IndexNumberEnd      *int       `json:"index_number_end,omitempty"`
-	ParentIndexNumber   *int       `gorm:"index" json:"parent_index_number,omitempty"`
+	ParentIndexNumber   *int       `gorm:"index;index:idx_catalog_items_parent_order,priority:2;index:idx_catalog_items_root_type_order,priority:3" json:"parent_index_number,omitempty"`
 	AbsoluteNumber      *int       `gorm:"index" json:"absolute_number,omitempty"`
 	Title               string     `gorm:"size:512;not null;index" json:"title"`
 	OriginalTitle       string     `gorm:"size:512" json:"original_title"`
@@ -28,7 +28,7 @@ type CatalogItem struct {
 	CommunityRating     *float64   `json:"community_rating,omitempty"`
 	OfficialRating      string     `gorm:"size:64" json:"official_rating"`
 	SeriesStatus        string     `gorm:"size:64" json:"series_status"`
-	AvailabilityStatus  string     `gorm:"size:64;not null;default:no_local_media;index" json:"availability_status"`
+	AvailabilityStatus  string     `gorm:"size:64;not null;default:no_local_media;index;index:idx_catalog_items_library_type_availability_sort,priority:3" json:"availability_status"`
 	GovernanceStatus    string     `gorm:"size:64;not null;default:pending;index" json:"governance_status"`
 	CanonicalVersion    int        `gorm:"not null;default:1" json:"canonical_version"`
 	LastCanonicalizedAt *time.Time `json:"last_canonicalized_at,omitempty"`
@@ -161,16 +161,16 @@ type ItemRollup struct {
 
 type CatalogSearchDocument struct {
 	ItemID             uint      `gorm:"primaryKey" json:"item_id"`
-	LibraryID          uint      `gorm:"not null;index" json:"library_id"`
-	ItemType           string    `gorm:"size:32;not null;index" json:"item_type"`
-	Title              string    `gorm:"size:512;not null;index" json:"title"`
+	LibraryID          uint      `gorm:"not null;index;index:idx_catalog_search_documents_library_type_availability_title,priority:1" json:"library_id"`
+	ItemType           string    `gorm:"size:32;not null;index;index:idx_catalog_search_documents_library_type_availability_title,priority:2" json:"item_type"`
+	Title              string    `gorm:"size:512;not null;index;index:idx_catalog_search_documents_library_type_availability_title,priority:4" json:"title"`
 	OriginalTitle      string    `gorm:"size:512" json:"original_title"`
 	PeopleText         string    `gorm:"type:text" json:"people_text"`
 	TagsText           string    `gorm:"type:text" json:"tags_text"`
 	ProviderIDsText    string    `gorm:"type:text" json:"provider_ids_text"`
 	Year               *int      `gorm:"index" json:"year,omitempty"`
 	OfficialRating     string    `gorm:"size:64;index" json:"official_rating"`
-	AvailabilityStatus string    `gorm:"size:64;index" json:"availability_status"`
+	AvailabilityStatus string    `gorm:"size:64;index;index:idx_catalog_search_documents_library_type_availability_title,priority:3" json:"availability_status"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 

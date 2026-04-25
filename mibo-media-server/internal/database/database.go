@@ -77,7 +77,35 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, err
 	}
 
+	if err := ensureCatalogKernelIndexes(db); err != nil {
+		return nil, err
+	}
+
 	return db, nil
+}
+
+func ensureCatalogKernelIndexes(db *gorm.DB) error {
+	requiredIndexes := []struct {
+		model any
+		name  string
+	}{
+		{&CatalogItem{}, "idx_catalog_items_library_type_availability_sort"},
+		{&CatalogItem{}, "idx_catalog_items_parent_order"},
+		{&CatalogItem{}, "idx_catalog_items_root_type_order"},
+		{&CatalogSearchDocument{}, "idx_catalog_search_documents_library_type_availability_title"},
+	}
+
+	for _, index := range requiredIndexes {
+		if db.Migrator().HasIndex(index.model, index.name) {
+			continue
+		}
+
+		if err := db.Migrator().CreateIndex(index.model, index.name); err != nil {
+			return fmt.Errorf("create index %s: %w", index.name, err)
+		}
+	}
+
+	return nil
 }
 
 func ensureSQLiteDir(dsn string) error {

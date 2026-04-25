@@ -37,7 +37,7 @@ func TestCatalogKernelTablesAreMigrated(t *testing.T) {
 	}
 }
 
-func TestCatalogKernelIndexesAreMigrated(t *testing.T) {
+func TestDatabaseOpenMigratesCatalogIndexes(t *testing.T) {
 	db := openCatalogTestDB(t)
 
 	requiredIndexes := []struct {
