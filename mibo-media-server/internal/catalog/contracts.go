@@ -436,7 +436,7 @@ func buildCatalogSourceEvidence(sources []database.MetadataSource) []CatalogSour
 			Confidence: source.Confidence,
 			FetchedAt:  source.FetchedAt,
 			ExpiresAt:  source.ExpiresAt,
-			Summary:    summarizeJSON(source.PayloadJSON),
+			Summary:    projectCatalogSourceSummary(source.PayloadJSON),
 		})
 	}
 	return evidence
@@ -451,7 +451,7 @@ func buildCatalogFieldStates(states []database.MetadataFieldState) []CatalogFiel
 		fieldStates = append(fieldStates, CatalogFieldState{
 			FieldKey:       strings.TrimSpace(state.FieldKey),
 			SourceID:       state.SourceID,
-			Value:          summarizeJSON(state.ValueJSON),
+			Value:          projectCatalogFieldStateValue(state.ValueJSON),
 			IsLocked:       state.IsLocked,
 			LockReason:     strings.TrimSpace(state.LockReason),
 			EditedByUserID: state.EditedByUserID,
@@ -524,16 +524,58 @@ func ensureCatalogAssetDetails(items []CatalogAssetDetail) []CatalogAssetDetail 
 	return items
 }
 
-func summarizeJSON(raw string) any {
+func projectCatalogSourceSummary(raw string) any {
+	decoded, ok := decodeCatalogJSONValue(raw)
+	if !ok {
+		return nil
+	}
+	payload, ok := decoded.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	const scalarSummaryKeys = "title,name,original_title,overview,release_date,first_air_date,last_air_date,runtime,status,season_number,episode_number"
+	summary := make(map[string]any)
+	for _, key := range strings.Split(scalarSummaryKeys, ",") {
+		value, exists := payload[key]
+		if !exists || !isCatalogScalarJSONValue(value) {
+			continue
+		}
+		summary[key] = value
+	}
+	if len(summary) == 0 {
+		return nil
+	}
+	return summary
+}
+
+func projectCatalogFieldStateValue(raw string) any {
+	decoded, ok := decodeCatalogJSONValue(raw)
+	if !ok || !isCatalogScalarJSONValue(decoded) {
+		return nil
+	}
+	return decoded
+}
+
+func decodeCatalogJSONValue(raw string) (any, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil
+		return nil, false
 	}
 	var decoded any
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return raw
+		return nil, false
 	}
-	return decoded
+	return decoded, true
+}
+
+func isCatalogScalarJSONValue(value any) bool {
+	switch value.(type) {
+	case nil, string, float64, bool:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeAvailabilityStatus(status string) string {
