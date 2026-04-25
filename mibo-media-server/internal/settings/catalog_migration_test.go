@@ -117,4 +117,4 @@ func assertCatalogMigrationStoredValue(t *testing.T, svc *Service, category, key
 	if record.IsSecret {
 		t.Fatalf("expected %s/%s to be non-secret", category, key)
 	}
-	}
+}

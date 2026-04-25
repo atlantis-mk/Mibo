@@ -235,21 +235,37 @@ func (s *Service) updateSecretSetting(ctx context.Context, key, value string, cl
 }
 
 func (s *Service) upsertSetting(ctx context.Context, key, value string, secret bool) error {
+	return s.upsertCategorySetting(ctx, metadataCategory, key, value, secret)
+}
+
+func (s *Service) upsertCategorySetting(ctx context.Context, category, key, value string, secret bool) error {
+	return upsertCategorySettingWithDB(ctx, s.db, category, key, value, secret)
+}
+
+func upsertCategorySettingWithDB(ctx context.Context, db *gorm.DB, category, key, value string, secret bool) error {
 	record := database.SystemSetting{
-		Category: metadataCategory,
+		Category: category,
 		Key:      key,
 		Value:    value,
 		IsSecret: secret,
 	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+	return db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "category"}, {Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "is_secret", "updated_at"}),
 	}).Create(&record).Error
 }
 
 func (s *Service) deleteSetting(ctx context.Context, key string) error {
-	return s.db.WithContext(ctx).
-		Where("category = ? AND key = ?", metadataCategory, key).
+	return s.deleteCategorySetting(ctx, metadataCategory, key)
+}
+
+func (s *Service) deleteCategorySetting(ctx context.Context, category, key string) error {
+	return deleteCategorySettingWithDB(ctx, s.db, category, key)
+}
+
+func deleteCategorySettingWithDB(ctx context.Context, db *gorm.DB, category, key string) error {
+	return db.WithContext(ctx).
+		Where("category = ? AND key = ?", category, key).
 		Delete(&database.SystemSetting{}).Error
 }
 
