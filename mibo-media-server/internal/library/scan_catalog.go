@@ -217,6 +217,73 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 	return result, nil
 }
 
+func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, rootPath string, seen map[string]struct{}) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var files []database.InventoryFile
+		fileQuery := tx.WithContext(ctx).
+			Where("library_id = ? AND deleted_at IS NULL", libraryID)
+		fileQuery = applyScopedPathFilter(fileQuery, "storage_path", rootPath)
+		if err := fileQuery.Order("id asc").Find(&files).Error; err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return nil
+		}
+
+		missingFileIDs := make([]uint, 0)
+		for _, file := range files {
+			if _, ok := seen[file.StoragePath]; ok {
+				continue
+			}
+			missingFileIDs = append(missingFileIDs, file.ID)
+		}
+		if len(missingFileIDs) > 0 {
+			if err := tx.WithContext(ctx).
+				Model(&database.InventoryFile{}).
+				Where("id IN ?", missingFileIDs).
+				Updates(map[string]any{"status": inventory.FileStatusMissing, "deleted_at": nil}).Error; err != nil {
+				return err
+			}
+		}
+
+		assetIDs, err := scopedCatalogAssetIDs(ctx, tx, libraryID, rootPath)
+		if err != nil {
+			return err
+		}
+		for _, assetID := range assetIDs {
+			status, err := catalogAssetAvailabilityStatus(ctx, tx, assetID)
+			if err != nil {
+				return err
+			}
+			if err := tx.WithContext(ctx).
+				Model(&database.MediaAsset{}).
+				Where("id = ?", assetID).
+				Updates(map[string]any{"status": status, "deleted_at": nil}).Error; err != nil {
+				return err
+			}
+		}
+
+		itemIDs, err := scopedCatalogItemIDs(ctx, tx, libraryID, rootPath)
+		if err != nil {
+			return err
+		}
+		for _, itemID := range itemIDs {
+			availability, err := catalogItemAvailabilityStatus(ctx, tx, itemID)
+			if err != nil {
+				return err
+			}
+			if err := tx.WithContext(ctx).
+				Model(&database.CatalogItem{}).
+				Where("id = ?", itemID).
+				Update("availability_status", availability).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
 func upsertCatalogScanFile(ctx context.Context, tx *gorm.DB, inventorySvc *inventory.Service, libraryID uint, artifact catalogScanArtifact) (database.InventoryFile, error) {
 	storagePath := strings.TrimSpace(artifact.SourcePath)
 	if storagePath == "" {
@@ -480,4 +547,67 @@ func canonicalSeriesPath(seriesTitle string) string {
 
 func canonicalEpisodeItemPath(seasonPath string, episodeNumber int) string {
 	return fmt.Sprintf("%s/episode-%04d", seasonPath, episodeNumber)
+}
+
+func scopedCatalogAssetIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string) ([]uint, error) {
+	var assetIDs []uint
+	query := tx.WithContext(ctx).
+		Table("asset_files").
+		Distinct("asset_files.asset_id").
+		Joins("JOIN inventory_files ON inventory_files.id = asset_files.file_id").
+		Where("inventory_files.library_id = ? AND inventory_files.deleted_at IS NULL", libraryID)
+	query = applyScopedPathFilter(query, "inventory_files.storage_path", rootPath)
+	if err := query.Order("asset_files.asset_id asc").Pluck("asset_files.asset_id", &assetIDs).Error; err != nil {
+		return nil, err
+	}
+	return assetIDs, nil
+}
+
+func catalogAssetAvailabilityStatus(ctx context.Context, tx *gorm.DB, assetID uint) (string, error) {
+	var availableCount int64
+	err := tx.WithContext(ctx).
+		Table("asset_files").
+		Joins("JOIN inventory_files ON inventory_files.id = asset_files.file_id").
+		Where("asset_files.asset_id = ? AND asset_files.role = ? AND inventory_files.deleted_at IS NULL AND inventory_files.status = ?", assetID, inventory.FileRoleSource, inventory.FileStatusAvailable).
+		Count(&availableCount).Error
+	if err != nil {
+		return "", err
+	}
+	if availableCount > 0 {
+		return inventory.AssetStatusAvailable, nil
+	}
+	return inventory.AssetStatusMissing, nil
+}
+
+func scopedCatalogItemIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string) ([]uint, error) {
+	var itemIDs []uint
+	query := tx.WithContext(ctx).
+		Table("asset_items").
+		Distinct("asset_items.item_id").
+		Joins("JOIN media_assets ON media_assets.id = asset_items.asset_id").
+		Joins("JOIN asset_files ON asset_files.asset_id = media_assets.id").
+		Joins("JOIN inventory_files ON inventory_files.id = asset_files.file_id").
+		Joins("JOIN catalog_items ON catalog_items.id = asset_items.item_id").
+		Where("catalog_items.library_id = ? AND catalog_items.deleted_at IS NULL AND inventory_files.deleted_at IS NULL", libraryID)
+	query = applyScopedPathFilter(query, "inventory_files.storage_path", rootPath)
+	if err := query.Order("asset_items.item_id asc").Pluck("asset_items.item_id", &itemIDs).Error; err != nil {
+		return nil, err
+	}
+	return itemIDs, nil
+}
+
+func catalogItemAvailabilityStatus(ctx context.Context, tx *gorm.DB, itemID uint) (string, error) {
+	var availableCount int64
+	err := tx.WithContext(ctx).
+		Table("asset_items").
+		Joins("JOIN media_assets ON media_assets.id = asset_items.asset_id").
+		Where("asset_items.item_id = ? AND media_assets.deleted_at IS NULL AND media_assets.status = ?", itemID, inventory.AssetStatusAvailable).
+		Count(&availableCount).Error
+	if err != nil {
+		return "", err
+	}
+	if availableCount > 0 {
+		return catalog.AvailabilityAvailable, nil
+	}
+	return catalog.AvailabilityMissing, nil
 }

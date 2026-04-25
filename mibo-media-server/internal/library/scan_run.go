@@ -111,6 +111,9 @@ func (s *Service) scanLibraryWithMode(ctx context.Context, provider storage.Prov
 	if err := s.walkDirectory(ctx, provider, library, rootPath, seenFiles, seenItems, &result); err != nil {
 		return SyncResult{}, err
 	}
+	if err := s.cleanupMissingCatalog(ctx, library.ID, rootPath, seenFiles); err != nil {
+		return SyncResult{}, err
+	}
 	_ = seenFiles
 	_ = seenItems
 	_ = mode
