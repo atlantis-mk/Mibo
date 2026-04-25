@@ -40,6 +40,11 @@ type LegacyBackfillPayload struct {
 	TriggeredByUserID uint                `json:"triggered_by_user_id"`
 }
 
+type CreateLegacyBackfillRunInput struct {
+	Scope             LegacyBackfillScope `json:"scope"`
+	TriggeredByUserID uint                `json:"triggered_by_user_id"`
+}
+
 type LegacyBackfillScope struct {
 	Kind      string `json:"kind"`
 	LibraryID *uint  `json:"library_id,omitempty"`
@@ -103,6 +108,60 @@ func (s *Service) createLegacyBackfillRun(ctx context.Context, scope LegacyBackf
 	}
 
 	return run, nil
+}
+
+func (s *Service) CreateLegacyBackfillRun(ctx context.Context, input CreateLegacyBackfillRunInput) (LegacyBackfillRun, error) {
+	run, err := s.createLegacyBackfillRun(ctx, input.Scope, input.TriggeredByUserID)
+	if err != nil {
+		return LegacyBackfillRun{}, err
+	}
+	return legacyBackfillRunFromModel(run), nil
+}
+
+func (s *Service) ListLegacyBackfillRuns(ctx context.Context) ([]LegacyBackfillRun, error) {
+	var runs []database.CatalogMigrationRun
+	if err := s.db.WithContext(ctx).
+		Order("created_at desc").
+		Order("id desc").
+		Find(&runs).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]LegacyBackfillRun, 0, len(runs))
+	for _, run := range runs {
+		result = append(result, legacyBackfillRunFromModel(run))
+	}
+	return result, nil
+}
+
+func (s *Service) GetLegacyBackfillRun(ctx context.Context, runID uint) (LegacyBackfillRun, error) {
+	if runID == 0 {
+		return LegacyBackfillRun{}, errors.New("run id is required")
+	}
+
+	var run database.CatalogMigrationRun
+	if err := s.db.WithContext(ctx).First(&run, runID).Error; err != nil {
+		return LegacyBackfillRun{}, err
+	}
+
+	var entries []database.CatalogMigrationEntry
+	if err := s.db.WithContext(ctx).
+		Where("run_id = ?", runID).
+		Order("entry_type asc").
+		Order("library_id asc").
+		Order("legacy_media_item_id asc").
+		Order("legacy_media_file_id asc").
+		Order("id asc").
+		Find(&entries).Error; err != nil {
+		return LegacyBackfillRun{}, err
+	}
+
+	report := legacyBackfillRunFromModel(run)
+	report.Entries = make([]LegacyBackfillEntry, 0, len(entries))
+	for _, entry := range entries {
+		report.Entries = append(report.Entries, legacyBackfillEntryFromModel(entry))
+	}
+	return report, nil
 }
 
 func (s *Service) recordLegacyBackfillEntry(ctx context.Context, runID uint, entry LegacyBackfillEntry) (database.CatalogMigrationEntry, error) {
@@ -255,4 +314,47 @@ func normalizeLegacyBackfillEntryType(entryType string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported backfill entry type %q", entryType)
 	}
+}
+
+func legacyBackfillRunFromModel(run database.CatalogMigrationRun) LegacyBackfillRun {
+	return LegacyBackfillRun{
+		ID:     run.ID,
+		Scope:  LegacyBackfillScope{Kind: run.ScopeKind, LibraryID: run.LibraryID},
+		Status: run.Status,
+
+		TriggeredByUserID:              run.TriggeredByUserID,
+		FatalError:                     run.FatalError,
+		SuccessCount:                   run.SuccessCount,
+		SkippedCount:                   run.SkippedCount,
+		ConflictCount:                  run.ConflictCount,
+		OrphanFileCount:                run.OrphanFileCount,
+		DuplicateEpisodeCandidateCount: run.DuplicateEpisodeCandidateCount,
+		StartedAt:                      run.StartedAt,
+		FinishedAt:                     run.FinishedAt,
+		CreatedAt:                      run.CreatedAt,
+		UpdatedAt:                      run.UpdatedAt,
+	}
+}
+
+func legacyBackfillEntryFromModel(entry database.CatalogMigrationEntry) LegacyBackfillEntry {
+	result := LegacyBackfillEntry{
+		ID:                entry.ID,
+		RunID:             entry.RunID,
+		EntryType:         entry.EntryType,
+		LibraryID:         entry.LibraryID,
+		LegacyMediaItemID: entry.LegacyMediaItemID,
+		LegacyMediaFileID: entry.LegacyMediaFileID,
+		CatalogItemID:     entry.CatalogItemID,
+		AssetID:           entry.AssetID,
+		InventoryFileID:   entry.InventoryFileID,
+		StoragePath:       entry.StoragePath,
+		Title:             entry.Title,
+		Message:           entry.Message,
+		CreatedAt:         entry.CreatedAt,
+		UpdatedAt:         entry.UpdatedAt,
+	}
+	if details := strings.TrimSpace(entry.DetailsJSON); details != "" {
+		result.Details = json.RawMessage(details)
+	}
+	return result
 }
