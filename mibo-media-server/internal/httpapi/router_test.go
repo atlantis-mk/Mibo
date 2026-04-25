@@ -846,6 +846,14 @@ func TestMetadataSettingsEndpoints(t *testing.T) {
 	}
 }
 
+func TestCatalogMigrationSettingsEndpoints(t *testing.T) {
+	testCatalogMigrationSettingsEndpoints(t)
+}
+
+func TestCatalogMigrationSystemInfo(t *testing.T) {
+	testCatalogMigrationSystemInfo(t)
+}
+
 func TestGetMediaItemIncludesTrailerDetail(t *testing.T) {
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {
