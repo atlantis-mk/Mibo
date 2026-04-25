@@ -35,9 +35,8 @@ const (
 )
 
 type LegacyBackfillPayload struct {
-	RunID             uint                `json:"run_id"`
-	Scope             LegacyBackfillScope `json:"scope"`
-	TriggeredByUserID uint                `json:"triggered_by_user_id"`
+	RunID     uint  `json:"run_id"`
+	LibraryID *uint `json:"library_id,omitempty"`
 }
 
 type CreateLegacyBackfillRunInput struct {
@@ -116,6 +115,17 @@ func (s *Service) CreateLegacyBackfillRun(ctx context.Context, input CreateLegac
 		return LegacyBackfillRun{}, err
 	}
 	return legacyBackfillRunFromModel(run), nil
+}
+
+func (s *Service) RunLegacyBackfill(ctx context.Context, payload LegacyBackfillPayload) error {
+	if payload.RunID == 0 {
+		return errors.New("run id is required")
+	}
+	if _, err := s.markLegacyBackfillRunRunning(ctx, payload.RunID, payload.LibraryID); err != nil {
+		return err
+	}
+	_, err := s.finalizeLegacyBackfillRun(ctx, payload.RunID, LegacyBackfillStatusCompleted, "")
+	return err
 }
 
 func (s *Service) ListLegacyBackfillRuns(ctx context.Context) ([]LegacyBackfillRun, error) {
@@ -204,6 +214,32 @@ func (s *Service) recordLegacyBackfillEntry(ctx context.Context, runID uint, ent
 	return model, nil
 }
 
+func (s *Service) markLegacyBackfillRunRunning(ctx context.Context, runID uint, libraryID *uint) (database.CatalogMigrationRun, error) {
+	now := time.Now().UTC()
+	var run database.CatalogMigrationRun
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&run, runID).Error; err != nil {
+			return err
+		}
+		if err := validateLegacyBackfillPayloadScope(run, libraryID); err != nil {
+			return err
+		}
+		if err := tx.Model(&database.CatalogMigrationRun{}).Where("id = ?", runID).Updates(map[string]any{
+			"status":      LegacyBackfillStatusRunning,
+			"started_at":  now,
+			"finished_at": nil,
+			"fatal_error": "",
+		}).Error; err != nil {
+			return err
+		}
+		return tx.First(&run, runID).Error
+	})
+	if err != nil {
+		return database.CatalogMigrationRun{}, err
+	}
+	return run, nil
+}
+
 func (s *Service) finalizeLegacyBackfillRun(ctx context.Context, runID uint, status string, fatalError string) (database.CatalogMigrationRun, error) {
 	if runID == 0 {
 		return database.CatalogMigrationRun{}, errors.New("run id is required")
@@ -276,6 +312,29 @@ func loadLegacyBackfillCounts(ctx context.Context, db *gorm.DB, runID uint) (map
 		counts[row.EntryType] = row.Count
 	}
 	return counts, nil
+}
+
+func validateLegacyBackfillPayloadScope(run database.CatalogMigrationRun, libraryID *uint) error {
+	switch run.ScopeKind {
+	case LegacyBackfillScopeAll:
+		if libraryID != nil {
+			return errors.New("all-library backfill payload must not include library id")
+		}
+		return nil
+	case LegacyBackfillScopeLibrary:
+		if run.LibraryID == nil || *run.LibraryID == 0 {
+			return errors.New("library-scoped run missing library id")
+		}
+		if libraryID == nil || *libraryID == 0 {
+			return errors.New("library-scoped backfill payload requires library id")
+		}
+		if *run.LibraryID != *libraryID {
+			return fmt.Errorf("payload library id %d does not match run library id %d", *libraryID, *run.LibraryID)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported backfill scope %q", run.ScopeKind)
+	}
 }
 
 func normalizeLegacyBackfillScope(scope LegacyBackfillScope) (LegacyBackfillScope, error) {

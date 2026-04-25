@@ -217,6 +217,15 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.catalog.RefreshLibraryProjection(ctx, payload.LibraryID, payload.RootPath)
+	case catalog.JobKindLegacyBackfill:
+		if r.catalog == nil {
+			return errors.New("catalog service unavailable")
+		}
+		var payload catalog.LegacyBackfillPayload
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.catalog.RunLegacyBackfill(ctx, payload)
 	case "probe_media_file":
 		var payload struct {
 			MediaFileID uint `json:"media_file_id"`
