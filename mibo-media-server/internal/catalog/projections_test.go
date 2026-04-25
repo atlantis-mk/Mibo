@@ -36,12 +36,12 @@ func TestCatalogRefreshLibraryProjectionRebuildsTargetedRows(t *testing.T) {
 
 	series := seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
 		LibraryID:          7,
-		Type:               ItemTypeSeries,
+		Type:               "show",
 		Path:               "/library/Show A",
 		SortKey:            "Show A",
 		DisplayOrder:       DisplayOrderAired,
 		Title:              "Show A",
-		AvailabilityStatus: AvailabilityAvailable,
+		AvailabilityStatus: "",
 		GovernanceStatus:   GovernancePending,
 	})
 	seasonNumber := 1
@@ -62,7 +62,7 @@ func TestCatalogRefreshLibraryProjectionRebuildsTargetedRows(t *testing.T) {
 	episodeOne := 1
 	episodeTwo := 2
 	airDate := time.Date(2024, time.January, 10, 0, 0, 0, 0, time.UTC)
-	seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
+	episodeOneItem := seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
 		LibraryID:          7,
 		Type:               ItemTypeEpisode,
 		ParentID:           &season.ID,
@@ -77,7 +77,7 @@ func TestCatalogRefreshLibraryProjectionRebuildsTargetedRows(t *testing.T) {
 		AvailabilityStatus: AvailabilityAvailable,
 		GovernanceStatus:   GovernancePending,
 	})
-	seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
+	episodeTwoItem := seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
 		LibraryID:          7,
 		Type:               ItemTypeEpisode,
 		ParentID:           &season.ID,
@@ -106,7 +106,37 @@ func TestCatalogRefreshLibraryProjectionRebuildsTargetedRows(t *testing.T) {
 	assertProjectionCounts(t, ctx, svc.db, 4, 4)
 	assertRollup(t, ctx, svc.db, series.ID, 3, 1, 1)
 	assertRollup(t, ctx, svc.db, season.ID, 2, 1, 1)
-	assertCatalogSearchDocument(t, ctx, svc.db, series.ID, 7, ItemTypeSeries, "Show A")
+	assertCatalogSearchDocument(t, ctx, svc.db, series.ID, 7, ItemTypeSeries, "Show A", AvailabilityNoLocalMedia)
+	assertCatalogSearchDocument(t, ctx, svc.db, season.ID, 7, ItemTypeSeason, "Season 1", AvailabilityAvailable)
+	assertCatalogSearchDocument(t, ctx, svc.db, episodeOneItem.ID, 7, ItemTypeEpisode, "Episode 1", AvailabilityAvailable)
+	assertCatalogSearchDocument(t, ctx, svc.db, episodeTwoItem.ID, 7, ItemTypeEpisode, "Episode 2", AvailabilityMissing)
+}
+
+func TestCatalogRefreshItemProjectionNormalizesBlankAvailability(t *testing.T) {
+	svc, ctx := newProjectionTestService(t)
+
+	item := seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
+		LibraryID:          9,
+		Type:               ItemTypeMovie,
+		Path:               "/library/Movie A.mkv",
+		SortKey:            "Movie A",
+		DisplayOrder:       DisplayOrderAired,
+		Title:              "Movie A",
+		AvailabilityStatus: "",
+		GovernanceStatus:   GovernancePending,
+	})
+
+	if err := svc.db.WithContext(ctx).Create(&database.CatalogSearchDocument{ItemID: item.ID, LibraryID: 9, ItemType: ItemTypeMovie, Title: "stale", AvailabilityStatus: AvailabilityMissing, UpdatedAt: time.Now().Add(-time.Hour)}).Error; err != nil {
+		t.Fatalf("seed stale search document: %v", err)
+	}
+
+	if err := svc.RefreshItemProjection(ctx, item.ID); err != nil {
+		t.Fatalf("refresh item projection: %v", err)
+	}
+
+	assertProjectionCounts(t, ctx, svc.db, 1, 1)
+	assertRollup(t, ctx, svc.db, item.ID, 0, 0, 0)
+	assertCatalogSearchDocument(t, ctx, svc.db, item.ID, 9, ItemTypeMovie, "Movie A", AvailabilityNoLocalMedia)
 }
 
 func newProjectionTestService(t *testing.T) (*Service, context.Context) {
@@ -166,14 +196,14 @@ func assertRollup(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint, w
 	}
 }
 
-func assertCatalogSearchDocument(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint, libraryID uint, itemType string, title string) {
+func assertCatalogSearchDocument(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint, libraryID uint, itemType string, title string, availabilityStatus string) {
 	t.Helper()
 
 	var doc database.CatalogSearchDocument
 	if err := db.WithContext(ctx).First(&doc, "item_id = ?", itemID).Error; err != nil {
 		t.Fatalf("load search document for item %d: %v", itemID, err)
 	}
-	if doc.LibraryID != libraryID || doc.ItemType != itemType || doc.Title != title {
+	if doc.LibraryID != libraryID || doc.ItemType != itemType || doc.Title != title || doc.AvailabilityStatus != availabilityStatus {
 		t.Fatalf("unexpected catalog search document: %#v", doc)
 	}
 }
