@@ -16,6 +16,8 @@ type Service struct {
 }
 
 type UpdateInput struct {
+	ItemID          uint  `json:"item_id,omitempty"`
+	AssetID         *uint `json:"asset_id,omitempty"`
 	MediaItemID     uint  `json:"media_item_id"`
 	MediaFileID     *uint `json:"media_file_id,omitempty"`
 	PositionSeconds int   `json:"position_seconds"`
@@ -24,14 +26,18 @@ type UpdateInput struct {
 }
 
 type State struct {
-	UserID          uint       `json:"user_id"`
-	MediaItemID     uint       `json:"media_item_id"`
-	MediaFileID     *uint      `json:"media_file_id,omitempty"`
-	PositionSeconds int        `json:"position_seconds"`
-	DurationSeconds *int       `json:"duration_seconds,omitempty"`
-	Watched         bool       `json:"watched"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	LastPlayedAt    *time.Time `json:"last_played_at,omitempty"`
+	UserID           uint       `json:"user_id"`
+	ItemID           uint       `json:"item_id,omitempty"`
+	AssetID          *uint      `json:"asset_id,omitempty"`
+	MediaItemID      uint       `json:"media_item_id"`
+	MediaFileID      *uint      `json:"media_file_id,omitempty"`
+	PositionSeconds  int        `json:"position_seconds"`
+	DurationSeconds  *int       `json:"duration_seconds,omitempty"`
+	PlayedPercentage *float64   `json:"played_percentage,omitempty"`
+	PlayCount        int        `json:"play_count,omitempty"`
+	Watched          bool       `json:"watched"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	LastPlayedAt     *time.Time `json:"last_played_at,omitempty"`
 }
 
 type Entry struct {
@@ -54,6 +60,9 @@ func (s *Service) Status() string {
 }
 
 func (s *Service) Update(ctx context.Context, userID uint, input UpdateInput) (State, error) {
+	if input.ItemID != 0 {
+		return s.updateCatalog(ctx, userID, input)
+	}
 	if input.MediaItemID == 0 {
 		return State{}, fmt.Errorf("media_item_id is required")
 	}
@@ -116,6 +125,66 @@ func (s *Service) Update(ctx context.Context, userID uint, input UpdateInput) (S
 	return toState(progress), nil
 }
 
+func (s *Service) updateCatalog(ctx context.Context, userID uint, input UpdateInput) (State, error) {
+	if input.ItemID == 0 {
+		return State{}, fmt.Errorf("item_id is required")
+	}
+	if input.PositionSeconds < 0 {
+		input.PositionSeconds = 0
+	}
+
+	var item database.CatalogItem
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", input.ItemID).
+		First(&item).Error; err != nil {
+		return State{}, err
+	}
+	if input.AssetID != nil {
+		var assetLink database.AssetItem
+		if err := s.db.WithContext(ctx).
+			Where("item_id = ? AND asset_id = ?", input.ItemID, *input.AssetID).
+			First(&assetLink).Error; err != nil {
+			return State{}, fmt.Errorf("invalid asset_id for catalog item")
+		}
+	}
+
+	duration := input.DurationSeconds
+	if duration == nil {
+		duration = item.RuntimeSeconds
+	}
+
+	var data database.UserItemData
+	lookup := s.db.WithContext(ctx).Where("user_id = ? AND item_id = ?", userID, input.ItemID)
+	if input.AssetID == nil {
+		lookup = lookup.Where("asset_id IS NULL")
+	} else {
+		lookup = lookup.Where("asset_id = ?", *input.AssetID)
+	}
+	err := lookup.First(&data).Error
+	created := false
+	if err != nil {
+		if err != gorm.ErrRecordNotFound {
+			return State{}, err
+		}
+		data = database.UserItemData{UserID: userID, ItemID: input.ItemID, AssetID: input.AssetID}
+		created = true
+	}
+
+	now := time.Now().UTC()
+	data = mergeCatalogProgress(data, input, duration, now)
+	if created {
+		if err := s.db.WithContext(ctx).Create(&data).Error; err != nil {
+			return State{}, err
+		}
+	} else {
+		if err := s.db.WithContext(ctx).Save(&data).Error; err != nil {
+			return State{}, err
+		}
+	}
+
+	return toCatalogState(data, duration), nil
+}
+
 func mergeProgress(progress database.PlaybackProgress, input UpdateInput, duration *int, now time.Time) database.PlaybackProgress {
 	completed := input.Completed || isCompleted(input.PositionSeconds, duration)
 
@@ -143,6 +212,32 @@ func mergeProgress(progress database.PlaybackProgress, input UpdateInput, durati
 	return progress
 }
 
+func mergeCatalogProgress(data database.UserItemData, input UpdateInput, duration *int, now time.Time) database.UserItemData {
+	completed := input.Completed || isCompleted(input.PositionSeconds, duration)
+	data.LastPlayedAt = &now
+	data.PlayedPercentage = playedPercentage(input.PositionSeconds, duration)
+	if input.AssetID != nil {
+		data.AssetID = input.AssetID
+	}
+
+	switch {
+	case completed:
+		data.PositionSeconds = maxInt(data.PositionSeconds, input.PositionSeconds)
+		data.PlayCount = maxInt(data.PlayCount, 1)
+		data.CompletedAt = &now
+	case data.CompletedAt != nil:
+		data.PositionSeconds = input.PositionSeconds
+		data.PlayCount = maxInt(data.PlayCount, 1)
+		data.CompletedAt = nil
+	default:
+		data.PositionSeconds = maxInt(data.PositionSeconds, input.PositionSeconds)
+		data.PlayCount = maxInt(data.PlayCount, 1)
+		data.CompletedAt = nil
+	}
+
+	return data
+}
+
 func (s *Service) GetState(ctx context.Context, userID, mediaItemID uint) (State, error) {
 	var progress database.PlaybackProgress
 	if err := s.db.WithContext(ctx).
@@ -151,6 +246,23 @@ func (s *Service) GetState(ctx context.Context, userID, mediaItemID uint) (State
 		return State{}, err
 	}
 	return toState(progress), nil
+}
+
+func (s *Service) GetCatalogState(ctx context.Context, userID, itemID uint) (State, error) {
+	var data database.UserItemData
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ? AND item_id = ?", userID, itemID).
+		Order("last_played_at desc, id desc").
+		First(&data).Error; err != nil {
+		return State{}, err
+	}
+	var item database.CatalogItem
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", itemID).
+		First(&item).Error; err != nil {
+		return State{}, err
+	}
+	return toCatalogState(data, item.RuntimeSeconds), nil
 }
 
 func (s *Service) ContinueWatching(ctx context.Context, userID uint, limit int) ([]Entry, error) {
@@ -193,14 +305,35 @@ func (s *Service) listEntries(ctx context.Context, userID uint, limit int, onlyC
 
 func toState(progress database.PlaybackProgress) State {
 	return State{
-		UserID:          progress.UserID,
-		MediaItemID:     progress.MediaItemID,
-		MediaFileID:     progress.MediaFileID,
-		PositionSeconds: progress.PositionSeconds,
-		DurationSeconds: progress.DurationSeconds,
-		Watched:         progress.Watched,
-		CompletedAt:     progress.CompletedAt,
-		LastPlayedAt:    progress.LastPlayedAt,
+		UserID:           progress.UserID,
+		ItemID:           0,
+		AssetID:          nil,
+		MediaItemID:      progress.MediaItemID,
+		MediaFileID:      progress.MediaFileID,
+		PositionSeconds:  progress.PositionSeconds,
+		DurationSeconds:  progress.DurationSeconds,
+		PlayedPercentage: playedPercentage(progress.PositionSeconds, progress.DurationSeconds),
+		PlayCount:        legacyPlayCount(progress),
+		Watched:          progress.Watched,
+		CompletedAt:      progress.CompletedAt,
+		LastPlayedAt:     progress.LastPlayedAt,
+	}
+}
+
+func toCatalogState(data database.UserItemData, duration *int) State {
+	return State{
+		UserID:           data.UserID,
+		ItemID:           data.ItemID,
+		AssetID:          data.AssetID,
+		MediaItemID:      0,
+		MediaFileID:      nil,
+		PositionSeconds:  data.PositionSeconds,
+		DurationSeconds:  duration,
+		PlayedPercentage: data.PlayedPercentage,
+		PlayCount:        data.PlayCount,
+		Watched:          data.CompletedAt != nil,
+		CompletedAt:      data.CompletedAt,
+		LastPlayedAt:     data.LastPlayedAt,
 	}
 }
 
@@ -223,6 +356,27 @@ func chooseDuration(existing, incoming *int) *int {
 		return existing
 	}
 	return nil
+}
+
+func playedPercentage(positionSeconds int, durationSeconds *int) *float64 {
+	if durationSeconds == nil || *durationSeconds <= 0 {
+		return nil
+	}
+	percentage := float64(positionSeconds) / float64(*durationSeconds) * 100
+	if percentage < 0 {
+		percentage = 0
+	}
+	if percentage > 100 {
+		percentage = 100
+	}
+	return &percentage
+}
+
+func legacyPlayCount(progress database.PlaybackProgress) int {
+	if progress.LastPlayedAt != nil || progress.CompletedAt != nil || progress.PositionSeconds > 0 {
+		return 1
+	}
+	return 0
 }
 
 func maxInt(left, right int) int {

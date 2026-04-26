@@ -13,30 +13,30 @@ export default function SchedulesPage() {
 
   if (!hasHydrated) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background text-foreground">
-        <div className="flex items-center gap-3 rounded-full border border-border/50 bg-card/85 px-5 py-3">
-          <LoaderCircleIcon className="size-4 animate-spin" />
-          <span className="text-sm text-muted-foreground">正在准备计划任务工作台</span>
-        </div>
+      <div className="flex items-center gap-3 rounded-[1.5rem] border border-border/60 bg-card/80 px-5 py-4 text-foreground shadow-sm">
+        <LoaderCircleIcon className="size-4 animate-spin" />
+        <span className="text-sm text-muted-foreground">
+          正在准备计划任务工作台
+        </span>
       </div>
     )
   }
 
   if (!token) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
-        <div className="max-w-xl space-y-4 text-center">
+      <div className="rounded-[1.5rem] border border-border/60 bg-card/80 px-6 py-8 text-foreground shadow-sm">
+        <div className="max-w-xl space-y-4">
           <Badge variant="outline" className="border-border/60 bg-card/80">
             Scheduled Operations
           </Badge>
-          <h1 className="text-3xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight">
             登录后进入计划任务工作台
           </h1>
           <p className="text-sm leading-7 text-muted-foreground">
             该页面需要管理员会话来查看计划任务状态、运行历史和后台维护入口。
           </p>
           <Button asChild>
-            <Link to="/login" search={{ redirect: '/schedules' }}>
+            <Link to="/login" search={{ redirect: '/settings/schedules' }}>
               前往登录
             </Link>
           </Button>

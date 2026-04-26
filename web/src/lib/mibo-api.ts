@@ -1,3 +1,5 @@
+import { useAuthStore } from '#/stores/auth-store'
+
 export type ApiErrorShape = {
   code: string
   message: string
@@ -21,6 +23,17 @@ export type LoginResult = {
   token: string
   expires_at: string
   user: User
+}
+
+export type SetupStatus = {
+  initialized: boolean
+  can_enter_app: boolean
+  has_users: boolean
+  has_media_sources: boolean
+  has_libraries: boolean
+  user_count: number
+  media_source_count: number
+  library_count: number
 }
 
 export type Library = {
@@ -183,6 +196,8 @@ export type MetadataSearchCandidate = {
   release_date: string
   year?: number
   confidence: number
+  matched_query?: string
+  reason_summary?: string
 }
 
 export type MediaItemDetail = MediaItem & {
@@ -196,12 +211,222 @@ export type MediaItemDetail = MediaItem & {
   files: MediaFile[]
 }
 
+export type TVSeasonMetadata = {
+  season_number: number
+  name: string
+  overview: string
+  poster_url: string
+  runtime_seconds?: number
+}
+
+export type TVEpisodeMetadata = {
+  media_item_id?: number
+  season_number: number
+  episode_number: number
+  name: string
+  overview: string
+  still_url: string
+  air_date?: string
+  runtime_seconds?: number
+}
+
+export type TVSeasonWithEpisodes = TVSeasonMetadata & {
+  episodes: TVEpisodeMetadata[]
+}
+
+export type CatalogSelectedImage = {
+  image_type: string
+  url: string
+  language?: string
+  width?: number
+  height?: number
+}
+
+export type CatalogExternalIdentity = {
+  provider: string
+  provider_type: string
+  external_id: string
+  is_primary: boolean
+  source?: string
+  confidence?: number
+}
+
+export type CatalogSourceEvidence = {
+  source_type: string
+  source_name: string
+  language?: string
+  external_id?: string
+  confidence?: number
+  fetched_at: string
+  expires_at?: string
+  summary?: unknown
+}
+
+export type CatalogFieldState = {
+  field_key: string
+  source_id?: number
+  value?: unknown
+  is_locked: boolean
+  lock_reason?: string
+  edited_by_user_id?: number
+  edited_at?: string
+}
+
+export type CatalogChildSummary = {
+  child_count: number
+  available_count: number
+  missing_count: number
+  unaired_count: number
+  played_count: number
+  in_progress_count: number
+  latest_air_date?: string
+  latest_added_at?: string
+}
+
+export type CatalogAssetLink = {
+  item_id: number
+  role: string
+  segment_index: number
+  start_seconds?: number
+  end_seconds?: number
+  confidence?: number
+  source?: string
+}
+
+export type CatalogListItem = {
+  id: number
+  library_id: number
+  type: string
+  title: string
+  original_title?: string
+  sort_title?: string
+  overview?: string
+  year?: number
+  runtime_seconds?: number
+  community_rating?: number
+  official_rating?: string
+  series_status?: string
+  availability_status: string
+  governance_status: string
+  release_date?: string
+  first_air_date?: string
+  last_air_date?: string
+  child_summary?: CatalogChildSummary
+  selected_images: CatalogSelectedImage[]
+  external_identities: CatalogExternalIdentity[]
+}
+
+export type CatalogAssetDetail = {
+  id: number
+  library_id: number
+  asset_type: string
+  display_name?: string
+  edition?: string
+  quality_label?: string
+  duration_seconds?: number
+  status: string
+  probe_status: string
+  file_ids: number[]
+  links: CatalogAssetLink[]
+}
+
+export type CatalogEpisodeDetail = {
+  id: number
+  library_id: number
+  type: string
+  title: string
+  overview?: string
+  year?: number
+  parent_index_number?: number
+  index_number?: number
+  index_number_end?: number
+  absolute_number?: number
+  runtime_seconds?: number
+  availability_status: string
+  governance_status: string
+  release_date?: string
+  first_air_date?: string
+  selected_images: CatalogSelectedImage[]
+  external_identities: CatalogExternalIdentity[]
+  source_evidence: CatalogSourceEvidence[]
+  field_states: CatalogFieldState[]
+  assets: CatalogAssetDetail[]
+}
+
+export type CatalogSeasonDetail = {
+  id: number
+  library_id: number
+  type: string
+  title: string
+  overview?: string
+  year?: number
+  index_number?: number
+  runtime_seconds?: number
+  availability_status: string
+  governance_status: string
+  child_summary?: CatalogChildSummary
+  selected_images: CatalogSelectedImage[]
+  external_identities: CatalogExternalIdentity[]
+  source_evidence: CatalogSourceEvidence[]
+  field_states: CatalogFieldState[]
+  episodes: CatalogEpisodeDetail[]
+}
+
+export type CatalogItemDetail = {
+  id: number
+  library_id: number
+  type: string
+  title: string
+  original_title?: string
+  sort_title?: string
+  overview?: string
+  year?: number
+  end_year?: number
+  runtime_seconds?: number
+  community_rating?: number
+  official_rating?: string
+  series_status?: string
+  availability_status: string
+  governance_status: string
+  release_date?: string
+  first_air_date?: string
+  last_air_date?: string
+  child_summary?: CatalogChildSummary
+  selected_images: CatalogSelectedImage[]
+  external_identities: CatalogExternalIdentity[]
+  source_evidence: CatalogSourceEvidence[]
+  field_states: CatalogFieldState[]
+  seasons: CatalogSeasonDetail[]
+  episodes: CatalogEpisodeDetail[]
+  assets: CatalogAssetDetail[]
+}
+
+export type CatalogGovernanceWorkspace = {
+  item_id: number
+  library_id: number
+  type: string
+  title: string
+  availability_status: string
+  governance_status: string
+  selected_images: CatalogSelectedImage[]
+  image_candidates: CatalogSelectedImage[]
+  external_identities: CatalogExternalIdentity[]
+  source_evidence: CatalogSourceEvidence[]
+  field_states: CatalogFieldState[]
+  assets: CatalogAssetDetail[]
+  recommended_children: CatalogListItem[]
+}
+
 export type ProgressState = {
   user_id: number
+  item_id?: number
+  asset_id?: number
   media_item_id: number
   media_file_id?: number
   position_seconds: number
   duration_seconds?: number
+  played_percentage?: number
+  play_count?: number
   watched: boolean
   completed_at?: string
   last_played_at?: string
@@ -215,6 +440,42 @@ export type LatestByLibrarySection = {
   library_id: number
   library_name: string
   items: MediaItem[]
+}
+
+export type CatalogLatestByLibrarySection = {
+  library_id: number
+  library_name: string
+  items: CatalogListItem[]
+}
+
+export type MetadataProviderSettings = {
+  configured: boolean
+  api_key_masked: boolean
+  base_url: string
+  image_base_url?: string
+  language: string
+  timeout: string
+  source: string
+  implementation: string
+}
+
+export type MetadataSettings = {
+  tmdb: MetadataProviderSettings
+  tvdb: MetadataProviderSettings
+}
+
+export type MetadataProviderInput = {
+  api_key?: string
+  clear_api_key?: boolean
+  base_url?: string
+  image_base_url?: string
+  language?: string
+  timeout?: string
+}
+
+export type MetadataSettingsInput = {
+  tmdb: MetadataProviderInput
+  tvdb: MetadataProviderInput
 }
 
 export type DiscoveryQuery = {
@@ -241,6 +502,11 @@ export type SearchResult = {
   watched_state: string
   highlight: string
 }
+
+export type CatalogDiscoveryResult =
+  | CatalogListItem
+  | DiscoveryItem
+  | SearchResult
 
 export type SearchHistoryEntry = {
   id: number
@@ -284,6 +550,9 @@ export type PlaybackDecision = {
 }
 
 export type PlaybackSource = {
+  item_id?: number
+  asset_id?: number
+  file_id?: number
   media_item_id: number
   media_file_id: number
   title: string
@@ -293,6 +562,8 @@ export type PlaybackSource = {
   direct: boolean
   size_bytes: number
   runtime_seconds?: number
+  quality_label?: string
+  edition?: string
   video_codec: string
   width?: number
   height?: number
@@ -383,6 +654,8 @@ type ApiOptions = {
 
 export const TOKEN_STORAGE_KEY = 'mibo-web-token'
 
+let isRedirectingToLogin = false
+
 export class ApiError extends Error {
   status: number
   code: string
@@ -400,8 +673,29 @@ export function getApiBaseUrl() {
     (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
       /\/$/,
       '',
-    ) ?? 'http://10.0.0.33:8080'
+    ) ?? 'http://127.0.0.1:8080'
   )
+}
+
+function handleUnauthorizedResponse(token?: string | null) {
+  if (!token || typeof window === 'undefined') {
+    return
+  }
+
+  const { pathname, search, hash } = window.location
+
+  useAuthStore.getState().clearSession()
+
+  if (pathname === '/login' || isRedirectingToLogin) {
+    return
+  }
+
+  isRedirectingToLogin = true
+
+  const redirect = `${pathname}${search}${hash}`
+  const loginUrl = new URL('/login', window.location.origin)
+  loginUrl.searchParams.set('redirect', redirect)
+  window.location.replace(loginUrl.toString())
 }
 
 export function createMiboApi(options: ApiOptions) {
@@ -429,6 +723,10 @@ export function createMiboApi(options: ApiOptions) {
         code: 'network_error',
         message: '无法连接后端服务，请确认 Mibo 服务已启动。',
       })
+    }
+
+    if (response.status === 401) {
+      handleUnauthorizedResponse(options.token)
     }
 
     let payload: Envelope<T> | null = null
@@ -464,6 +762,15 @@ export function createMiboApi(options: ApiOptions) {
   }
 
   return {
+    getSetupStatus() {
+      return request<SetupStatus>('/api/v1/setup/status')
+    },
+    register(username: string, password: string) {
+      return request<User>('/api/v1/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      })
+    },
     login(username: string, password: string) {
       return request<LoginResult>('/api/v1/auth/login', {
         method: 'POST',
@@ -544,6 +851,15 @@ export function createMiboApi(options: ApiOptions) {
     },
     listLibraries() {
       return request<Library[]>('/api/v1/libraries')
+    },
+    getMetadataSettings() {
+      return request<MetadataSettings>('/api/v1/settings/metadata')
+    },
+    updateMetadataSettings(input: MetadataSettingsInput) {
+      return request<MetadataSettings>('/api/v1/settings/metadata', {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      })
     },
     getLibrary(libraryId: number) {
       return request<LibraryDetail>(`/api/v1/libraries/${libraryId}`)
@@ -627,7 +943,7 @@ export function createMiboApi(options: ApiOptions) {
       }
 
       const queryString = query.toString()
-      return request<{ items: DiscoveryItem[] | SearchResult[] }>(
+      return request<{ items: CatalogDiscoveryResult[] }>(
         `/api/v1/discovery${queryString ? `?${queryString}` : ''}`,
       )
     },
@@ -638,6 +954,36 @@ export function createMiboApi(options: ApiOptions) {
     },
     getMediaItem(mediaItemId: number) {
       return request<MediaItemDetail>(`/api/v1/media-items/${mediaItemId}`)
+    },
+    getCatalogItem(itemId: number) {
+      return request<CatalogItemDetail>(`/api/v1/items/${itemId}`)
+    },
+    listLocalSeriesEpisodes(mediaItemId: number) {
+      return request<TVSeasonWithEpisodes[]>(
+        `/api/v1/media-items/${mediaItemId}/series-episodes`,
+      )
+    },
+    listCatalogSeriesSeasons(itemId: number) {
+      return request<CatalogSeasonDetail[]>(`/api/v1/series/${itemId}/seasons`)
+    },
+    listTVSeasons(tmdbId: number) {
+      return request<TVSeasonMetadata[]>(`/api/v1/tv/${tmdbId}/seasons`)
+    },
+    listTVSeasonEpisodes(
+      tmdbId: number,
+      seasonNumber: number,
+      options?: { libraryId?: number },
+    ) {
+      const query = new URLSearchParams()
+
+      if (typeof options?.libraryId === 'number' && options.libraryId > 0) {
+        query.set('library_id', String(options.libraryId))
+      }
+
+      const queryString = query.toString()
+      return request<TVEpisodeMetadata[]>(
+        `/api/v1/tv/${tmdbId}/seasons/${seasonNumber}/episodes${queryString ? `?${queryString}` : ''}`,
+      )
     },
     updateMediaItemMetadata(
       mediaItemId: number,
@@ -703,6 +1049,129 @@ export function createMiboApi(options: ApiOptions) {
         },
       )
     },
+    getCatalogGovernanceWorkspace(itemId: number) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/governance`,
+      )
+    },
+    updateCatalogGovernanceField(
+      itemId: number,
+      input: {
+        field_key: string
+        value?: unknown
+        lock?: boolean
+        lock_reason?: string
+        force?: boolean
+      },
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/governance/fields`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        },
+      )
+    },
+    selectCatalogGovernanceImage(
+      itemId: number,
+      input: {
+        image_type: string
+        url: string
+      },
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/governance/images`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        },
+      )
+    },
+    linkCatalogGovernanceAsset(
+      workspaceItemId: number,
+      assetId: number,
+      input: {
+        target_item_id: number
+      },
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links`,
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+    },
+    unlinkCatalogGovernanceAsset(
+      workspaceItemId: number,
+      assetId: number,
+      targetItemId: number,
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links/${targetItemId}`,
+        {
+          method: 'DELETE',
+        },
+      )
+    },
+    searchCatalogItemMetadata(
+      itemId: number,
+      input: {
+        title?: string
+        year?: number
+        imdb_id?: string
+        tmdb_id?: string
+        tvdb_id?: string
+      },
+    ) {
+      return request<MetadataSearchCandidate[]>(
+        `/api/v1/items/${itemId}/metadata/search`,
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+    },
+    applyCatalogItemMetadataCandidate(
+      itemId: number,
+      input: {
+        external_id: string
+      },
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/metadata/apply`,
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+    },
+    refetchCatalogItemMetadata(itemId: number) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/metadata/refetch`,
+        {
+          method: 'POST',
+        },
+      )
+    },
+    matchCatalogItem(itemId: number) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/match`,
+        {
+          method: 'POST',
+        },
+      )
+    },
+    reprobeMediaFile(mediaFileId: number) {
+      return request<Job>(`/api/v1/media-files/${mediaFileId}/probe`, {
+        method: 'POST',
+      })
+    },
+    reprobeInventoryFile(fileId: number) {
+      return request<Job>(`/api/v1/inventory-files/${fileId}/probe`, {
+        method: 'POST',
+      })
+    },
     listJobs(filters?: { limit?: number; status?: string; kind?: string }) {
       const query = new URLSearchParams()
 
@@ -746,9 +1215,12 @@ export function createMiboApi(options: ApiOptions) {
       })
     },
     runScheduleNow(scheduleId: number) {
-      return request<ScheduleRunNowResult>(`/api/v1/schedules/${scheduleId}/run`, {
-        method: 'POST',
-      })
+      return request<ScheduleRunNowResult>(
+        `/api/v1/schedules/${scheduleId}/run`,
+        {
+          method: 'POST',
+        },
+      )
     },
     listScheduleHistory(scheduleId: number) {
       return request<ScheduleRun[]>(`/api/v1/schedules/${scheduleId}/history`)
@@ -772,14 +1244,38 @@ export function createMiboApi(options: ApiOptions) {
         `/api/v1/media-items/${mediaItemId}/playback?${query.toString()}`,
       )
     },
+    getCatalogPlayback(
+      itemId: number,
+      playbackOptions: {
+        assetId?: number
+        clientProfile: ClientProfile
+      },
+    ) {
+      const query = new URLSearchParams({
+        client_profile: playbackOptions.clientProfile,
+      })
+
+      if (typeof playbackOptions.assetId === 'number') {
+        query.set('asset_id', String(playbackOptions.assetId))
+      }
+
+      return request<PlaybackSource>(
+        `/api/v1/items/${itemId}/playback?${query.toString()}`,
+      )
+    },
     getMediaItemProgress(mediaItemId: number) {
       return request<ProgressState>(
         `/api/v1/media-items/${mediaItemId}/progress`,
       )
     },
+    getCatalogItemProgress(itemId: number) {
+      return request<ProgressState>(`/api/v1/items/${itemId}/progress`)
+    },
     updateProgress(input: {
-      media_item_id: number
+      media_item_id?: number
       media_file_id?: number
+      item_id?: number
+      asset_id?: number
       position_seconds: number
       duration_seconds?: number
       completed?: boolean
@@ -793,13 +1289,17 @@ export function createMiboApi(options: ApiOptions) {
       return request<ProgressEntry[]>('/api/v1/me/continue-watching')
     },
     latestByLibrary() {
-      return request<LatestByLibrarySection[]>('/api/v1/home/latest-by-library')
+      return request<
+        (LatestByLibrarySection | CatalogLatestByLibrarySection)[]
+      >('/api/v1/home/latest-by-library')
     },
     homeDiscovery() {
       return request<HomeDiscovery>('/api/v1/home/discovery')
     },
     recentlyAdded(limit = 5) {
-      return request<MediaItem[]>(`/api/v1/home/recently-added?limit=${limit}`)
+      return request<(MediaItem | CatalogListItem)[]>(
+        `/api/v1/home/recently-added?limit=${limit}`,
+      )
     },
   }
 }

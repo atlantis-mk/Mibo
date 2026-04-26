@@ -114,6 +114,17 @@ func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
+	if r.shouldServeCatalogLibraryItems(req.Context()) {
+		limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+		items, err := r.catalog.ListLibraryItems(req.Context(), libraryID, strings.TrimSpace(req.URL.Query().Get("q")), strings.TrimSpace(req.URL.Query().Get("type")), limit)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		normalizeCatalogListItemsArtworkURLs(req, items)
+		writeJSON(req.Context(), w, http.StatusOK, items)
+		return
+	}
 	user, _ := r.optionalUser(req)
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
 	browseInput := library.BrowseMediaItemsInput{
@@ -146,12 +157,17 @@ func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request
 	}
 	legacy := make([]any, 0, len(out))
 	for _, item := range out {
-		legacy = append(legacy, item.Item)
+		mediaItem := item.Item
+		normalizeMediaItemArtworkURLs(req, &mediaItem)
+		legacy = append(legacy, mediaItem)
 	}
 	writeJSON(req.Context(), w, http.StatusOK, legacy)
 }
 
 func (r *Router) handleGetMediaItem(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")) {
+		return
+	}
 	mediaItemID, err := parseUintPathValue(req, "id")
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -163,6 +179,7 @@ func (r *Router) handleGetMediaItem(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
+	normalizeMediaItemDetailArtworkURLs(req, &item)
 
 	writeJSON(req.Context(), w, http.StatusOK, item)
 }

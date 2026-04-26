@@ -2,7 +2,7 @@ import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
 import { Separator } from '#/components/ui/separator'
-import type { MediaItemDetail, MetadataSearchCandidate } from '#/lib/mibo-api'
+import type { MetadataSearchCandidate } from '#/lib/mibo-api'
 
 export function CandidateCard({
   candidate,
@@ -39,6 +39,16 @@ export function CandidateCard({
             {candidate.year ?? '年份未知'} ·{' '}
             {candidate.media_type === 'tv' ? '剧集' : '电影'}
           </div>
+          {candidate.matched_query ? (
+            <div className="text-xs text-muted-foreground">
+              匹配 query: {candidate.matched_query}
+            </div>
+          ) : null}
+          {candidate.reason_summary ? (
+            <div className="text-xs text-muted-foreground">
+              {candidate.reason_summary}
+            </div>
+          ) : null}
           <p className="line-clamp-3 text-sm text-muted-foreground">
             {candidate.overview || '暂无简介'}
           </p>
@@ -61,7 +71,14 @@ export function CandidatePreviewCard({
   candidate,
 }: {
   title: string
-  item?: MediaItemDetail
+  item?: {
+    title: string
+    original_title?: string
+    year?: number
+    overview?: string
+    poster_url?: string
+    backdrop_url?: string
+  }
   candidate?: MetadataSearchCandidate
 }) {
   const posterUrl = item?.poster_url || candidate?.poster_url || ''
@@ -71,6 +88,8 @@ export function CandidatePreviewCard({
   const originalTitle =
     item?.original_title || candidate?.original_title || '未填写'
   const year = item?.year ?? candidate?.year
+  const matchedQuery = candidate?.matched_query || ''
+  const reasonSummary = candidate?.reason_summary || ''
 
   return (
     <Card className="rounded-[1.25rem] border-border/60 bg-card/80 py-0">
@@ -84,6 +103,12 @@ export function CandidatePreviewCard({
         <SummaryRow label="标题" value={mainTitle} />
         <SummaryRow label="原始标题" value={originalTitle} />
         <SummaryRow label="年份" value={year ? String(year) : '未填写'} />
+        {matchedQuery ? (
+          <SummaryRow label="匹配 query" value={matchedQuery} />
+        ) : null}
+        {reasonSummary ? (
+          <SummaryRow label="候选说明" value={reasonSummary} multiline />
+        ) : null}
         <SummaryRow label="简介" value={overview} multiline />
       </CardContent>
     </Card>

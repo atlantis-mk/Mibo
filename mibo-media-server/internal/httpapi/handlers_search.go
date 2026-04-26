@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/library"
 )
 
@@ -20,12 +21,28 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
+	if r.shouldServeCatalogLibraryItems(req.Context()) && r.catalog != nil {
+		var items []catalog.CatalogListItem
+		if strings.TrimSpace(input.Query) == "" {
+			items, err = r.catalog.ListItems(req.Context(), input.LibraryID, "", string(input.TypeFilter), input.Limit)
+		} else {
+			items, err = r.catalog.SearchItems(req.Context(), input.LibraryID, input.Query, string(input.TypeFilter), input.Limit)
+		}
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		normalizeCatalogListItemsArtworkURLs(req, items)
+		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
+		return
+	}
 	if strings.TrimSpace(input.Query) == "" {
 		items, err := r.library.DiscoverMediaItems(req.Context(), &user.ID, input)
 		if err != nil {
 			writeError(req.Context(), w, http.StatusInternalServerError, err)
 			return
 		}
+		normalizeDiscoveryItemsArtworkURLs(req, items)
 		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
 		return
 	}
@@ -34,6 +51,7 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeSearchResultsArtworkURLs(req, results)
 	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": results})
 }
 

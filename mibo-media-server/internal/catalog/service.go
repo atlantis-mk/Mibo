@@ -151,7 +151,7 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (databa
 		LastCanonicalizedAt: timePtr(time.Now().UTC()),
 	}
 
-	return item, s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if item.ParentID != nil {
 			var parent database.CatalogItem
 			if err := tx.First(&parent, *item.ParentID).Error; err != nil {
@@ -173,8 +173,9 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (databa
 				return err
 			}
 		}
-		return nil
+		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: item.ID})
 	})
+	return item, err
 }
 
 func (s *Service) ListChildren(ctx context.Context, parentID uint) ([]database.CatalogItem, error) {
@@ -215,7 +216,13 @@ func (s *Service) RecordMetadataSource(ctx context.Context, input MetadataSource
 		FetchedAt:   input.FetchedAt,
 		ExpiresAt:   input.ExpiresAt,
 	}
-	return source, s.db.WithContext(ctx).Create(&source).Error
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&source).Error; err != nil {
+			return err
+		}
+		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: input.ItemID})
+	})
+	return source, err
 }
 
 func (s *Service) SetExternalID(ctx context.Context, input ExternalIDInput) (database.CatalogExternalID, error) {
@@ -235,10 +242,15 @@ func (s *Service) SetExternalID(ctx context.Context, input ExternalIDInput) (dat
 		Source:       strings.TrimSpace(input.Source),
 		Confidence:   input.Confidence,
 	}
-	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "provider"}, {Name: "provider_type"}, {Name: "external_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"item_id", "is_primary", "source", "confidence", "updated_at"}),
-	}).Create(&externalID).Error
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "provider"}, {Name: "provider_type"}, {Name: "external_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"item_id", "is_primary", "source", "confidence", "updated_at"}),
+		}).Create(&externalID).Error; err != nil {
+			return err
+		}
+		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: input.ItemID})
+	})
 	return externalID, err
 }
 
@@ -297,7 +309,7 @@ func (s *Service) ApplyField(ctx context.Context, input ApplyFieldInput) (databa
 			}
 		}
 		applied = true
-		return nil
+		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: input.ItemID})
 	})
 	return state, applied, err
 }

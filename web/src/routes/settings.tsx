@@ -1,7 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import SettingsPage from '#/features/settings'
+import SettingsLayout from '#/features/settings'
+import { requireCanEnterApp } from '#/lib/setup-gate'
 
 export const Route = createFileRoute('/settings')({
-  component: SettingsPage,
+  beforeLoad: async () => {
+    await requireCanEnterApp()
+  },
+  component: SettingsLayout,
 })

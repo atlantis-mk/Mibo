@@ -56,9 +56,9 @@ func (s *Service) RunScheduledArtworkRefresh(ctx context.Context, due schedule.D
 			return ScheduledJobResult{}, err
 		}
 		updates := map[string]any{
-			"poster_url":   imageURL(tmdbCfg, detail.PosterPath),
-			"backdrop_url": imageURL(tmdbCfg, detail.BackdropPath),
-			"logo_url":     imageURL(tmdbCfg, pickLogoPath(tmdbCfg.Language, detail.Images.Logos)),
+			"poster_url":   preferArtworkURL(item.PosterURL, imageURL(tmdbCfg, detail.PosterPath)),
+			"backdrop_url": preferArtworkURL(item.BackdropURL, imageURL(tmdbCfg, detail.BackdropPath)),
+			"logo_url":     preferArtworkURL(item.LogoURL, imageURL(tmdbCfg, pickLogoPath(tmdbCfg.Language, detail.Images.Logos))),
 		}
 		if err := s.db.WithContext(ctx).Model(&database.MediaItem{}).Where("id = ?", item.ID).Updates(updates).Error; err != nil {
 			return ScheduledJobResult{}, err

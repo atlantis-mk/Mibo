@@ -37,6 +37,10 @@ func (s *hlsService) PlaylistURL(mediaFileID uint) string {
 	return fmt.Sprintf("/api/v1/media-files/%d/hls/index.m3u8", mediaFileID)
 }
 
+func (s *hlsService) InventoryPlaylistURL(fileID uint) string {
+	return fmt.Sprintf("/api/v1/inventory-files/%d/hls/index.m3u8", fileID)
+}
+
 func (s *hlsService) EnsurePlaylist(ctx context.Context, mediaFileID uint) (string, error) {
 	if !s.Enabled() {
 		return "", fmt.Errorf("hls playback is disabled")
@@ -44,7 +48,7 @@ func (s *hlsService) EnsurePlaylist(ctx context.Context, mediaFileID uint) (stri
 
 	s.cleanupExpiredArtifacts()
 
-	lock := s.fileLock(mediaFileID)
+	lock := s.fileLock(strconv.FormatUint(uint64(mediaFileID), 10))
 	lock.Lock()
 	defer lock.Unlock()
 
@@ -91,6 +95,60 @@ func (s *hlsService) EnsurePlaylist(ctx context.Context, mediaFileID uint) (stri
 	return playlistPath, nil
 }
 
+func (s *hlsService) EnsureInventoryPlaylist(ctx context.Context, fileID uint) (string, error) {
+	if !s.Enabled() {
+		return "", fmt.Errorf("hls playback is disabled")
+	}
+
+	s.cleanupExpiredArtifacts()
+
+	lock := s.fileLock(inventoryArtifactKey(fileID))
+	lock.Lock()
+	defer lock.Unlock()
+
+	artifactDir := s.inventoryArtifactDir(fileID)
+	playlistPath := filepath.Join(artifactDir, "index.m3u8")
+	if fileExists(playlistPath) {
+		return playlistPath, nil
+	}
+	if err := os.MkdirAll(s.cfg.HLS.RootPath, 0o755); err != nil {
+		return "", err
+	}
+
+	inputSource, err := s.resolveInventoryInputSource(ctx, fileID)
+	if err != nil {
+		return "", err
+	}
+
+	tempDir := artifactDir + ".tmp"
+	if err := os.RemoveAll(tempDir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		return "", err
+	}
+
+	if err := s.runFFmpeg(ctx, inputSource, tempDir); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", err
+	}
+	if !fileExists(filepath.Join(tempDir, "index.m3u8")) {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf("ffmpeg did not produce hls playlist")
+	}
+
+	if err := os.RemoveAll(artifactDir); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", err
+	}
+	if err := os.Rename(tempDir, artifactDir); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", err
+	}
+
+	return playlistPath, nil
+}
+
 func (s *hlsService) ArtifactPath(mediaFileID uint, name string) (string, error) {
 	cleanName := filepath.Base(strings.TrimSpace(name))
 	if cleanName == "." || cleanName == "" || cleanName != strings.TrimSpace(name) {
@@ -98,6 +156,18 @@ func (s *hlsService) ArtifactPath(mediaFileID uint, name string) (string, error)
 	}
 	artifactPath := filepath.Join(s.artifactDir(mediaFileID), cleanName)
 	if !isWithinRoot(s.artifactDir(mediaFileID), artifactPath) {
+		return "", fmt.Errorf("invalid hls artifact path")
+	}
+	return artifactPath, nil
+}
+
+func (s *hlsService) InventoryArtifactPath(fileID uint, name string) (string, error) {
+	cleanName := filepath.Base(strings.TrimSpace(name))
+	if cleanName == "." || cleanName == "" || cleanName != strings.TrimSpace(name) {
+		return "", fmt.Errorf("invalid hls artifact name")
+	}
+	artifactPath := filepath.Join(s.inventoryArtifactDir(fileID), cleanName)
+	if !isWithinRoot(s.inventoryArtifactDir(fileID), artifactPath) {
 		return "", fmt.Errorf("invalid hls artifact path")
 	}
 	return artifactPath, nil
@@ -204,6 +274,48 @@ func (s *hlsService) resolveInputSource(ctx context.Context, mediaFileID uint) (
 	return inputSource, nil
 }
 
+func (s *hlsService) resolveInventoryInputSource(ctx context.Context, fileID uint) (string, error) {
+	var file database.InventoryFile
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", fileID).
+		First(&file).Error; err != nil {
+		return "", err
+	}
+
+	var libraryRecord database.Library
+	if err := s.db.WithContext(ctx).First(&libraryRecord, file.LibraryID).Error; err != nil {
+		return "", err
+	}
+	var source database.MediaSource
+	if err := s.db.WithContext(ctx).First(&source, libraryRecord.MediaSourceID).Error; err != nil {
+		return "", err
+	}
+	provider, err := s.storage.BuildForSource(source)
+	if err != nil {
+		return "", err
+	}
+	object, err := provider.Get(ctx, storage.GetRequest{Path: file.StoragePath})
+	if err != nil {
+		return "", err
+	}
+	if object.IsDir {
+		return "", fmt.Errorf("selected inventory file is a directory")
+	}
+	inputSource := strings.TrimSpace(object.RawURL)
+	if inputSource != "" {
+		return inputSource, nil
+	}
+	link, err := provider.Link(ctx, storage.LinkRequest{Path: file.StoragePath})
+	if err != nil {
+		return "", err
+	}
+	inputSource = strings.TrimSpace(link.URL)
+	if inputSource == "" {
+		return "", fmt.Errorf("media input source unavailable for %s", file.StoragePath)
+	}
+	return inputSource, nil
+}
+
 func (s *hlsService) cleanupExpiredArtifacts() {
 	if s.cfg.HLS.CleanupAge <= 0 {
 		return
@@ -227,9 +339,17 @@ func (s *hlsService) artifactDir(mediaFileID uint) string {
 	return filepath.Join(s.cfg.HLS.RootPath, strconv.FormatUint(uint64(mediaFileID), 10))
 }
 
-func (s *hlsService) fileLock(mediaFileID uint) *sync.Mutex {
-	lock, _ := s.locks.LoadOrStore(mediaFileID, &sync.Mutex{})
+func (s *hlsService) inventoryArtifactDir(fileID uint) string {
+	return filepath.Join(s.cfg.HLS.RootPath, inventoryArtifactKey(fileID))
+}
+
+func (s *hlsService) fileLock(key string) *sync.Mutex {
+	lock, _ := s.locks.LoadOrStore(key, &sync.Mutex{})
 	return lock.(*sync.Mutex)
+}
+
+func inventoryArtifactKey(fileID uint) string {
+	return "inventory-" + strconv.FormatUint(uint64(fileID), 10)
 }
 
 func fileExists(path string) bool {

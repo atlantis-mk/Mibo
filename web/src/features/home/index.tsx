@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { LoaderCircleIcon, Settings2Icon } from 'lucide-react'
 import type { Swiper as SwiperType } from 'swiper/types'
 
@@ -19,6 +19,7 @@ export default function Home() {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
+  const navigate = useNavigate()
   const queryToken = token ?? 'guest'
 
   const [swiper, setSwiper] = useState<SwiperType | null>(null)
@@ -45,9 +46,24 @@ export default function Home() {
     [data.items],
   )
   const showCount = useMemo(
-    () => data.items.filter((item) => item.type === 'show').length,
+    () =>
+      data.items.filter(
+        (item) => item.type === 'show' || item.type === 'series',
+      ).length,
     [data.items],
   )
+
+  useEffect(() => {
+    if (!hasHydrated || (token && user)) {
+      return
+    }
+
+    void navigate({
+      to: '/login',
+      search: { redirect: '/' },
+      replace: true,
+    })
+  }, [hasHydrated, navigate, token, user])
 
   const scrollHeroTo = (index: number) => {
     if (!swiper) return
@@ -73,28 +89,12 @@ export default function Home() {
 
   if (!token || !user) {
     return (
-      <div className="relative flex h-svh w-full items-center justify-center overflow-hidden bg-background px-6 text-foreground">
-        <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted/30" />
-        <div className="relative max-w-xl space-y-6 text-center">
-          <Badge
-            className="border-border/60 bg-background/80"
-            variant="outline"
-          >
-            Mibo Home
-          </Badge>
-          <div className="space-y-3">
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-              登录后查看全屏首页轮播
-            </h1>
-            <p className="text-sm leading-7 text-muted-foreground sm:text-base">
-              首页会展示最近加入的影片和剧集，并把媒体库与继续观看数据整合进同一个沉浸式入口。
-            </p>
-          </div>
-          <Button asChild size="lg" className="min-w-36">
-            <Link to="/login" search={{ redirect: '/' }}>
-              前往登录
-            </Link>
-          </Button>
+      <div className="flex h-svh w-full items-center justify-center bg-background text-foreground">
+        <div className="flex items-center gap-3 rounded-full border border-border/40 bg-background/80 px-5 py-3 backdrop-blur-xl">
+          <LoaderCircleIcon className="size-4 animate-spin" />
+          <span className="text-sm text-muted-foreground">
+            正在跳转到登录页
+          </span>
         </div>
       </div>
     )
@@ -124,22 +124,69 @@ export default function Home() {
     )
   }
 
-  if (data.items.length === 0) {
-    return (
-      <div className="flex h-svh w-full items-center justify-center bg-background px-6 text-foreground">
-        <div className="max-w-xl space-y-4 text-center">
+  const topBar = (
+    <AppTopBar
+      leftSlot={
+        <>
+          <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">Mibo Home</div>
+            <div className="truncate text-xs text-muted-foreground">
+              最近加入轮播 · {data.items.length} 条内容
+            </div>
+          </div>
+        </>
+      }
+      rightSlot={
+        <div className="hidden items-center gap-2 sm:flex">
           <Badge
-            className="border-border/60 bg-background/80"
+            className="border-border/50 bg-background/80"
             variant="outline"
           >
-            首页已就绪
+            {user.username}
           </Badge>
-          <h1 className="text-4xl font-semibold tracking-tight">
-            还没有可轮播的媒体内容
-          </h1>
-          <p className="text-sm leading-7 text-muted-foreground sm:text-base">
-            等后端扫描到最近加入的影片或剧集后，这里会自动切换成全屏轮播首页。
-          </p>
+          <Badge
+            className="border-border/50 bg-background/80"
+            variant="outline"
+          >
+            媒体库 {data.libraryCount}
+          </Badge>
+          <Button
+            asChild
+            size="icon-sm"
+            variant="outline"
+            className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
+          >
+            <Link to="/settings">
+              <Settings2Icon className="size-4" />
+              <span className="sr-only">进入设置</span>
+            </Link>
+          </Button>
+        </div>
+      }
+    />
+  )
+
+  if (data.items.length === 0) {
+    return (
+      <div className="relative min-w-0 flex-1 bg-background text-foreground">
+        {topBar}
+
+        <div className="flex min-h-svh items-center justify-center px-6 pb-8 pt-24">
+          <div className="max-w-xl space-y-4 text-center">
+            <Badge
+              className="border-border/60 bg-background/80"
+              variant="outline"
+            >
+              首页已就绪
+            </Badge>
+            <h1 className="text-4xl font-semibold tracking-tight">
+              还没有可轮播的媒体内容
+            </h1>
+            <p className="text-sm leading-7 text-muted-foreground sm:text-base">
+              等后端扫描到最近加入的影片或剧集后，这里会自动切换成全屏轮播首页。
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -147,46 +194,7 @@ export default function Home() {
 
   return (
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
-      <AppTopBar
-        leftSlot={
-          <>
-            <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">Mibo Home</div>
-              <div className="truncate text-xs text-muted-foreground">
-                最近加入轮播 · {data.items.length} 条内容
-              </div>
-            </div>
-          </>
-        }
-        rightSlot={
-          <div className="hidden items-center gap-2 sm:flex">
-            <Badge
-              className="border-border/50 bg-background/80"
-              variant="outline"
-            >
-              {user.username}
-            </Badge>
-            <Badge
-              className="border-border/50 bg-background/80"
-              variant="outline"
-            >
-              媒体库 {data.libraryCount}
-            </Badge>
-            <Button
-              asChild
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-            >
-              <Link to="/settings">
-                <Settings2Icon className="size-4" />
-                <span className="sr-only">进入设置</span>
-              </Link>
-            </Button>
-          </div>
-        }
-      />
+      {topBar}
 
       <HeroCarousel
         heroItems={heroItems}

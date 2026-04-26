@@ -134,29 +134,30 @@ curl http://127.0.0.1:8080/api/v1/libraries/1/items
 curl http://127.0.0.1:8080/api/v1/libraries/1/items?type=movie
 ```
 
-### 查看媒体条目详情
+### 查看 catalog 条目详情
 
 ```bash
-curl http://127.0.0.1:8080/api/v1/media-items/1
+curl http://127.0.0.1:8080/api/v1/items/1
 ```
 
-### 手动重匹配元数据
+### 手动重匹配 catalog 元数据
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/media-items/1/match
+curl -X POST http://127.0.0.1:8080/api/v1/items/1/match
 ```
 
-### 获取播放源
+### 获取 catalog 播放源
 
 ```bash
-curl http://127.0.0.1:8080/api/v1/media-items/1/playback
-curl http://127.0.0.1:8080/api/v1/media-items/1/playback?file_id=1
+curl http://127.0.0.1:8080/api/v1/items/1/playback?client_profile=web
+curl http://127.0.0.1:8080/api/v1/items/1/playback?client_profile=web\&asset_id=10
 ```
 
-### 获取文件播放直链
+### 获取资产与库存文件直链
 
 ```bash
-curl http://127.0.0.1:8080/api/v1/media-files/1/link
+curl http://127.0.0.1:8080/api/v1/assets/10/link
+curl http://127.0.0.1:8080/api/v1/inventory-files/20/stream
 ```
 
 ### 注册与登录
@@ -178,15 +179,15 @@ curl http://127.0.0.1:8080/api/v1/me \
   -H 'Authorization: Bearer <token>'
 ```
 
-### 同步播放进度
+### 同步 catalog 播放进度
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/me/progress \
   -H 'Authorization: Bearer <token>' \
   -H 'Content-Type: application/json' \
   -d '{
-    "media_item_id": 1,
-    "media_file_id": 1,
+    "item_id": 1,
+    "asset_id": 10,
     "position_seconds": 180
   }'
 ```
@@ -201,12 +202,57 @@ curl http://127.0.0.1:8080/api/v1/me/recently-played \
   -H 'Authorization: Bearer <token>'
 ```
 
-### 查看单条媒体的当前用户进度
+### 查看单条 catalog 条目的当前用户进度
 
 ```bash
-curl http://127.0.0.1:8080/api/v1/media-items/1/progress \
+curl http://127.0.0.1:8080/api/v1/items/1/progress \
   -H 'Authorization: Bearer <token>'
 ```
+
+### 检查 catalog consistency
+
+```bash
+curl http://127.0.0.1:8080/api/v1/catalog-migration/consistency \
+  -H 'Authorization: Bearer <admin-token>'
+```
+
+### 重建 catalog rollups / availability / search documents
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/catalog-migration/rebuild-projections \
+  -H 'Authorization: Bearer <admin-token>'
+```
+
+### catalog cutover 运维说明
+
+- `catalog_read_enabled` 不再因为“空库”或“已有 catalog 数据”而自动视为切换完成。未显式设置时，只有在写入 `catalog_validation_completed_at` 或 `legacy_cleanup_completed_at` 后，catalog reads 才会默认开启；如果数据库仍只有 legacy `media_items` 数据，则会继续保持关闭。
+- 建议的切换前检查顺序：
+  1. 调用 `GET /api/v1/catalog-migration/consistency`
+  2. 如果返回 drift，则调用 `POST /api/v1/catalog-migration/rebuild-projections`
+  3. 重新检查 consistency，确认 rollup / availability / search document 已收敛
+- 当 catalog reads 已开启时，`/api/v1/media-items/*` 与 `/api/v1/media-files/*` 只应视为退役兼容路径；新功能应改用 `/api/v1/items/*`、`/api/v1/assets/*` 与 `/api/v1/inventory-files/*`。
+
+### catalog governance 资产纠错
+
+当前治理工作区支持在“当前条目及其后代”范围内修正资产链接：
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/items/1/governance/assets/10/links \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"target_item_id": 12}'
+
+curl -X DELETE http://127.0.0.1:8080/api/v1/items/1/governance/assets/10/links/12 \
+  -H 'Authorization: Bearer <token>'
+```
+
+这些操作只更新 `asset_items` 关系，不会覆盖字段锁、来源证据或图片选择状态。
+
+## Catalog Read Default
+
+- 空库或已经写入 `catalog_items` 的数据库会默认启用 catalog reads。
+- 只有 legacy `media_items` / `media_files` 的数据库会保持 catalog reads 关闭，直到 backfill 或显式设置 `catalog_read_enabled=true`。
+- 当 catalog reads 开启后，legacy `/api/v1/media-items/*` 和 `/api/v1/media-files/*` 路径会返回退役响应，请改用 `/api/v1/items/*`、`/api/v1/assets/*` 和 `/api/v1/inventory-files/*`。
 
 ### 手动重扫媒体库
 
@@ -220,47 +266,39 @@ curl -X POST http://127.0.0.1:8080/api/v1/libraries/1/scan
 curl -X POST http://127.0.0.1:8080/api/v1/jobs/1/retry
 ```
 
+## Catalog 运行与恢复
+
+当前 `sync_library` 主路径已经切到 catalog kernel：
+
+- 递归遍历目录并过滤非视频文件。
+- Upsert `inventory_files`、`media_assets`、`asset_files` 与 `catalog_items` 层级，而不是继续把新扫描结果写回 legacy `media_items` / `media_files`。
+- 对缺失文件做软删除标记，并刷新 catalog availability、rollups 与 search documents。
+
+扫描后的补充任务也以 catalog 实体为主：
+
+- 探测任务围绕 `inventory_files` 更新技术信息与关联 `media_assets`。
+- 元数据治理围绕 catalog item 身份执行匹配、重抓、字段锁与图片选择。
+
+播放链路当前采用 catalog item -> asset -> inventory file 解析：
+
+- 优先解析所选或默认 `media_asset`。
+- 通过存储提供方获取直链，必要时回退到 `/api/v1/inventory-files/:id/hls/*`。
+- 继续观看与最近播放基于 catalog item / asset 进度记录构建。
+
+推荐恢复流程：
+
+1. 先调用 `GET /api/v1/catalog-migration/consistency` 检查 rollup、availability、asset-file link 与 search document 是否存在漂移。
+2. 如发现漂移，调用 `POST /api/v1/catalog-migration/rebuild-projections` 重建派生数据。
+3. 如果问题来自旧数据未迁移完整，重新触发 catalog backfill；如果问题来自存储变更，重新扫描对应媒体库。
+4. 只有在需要临时迁移回退时，才显式关闭 `catalog_read_enabled`；正常运行应保持 catalog reads 为默认主路径。
+
 ## 当前边界
 
-当前版本已经覆盖 `M0 + M1 + M2 + M3`，并补上了 `M4` 的基础用户与进度链路，但仍不包含：
+当前版本仍不包含：
 
-- 更完整的 TV Season / Episode 元数据建模
-- 手动匹配候选选择
 - `TVDB` 接入
-- 转码和复杂设备兼容策略
+- 转码和更复杂的设备兼容策略
 - 家庭共享的复杂权限模型
 - 收藏 / 喜欢 / 更完整播放历史
 
 这些能力可以在现有模块边界上继续向后续里程碑迭代。
-
-当前 `sync_library` 任务会执行基础扫描：
-
-- 递归遍历目录
-- 过滤非视频文件
-- 识别电影与剧集文件
-- 回写 `media_items` 和 `media_files`
-- 对缺失文件做软删除标记
-
-扫描发现文件后，会继续排队后台富化任务：
-
-- `match_media_item`
-- `probe_media_file`
-
-播放接口当前采用直连策略：
-
-- 优先从 `media_items` 选择最佳 `media_file`
-- 通过 `OpenList` 获取直链
-- 返回可播放性检查结果和技术信息
-
-当前认证与进度系统采用最小会话模式：
-
-- 登录后返回 Bearer token
-- 每个用户独立维护 `playback_progress`
-- 继续观看和最近播放基于用户进度记录构建
-
-当前仍未实现高级媒体语义：
-
-- 多季多集结构建模
-- 手动匹配候选确认
-- 更复杂的置信度和冲突处理
-- 多元数据源聚合

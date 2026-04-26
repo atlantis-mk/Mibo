@@ -14,6 +14,13 @@ import type { Swiper as SwiperType } from 'swiper/types'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import {
+  formatMediaCardTitle,
+  getMediaCardBackdropUrl,
+  getMediaCardPosterUrl,
+  getMediaCardType,
+  getPrimarySeriesTitle,
+} from '#/lib/media-presentation'
 import { cn } from '#/lib/utils'
 
 const DEFAULT_OVERVIEW =
@@ -61,21 +68,30 @@ export function HeroCarousel({
       className="w-full"
     >
       {heroItems.map((item) => {
-        const backgroundImage = item.backdrop_url || item.poster_url
+        const backgroundImage =
+          getMediaCardBackdropUrl(item) || getMediaCardPosterUrl(item)
+        const displayTitle = formatMediaCardTitle(item)
+        const seriesTitle = getPrimarySeriesTitle(item)
         return (
           <SwiperSlide key={item.id}>
             <section
               className="relative min-h-svh overflow-hidden"
-              style={{
-                backgroundImage: backgroundImage
-                  ? `url(${backgroundImage})`
-                  : 'linear-gradient(135deg, rgba(5,10,18,1), rgba(30,41,59,0.88), rgba(15,118,110,0.66))',
-                backgroundPosition: 'center',
-                backgroundSize: 'cover',
-              }}
+              style={
+                backgroundImage
+                  ? undefined
+                  : {
+                      background:
+                        'linear-gradient(135deg, rgba(5,10,18,1), rgba(30,41,59,0.88), rgba(15,118,110,0.66))',
+                    }
+              }
             >
               {backgroundImage ? (
                 <>
+                  <img
+                    src={backgroundImage}
+                    alt={item.title}
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
                   <div className="absolute inset-0 bg-linear-to-r from-background via-background/15 to-background/95" />
                   <div className="absolute inset-0 bg-linear-to-t from-background/95 via-background/20 to-background/10" />
                 </>
@@ -92,22 +108,22 @@ export function HeroCarousel({
                     <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground sm:text-sm">
                       <span>当前用户 {userName}</span>
                       <span>•</span>
-                      <span>{formatMediaType(item.type)}</span>
+                      <span>{formatMediaType(getMediaCardType(item))}</span>
                       {item.year ? (
                         <>
                           <span>•</span>
                           <span>{item.year}</span>
                         </>
                       ) : null}
-                      {item.series_title ? (
+                      {getMediaCardType(item) !== 'show' && seriesTitle ? (
                         <>
                           <span>•</span>
-                          <span>{item.series_title}</span>
+                          <span>{seriesTitle}</span>
                         </>
                       ) : null}
                     </div>
                     <h1 className="mt-5 max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
-                      {item.title}
+                      {displayTitle}
                     </h1>
                     <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
                       {item.overview || DEFAULT_OVERVIEW}
@@ -117,7 +133,7 @@ export function HeroCarousel({
                         <Link
                           to="/play/$id"
                           params={{ id: String(item.id) }}
-                          search={{ fromStart: false }}
+                          search={{ fromStart: false, assetId: undefined }}
                         >
                           <PlayIcon className="size-4" />
                           播放
@@ -129,7 +145,16 @@ export function HeroCarousel({
                         variant="outline"
                         className="border-border/50 bg-background/75 hover:bg-accent hover:text-accent-foreground"
                       >
-                        <Link to="/media/$id" params={{ id: String(item.id) }}>
+                        <Link
+                          to="/media/$id"
+                          params={{ id: String(item.id) }}
+                          search={{
+                            view:
+                              getMediaCardType(item) === 'show'
+                                ? 'series'
+                                : undefined,
+                          }}
+                        >
                           <InfoIcon className="size-4" />
                           详情
                         </Link>
@@ -225,21 +250,25 @@ export function LatestLibraryRail({
                         <Link
                           to="/media/$id"
                           params={{ id: String(item.id) }}
+                          search={{
+                            view:
+                              getMediaCardType(item) === 'show'
+                                ? 'series'
+                                : undefined,
+                          }}
                           className="block overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1"
                         >
                           <div
                             className="aspect-[3/4] bg-cover bg-center bg-muted"
                             style={{
-                              backgroundImage: item.poster_url
-                                ? `url(${item.poster_url})`
+                              backgroundImage: getMediaCardPosterUrl(item)
+                                ? `url(${getMediaCardPosterUrl(item)})`
                                 : 'linear-gradient(180deg, rgba(80,92,255,0.35), rgba(15,118,110,0.35))',
                             }}
                           />
                           <div className="px-1 pb-1 pt-4">
                             <div className="line-clamp-1 text-[2rem] font-semibold tracking-tight text-foreground">
-                              {item.series_title
-                                ? `${item.series_title} · ${item.title}`
-                                : item.title}
+                              {formatMediaCardTitle(item)}
                             </div>
                             <div className="mt-1 text-2xl text-muted-foreground">
                               {item.year || '未知年份'}
@@ -249,7 +278,7 @@ export function LatestLibraryRail({
                                 className="rounded-full border-border/50 bg-background/80 px-3 py-1"
                                 variant="outline"
                               >
-                                {formatMediaType(item.type)}
+                                {formatMediaType(getMediaCardType(item))}
                               </Badge>
                               <Badge
                                 className="rounded-full border-border/50 bg-background/80 px-3 py-1"

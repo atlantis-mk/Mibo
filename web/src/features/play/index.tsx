@@ -21,21 +21,24 @@ import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
+  catalogItemDetailQueryOptions,
+  catalogItemProgressQueryOptions,
+  catalogPlaybackQueryOptions,
   createAuthedMiboApi,
-  mediaItemDetailQueryOptions,
-  mediaItemProgressQueryOptions,
   miboQueryKeys,
 } from '#/lib/mibo-query'
 import { cn } from '#/lib/utils'
 import { useAuthStore } from '#/stores/auth-store'
 
 type PlayExperienceProps = {
-  mediaItemId: number
+  itemId: number
+  assetId?: number
   fromStart?: boolean
 }
 
 export default function PlayExperience({
-  mediaItemId,
+  itemId,
+  assetId,
   fromStart = false,
 }: PlayExperienceProps) {
   const token = useAuthStore((state) => state.token)
@@ -44,7 +47,7 @@ export default function PlayExperience({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const queryToken = token ?? 'guest'
-  const hasValidMediaItemId = Number.isFinite(mediaItemId) && mediaItemId > 0
+  const hasValidItemId = Number.isFinite(itemId) && itemId > 0
   const playerRef = useRef<HTMLVideoElement | null>(null)
   const hideChromeTimerRef = useRef<number | null>(null)
   const restoreAppliedRef = useRef(false)
@@ -60,25 +63,16 @@ export default function PlayExperience({
   const [isChromeVisible, setIsChromeVisible] = useState(true)
 
   const itemQuery = useQuery({
-    ...mediaItemDetailQueryOptions(queryToken, mediaItemId),
-    enabled: hasHydrated && !!token && hasValidMediaItemId,
+    ...catalogItemDetailQueryOptions(queryToken, itemId),
+    enabled: hasHydrated && !!token && hasValidItemId,
   })
   const progressQuery = useQuery({
-    ...mediaItemProgressQueryOptions(queryToken, mediaItemId),
-    enabled: hasHydrated && !!token && hasValidMediaItemId,
+    ...catalogItemProgressQueryOptions(queryToken, itemId),
+    enabled: hasHydrated && !!token && hasValidItemId,
   })
   const playbackQuery = useQuery({
-    queryKey: ['media', 'playback', queryToken, mediaItemId],
-    enabled: hasHydrated && !!token && hasValidMediaItemId,
-    queryFn: async () => {
-      if (!token) {
-        throw new Error('当前未登录，无法获取播放信息。')
-      }
-
-      return createAuthedMiboApi(token).getPlayback(mediaItemId, {
-        clientProfile: 'web',
-      })
-    },
+    ...catalogPlaybackQueryOptions(queryToken, itemId, assetId),
+    enabled: hasHydrated && !!token && hasValidItemId,
   })
 
   const item = itemQuery.data ?? null
@@ -91,7 +85,12 @@ export default function PlayExperience({
       ? Math.min(100, (currentTime / displayDuration) * 100)
       : 0
   const yearLabel =
-    item?.year ?? (item?.release_date ? item.release_date.slice(0, 4) : null)
+    item?.year ??
+    (item?.release_date
+      ? item.release_date.slice(0, 4)
+      : item?.first_air_date
+        ? item.first_air_date.slice(0, 4)
+        : null)
 
   const persistProgress = useEffectEvent(
     async ({ force = false, completed = false } = {}) => {
@@ -131,8 +130,8 @@ export default function PlayExperience({
 
       try {
         const nextProgress = await createAuthedMiboApi(token).updateProgress({
-          media_item_id: item.id,
-          media_file_id: playback.media_file_id,
+          item_id: item.id,
+          asset_id: playback.asset_id,
           position_seconds:
             completed && durationSeconds ? durationSeconds : positionSeconds,
           duration_seconds: durationSeconds,
@@ -142,7 +141,7 @@ export default function PlayExperience({
         lastSavedPositionRef.current = nextProgress.position_seconds
         lastSavedAtRef.current = now
         queryClient.setQueryData(
-          miboQueryKeys.mediaItemProgress(queryToken, mediaItemId),
+          miboQueryKeys.catalogItemProgress(queryToken, itemId),
           nextProgress,
         )
       } finally {
@@ -156,7 +155,7 @@ export default function PlayExperience({
     lastSavedPositionRef.current = progress?.position_seconds ?? 0
     lastSavedAtRef.current = 0
     setVideoError(null)
-  }, [mediaItemId, progress?.position_seconds, playback?.url])
+  }, [itemId, assetId, progress?.position_seconds, playback?.url])
 
   useEffect(() => {
     const player = playerRef.current
@@ -355,7 +354,7 @@ export default function PlayExperience({
             当前播放页需要已登录会话来请求后端播放地址和同步观看进度。
           </p>
           <Button asChild size="lg" className="min-w-36">
-            <Link to="/login" search={{ redirect: `/play/${mediaItemId}` }}>
+            <Link to="/login" search={{ redirect: `/play/${itemId}` }}>
               前往登录
             </Link>
           </Button>
@@ -364,7 +363,7 @@ export default function PlayExperience({
     )
   }
 
-  if (!hasValidMediaItemId) {
+  if (!hasValidItemId) {
     return <PlayError message="无效的媒体 ID。" />
   }
 
@@ -418,7 +417,11 @@ export default function PlayExperience({
           key={playback.url}
           className="h-full w-full bg-black object-contain"
           src={playback.url}
-          poster={item.backdrop_url || item.poster_url || undefined}
+          poster={
+            catalogImageUrl(item, 'backdrop') ||
+            catalogImageUrl(item, 'poster') ||
+            undefined
+          }
           autoPlay
           playsInline
           preload="metadata"
@@ -455,6 +458,7 @@ export default function PlayExperience({
               void navigate({
                 to: '/media/$id',
                 params: { id: String(item.id) },
+                search: { view: undefined },
               })
             }}
           >
@@ -778,4 +782,12 @@ function formatClock(seconds?: number) {
   return [minutes, remainder]
     .map((value) => String(value).padStart(2, '0'))
     .join(':')
+}
+
+function catalogImageUrl(
+  item: { selected_images?: { image_type: string; url: string }[] },
+  imageType: string,
+) {
+  return item.selected_images?.find((image) => image.image_type === imageType)
+    ?.url
 }

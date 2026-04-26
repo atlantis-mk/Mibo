@@ -91,6 +91,77 @@ func TestProbeInventoryFileUpdatesAssetsAndStreams(t *testing.T) {
 	}
 }
 
+func TestProbeInventoryFileAllowsSameStreamIndexesAcrossDifferentFiles(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeFixture(t)
+	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe)
+	inventorySvc := inventory.NewService(fixture.db)
+
+	secondPath := filepath.Join(filepath.Dir(fixture.file.StoragePath), "Movie B.2024.mkv")
+	if err := os.WriteFile(secondPath, []byte("movie-b"), 0o644); err != nil {
+		t.Fatalf("write second media file: %v", err)
+	}
+
+	secondItem := database.CatalogItem{
+		LibraryID:          fixture.file.LibraryID,
+		Type:               "movie",
+		Path:               secondPath,
+		SortKey:            "Movie B",
+		DisplayOrder:       "aired",
+		Title:              "Movie B",
+		AvailabilityStatus: "available",
+		GovernanceStatus:   "pending",
+	}
+	if err := fixture.db.WithContext(ctx).Create(&secondItem).Error; err != nil {
+		t.Fatalf("create second catalog item: %v", err)
+	}
+
+	secondAsset, err := inventorySvc.CreateAsset(ctx, inventory.CreateAssetInput{
+		LibraryID:   fixture.file.LibraryID,
+		AssetType:   inventory.AssetTypeMain,
+		DisplayName: "Movie B",
+		ProbeStatus: StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("create second asset: %v", err)
+	}
+	secondFile, err := inventorySvc.UpsertFile(ctx, inventory.UpsertFileInput{
+		LibraryID:         fixture.file.LibraryID,
+		StorageProvider:   "local",
+		StoragePath:       secondPath,
+		StableIdentityKey: "stable-movie-b",
+		SizeBytes:         int64(len("movie-b")),
+		Container:         "mkv",
+		Status:            inventory.FileStatusAvailable,
+	})
+	if err != nil {
+		t.Fatalf("create second inventory file: %v", err)
+	}
+	if _, err := inventorySvc.LinkAssetToItem(ctx, inventory.LinkAssetItemInput{AssetID: secondAsset.ID, ItemID: secondItem.ID, Role: inventory.AssetItemRolePrimary, Source: "scanner"}); err != nil {
+		t.Fatalf("link second asset to item: %v", err)
+	}
+	if _, err := inventorySvc.LinkAssetToFile(ctx, inventory.LinkAssetFileInput{AssetID: secondAsset.ID, FileID: secondFile.ID, Role: inventory.FileRoleSource}); err != nil {
+		t.Fatalf("link second asset to file: %v", err)
+	}
+
+	if err := service.ProbeInventoryFile(ctx, fixture.file.ID); err != nil {
+		t.Fatalf("probe first inventory file: %v", err)
+	}
+	if err := service.ProbeInventoryFile(ctx, secondFile.ID); err != nil {
+		t.Fatalf("probe second inventory file: %v", err)
+	}
+
+	var streamCount int64
+	if err := fixture.db.WithContext(ctx).Model(&database.MediaStream{}).Count(&streamCount).Error; err != nil {
+		t.Fatalf("count streams: %v", err)
+	}
+	if streamCount != 6 {
+		t.Fatalf("expected 6 total media_stream rows across both files, got %d", streamCount)
+	}
+}
+
 type inventoryProbeFixture struct {
 	cfg      config.Config
 	db       *gorm.DB

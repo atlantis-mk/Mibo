@@ -18,16 +18,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import type { MediaItemDetail, MetadataSearchCandidate } from '#/lib/mibo-api'
-import { createAuthedMiboApi, miboQueryKeys } from '#/lib/mibo-query'
+import type {
+  CatalogGovernanceWorkspace,
+  MediaItemDetail,
+  MetadataSearchCandidate,
+} from '#/lib/mibo-api'
+import {
+  catalogGovernanceWorkspaceQueryOptions,
+  createAuthedMiboApi,
+  miboQueryKeys,
+} from '#/lib/mibo-query'
 
 import { CandidatePreviewCard } from './detail-sections'
 import {
   ArtworkCard,
+  AssetLinksCard,
   AsyncActionsCard,
   CandidateSearchCard,
   DraftEditorCard,
+  FieldLocksCard,
+  ImageCandidatesCard,
   MetadataSummaryCard,
+  RelatedChildrenCard,
+  SourceEvidenceCard,
 } from './detail-panels'
 import { formatMatchStatus, formatMediaType } from './formatters'
 
@@ -36,12 +49,10 @@ type MetadataDraft = {
   originalTitle: string
   year: string
   overview: string
-  posterUrl: string
-  backdropUrl: string
 }
 
 type AsyncActionState = {
-  type: 'rematch' | 'refetch'
+  type: 'rematch' | 'refetch' | 'reprobe'
   jobId: number
   kind: string
   status: 'queued' | 'running' | 'completed' | 'failed'
@@ -53,29 +64,33 @@ const EMPTY_DRAFT: MetadataDraft = {
   originalTitle: '',
   year: '',
   overview: '',
-  posterUrl: '',
-  backdropUrl: '',
 }
 
 export function MetadataGovernanceDetail({
   token,
-  mediaItemId,
+  mediaItemId: itemId,
 }: {
   token: string
   mediaItemId: number
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const workspaceQueryKey = miboQueryKeys.metadataWorkspace(token)
-  const itemQuery = useQuery({
-    queryKey: miboQueryKeys.mediaItemDetail(token, mediaItemId),
-    queryFn: () => createAuthedMiboApi(token).getMediaItem(mediaItemId),
+  const workspaceQueryKey = miboQueryKeys.catalogGovernanceWorkspace(
+    token,
+    itemId,
+  )
+  const listWorkspaceQueryKey = miboQueryKeys.metadataWorkspace(token)
+  const workspaceQuery = useQuery({
+    ...catalogGovernanceWorkspaceQueryOptions(token, itemId),
   })
 
   const [draft, setDraft] = useState<MetadataDraft>(EMPTY_DRAFT)
   const [baselineDraft, setBaselineDraft] = useState<MetadataDraft>(EMPTY_DRAFT)
   const [searchTitle, setSearchTitle] = useState('')
   const [searchYear, setSearchYear] = useState('')
+  const [searchIMDbId, setSearchIMDbId] = useState('')
+  const [searchTMDBId, setSearchTMDBId] = useState('')
+  const [searchTVDBId, setSearchTVDBId] = useState('')
   const [candidatePreview, setCandidatePreview] =
     useState<MetadataSearchCandidate | null>(null)
   const [asyncActionState, setAsyncActionState] =
@@ -84,14 +99,21 @@ export function MetadataGovernanceDetail({
   const pollTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (!itemQuery.data) return
+    if (!workspaceQuery.data) return
 
-    const nextDraft = buildDraftFromItem(itemQuery.data)
+    const nextDraft = buildDraftFromWorkspace(workspaceQuery.data)
     setDraft(nextDraft)
     setBaselineDraft(nextDraft)
-    setSearchTitle(itemQuery.data.title)
-    setSearchYear(itemQuery.data.year ? String(itemQuery.data.year) : '')
-  }, [itemQuery.data?.id])
+    setSearchTitle(workspaceQuery.data.title)
+    setSearchYear(
+      fieldStateNumber(workspaceQuery.data, 'year')
+        ? String(fieldStateNumber(workspaceQuery.data, 'year'))
+        : '',
+    )
+    setSearchIMDbId('')
+    setSearchTMDBId('')
+    setSearchTVDBId('')
+  }, [workspaceQuery.data?.item_id])
 
   const isDirty = JSON.stringify(draft) !== JSON.stringify(baselineDraft)
 
@@ -155,33 +177,61 @@ export function MetadataGovernanceDetail({
 
   const searchMutation = useMutation({
     mutationFn: () =>
-      createAuthedMiboApi(token).searchMediaItemMetadata(mediaItemId, {
+      createAuthedMiboApi(token).searchCatalogItemMetadata(itemId, {
         title: searchTitle.trim() || undefined,
         year: parseOptionalNumber(searchYear),
+        imdb_id: searchIMDbId.trim() || undefined,
+        tmdb_id: searchTMDBId.trim() || undefined,
+        tvdb_id: searchTVDBId.trim() || undefined,
       }),
   })
 
   const saveDraftMutation = useMutation({
-    mutationFn: () =>
-      createAuthedMiboApi(token).updateMediaItemMetadata(mediaItemId, {
-        title: draft.title.trim(),
-        original_title: draft.originalTitle.trim() || undefined,
-        year: parseOptionalNumber(draft.year),
-        overview: draft.overview.trim() || undefined,
-        poster_url: draft.posterUrl.trim() || undefined,
-        backdrop_url: draft.backdropUrl.trim() || undefined,
-      }),
-    onSuccess: async (item) => {
-      const nextDraft = buildDraftFromItem(item)
+    mutationFn: async () => {
+      const api = createAuthedMiboApi(token)
+      const updates = [
+        { field_key: 'title', value: draft.title.trim() },
+        {
+          field_key: 'original_title',
+          value: draft.originalTitle.trim(),
+        },
+        {
+          field_key: 'year',
+          value: parseOptionalNumber(draft.year),
+        },
+        {
+          field_key: 'overview',
+          value: draft.overview.trim(),
+        },
+      ]
+
+      for (const update of updates) {
+        if (
+          update.field_key !== 'title' &&
+          (update.value === undefined || update.value === '')
+        ) {
+          continue
+        }
+        await api.updateCatalogGovernanceField(itemId, {
+          field_key: update.field_key,
+          value: update.value ?? '',
+        })
+      }
+
+      return api.getCatalogGovernanceWorkspace(itemId)
+    },
+    onSuccess: async (workspace) => {
+      const nextDraft = buildDraftFromWorkspace(workspace)
       setDraft(nextDraft)
       setBaselineDraft(nextDraft)
       setSaveSuccessMessage('草稿已保存，治理页和媒体详情将使用最新元数据。')
-      queryClient.setQueryData(
-        miboQueryKeys.mediaItemDetail(token, mediaItemId),
-        item,
-      )
+      queryClient.setQueryData(workspaceQueryKey, workspace)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: listWorkspaceQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
+        }),
         queryClient.invalidateQueries({
           queryKey: miboQueryKeys.homeData(token),
         }),
@@ -191,24 +241,22 @@ export function MetadataGovernanceDetail({
 
   const applyCandidateMutation = useMutation({
     mutationFn: (externalId: string) =>
-      createAuthedMiboApi(token).applyMediaItemMetadataCandidate(mediaItemId, {
+      createAuthedMiboApi(token).applyCatalogItemMetadataCandidate(itemId, {
         external_id: externalId,
       }),
-    onSuccess: async (item) => {
-      const nextDraft = buildDraftFromItem(item)
+    onSuccess: async (workspace) => {
+      const nextDraft = buildDraftFromWorkspace(workspace)
       setDraft(nextDraft)
       setBaselineDraft(nextDraft)
       setCandidatePreview(null)
       setSaveSuccessMessage('候选结果已应用，当前治理草稿已同步为最新元数据。')
-      queryClient.setQueryData(
-        miboQueryKeys.mediaItemDetail(token, mediaItemId),
-        item,
-      )
+      queryClient.setQueryData(workspaceQueryKey, workspace)
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: miboQueryKeys.mediaItemDetail(token, mediaItemId),
-        }),
         queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: listWorkspaceQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
+        }),
         queryClient.invalidateQueries({
           queryKey: miboQueryKeys.homeData(token),
         }),
@@ -217,35 +265,144 @@ export function MetadataGovernanceDetail({
   })
 
   const rematchMutation = useMutation({
-    mutationFn: () => createAuthedMiboApi(token).rematchMediaItem(mediaItemId),
-    onSuccess: async (job) => {
+    mutationFn: () => createAuthedMiboApi(token).matchCatalogItem(itemId),
+    onSuccess: async (workspace) => {
+      const nextDraft = buildDraftFromWorkspace(workspace)
+      setDraft(nextDraft)
+      setBaselineDraft(nextDraft)
       setAsyncActionState({
         type: 'rematch',
-        jobId: job.id,
-        kind: job.kind,
-        status: 'queued',
-        message: `重新匹配任务已排队，任务 ID #${job.id}。`,
+        jobId: 0,
+        kind: 'catalog_match',
+        status: 'completed',
+        message: '重新匹配已完成，治理结果已刷新。',
       })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: listWorkspaceQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
+        }),
+      ])
     },
   })
 
   const refetchMutation = useMutation({
     mutationFn: () =>
-      createAuthedMiboApi(token).refetchMediaItemMetadata(mediaItemId),
-    onSuccess: (job) => {
+      createAuthedMiboApi(token).refetchCatalogItemMetadata(itemId),
+    onSuccess: async (workspace) => {
+      const nextDraft = buildDraftFromWorkspace(workspace)
+      setDraft(nextDraft)
+      setBaselineDraft(nextDraft)
       setAsyncActionState({
         type: 'refetch',
+        jobId: 0,
+        kind: 'catalog_refetch',
+        status: 'completed',
+        message: '元数据重抓已完成，来源证据和字段值已刷新。',
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: listWorkspaceQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
+        }),
+      ])
+    },
+  })
+
+  const reprobeMutation = useMutation({
+    mutationFn: (inventoryFileId: number) => {
+      if (!inventoryFileId) {
+        throw new Error('当前条目没有可重新探测的库存文件。')
+      }
+      return createAuthedMiboApi(token).reprobeInventoryFile(inventoryFileId)
+    },
+    onSuccess: (job) => {
+      setAsyncActionState({
+        type: 'reprobe',
         jobId: job.id,
         kind: job.kind,
         status: 'queued',
-        message: `元数据重抓任务已排队，任务 ID #${job.id}。`,
+        message: `重新探测任务已排队，任务 ID #${job.id}。`,
       })
+    },
+  })
+
+  const lockMutation = useMutation({
+    mutationFn: ({
+      fieldKey,
+      nextLocked,
+    }: {
+      fieldKey: string
+      nextLocked: boolean
+    }) =>
+      createAuthedMiboApi(token).updateCatalogGovernanceField(itemId, {
+        field_key: fieldKey,
+        value: fieldStateValue(workspaceQuery.data, fieldKey) ?? '',
+        lock: nextLocked,
+        lock_reason: nextLocked ? 'governance ui' : '',
+        force: true,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey })
+    },
+  })
+
+  const imageMutation = useMutation({
+    mutationFn: ({ imageType, url }: { imageType: string; url: string }) =>
+      createAuthedMiboApi(token).selectCatalogGovernanceImage(itemId, {
+        image_type: imageType,
+        url,
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
+        }),
+      ])
+    },
+  })
+
+  const assetLinkMutation = useMutation({
+    mutationFn: async ({
+      assetId,
+      targetItemId,
+      mode,
+    }: {
+      assetId: number
+      targetItemId: number
+      mode: 'link' | 'unlink'
+    }) => {
+      const api = createAuthedMiboApi(token)
+      return mode === 'link'
+        ? api.linkCatalogGovernanceAsset(itemId, assetId, {
+            target_item_id: targetItemId,
+          })
+        : api.unlinkCatalogGovernanceAsset(itemId, assetId, targetItemId)
+    },
+    onSuccess: async (workspace, variables) => {
+      setSaveSuccessMessage(
+        variables.mode === 'link'
+          ? '资产链接已更新，治理工作区已刷新。'
+          : '资产链接已解除，治理工作区已刷新。',
+      )
+      queryClient.setQueryData(workspaceQueryKey, workspace)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
+        queryClient.invalidateQueries({ queryKey: listWorkspaceQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
+        }),
+      ])
     },
   })
 
   useEffect(() => {
     if (
       !asyncActionState ||
+      asyncActionState.type !== 'reprobe' ||
       asyncActionState.status === 'completed' ||
       asyncActionState.status === 'failed'
     ) {
@@ -275,27 +432,16 @@ export function MetadataGovernanceDetail({
           return
         }
 
-        if (job.status === 'queued') {
+        if (job.status === 'queued' || job.status === 'running') {
           setAsyncActionState((current) =>
             current && current.jobId === job.id
               ? {
                   ...current,
-                  status: 'queued',
-                  message: `${describeAsyncAction(current.type)}任务已排队，等待后台处理。任务 ID #${job.id}。`,
-                }
-              : current,
-          )
-          pollTimerRef.current = window.setTimeout(pollJob, 1500)
-          return
-        }
-
-        if (job.status === 'running') {
-          setAsyncActionState((current) =>
-            current && current.jobId === job.id
-              ? {
-                  ...current,
-                  status: 'running',
-                  message: `${describeAsyncAction(current.type)}正在后台处理中，完成后会自动刷新页面数据。`,
+                  status: job.status as 'queued' | 'running',
+                  message:
+                    job.status === 'queued'
+                      ? `重新探测任务已排队，等待后台处理。任务 ID #${job.id}。`
+                      : '重新探测正在后台处理中，完成后会自动刷新页面数据。',
                 }
               : current,
           )
@@ -304,13 +450,7 @@ export function MetadataGovernanceDetail({
         }
 
         if (job.status === 'completed') {
-          await Promise.all([
-            itemQuery.refetch(),
-            queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-            queryClient.invalidateQueries({
-              queryKey: miboQueryKeys.homeData(token),
-            }),
-          ])
+          await queryClient.invalidateQueries({ queryKey: workspaceQueryKey })
           if (cancelled) return
 
           setAsyncActionState((current) =>
@@ -318,7 +458,7 @@ export function MetadataGovernanceDetail({
               ? {
                   ...current,
                   status: 'completed',
-                  message: `${describeAsyncAction(current.type)}已完成，当前条目的治理结果已刷新。`,
+                  message: '重新探测已完成，资产状态已刷新。',
                 }
               : current,
           )
@@ -330,9 +470,7 @@ export function MetadataGovernanceDetail({
             ? {
                 ...current,
                 status: 'failed',
-                message:
-                  job.error_message ||
-                  `${describeAsyncAction(current.type)}失败，请稍后重试。`,
+                message: job.error_message || '重新探测失败，请稍后重试。',
               }
             : current,
         )
@@ -363,47 +501,55 @@ export function MetadataGovernanceDetail({
         pollTimerRef.current = null
       }
     }
-  }, [asyncActionState, itemQuery, queryClient, token, workspaceQueryKey])
+  }, [asyncActionState, queryClient, token, workspaceQueryKey])
 
-  if (itemQuery.isLoading) {
+  if (workspaceQuery.isLoading) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background text-foreground">
-        <div className="flex items-center gap-3 rounded-full border border-border/50 bg-card/85 px-5 py-3">
-          <LoaderCircleIcon className="size-4 animate-spin" />
-          <span className="text-sm text-muted-foreground">正在加载治理页</span>
-        </div>
+      <div className="flex items-center gap-3 rounded-[1.5rem] border border-border/60 bg-card/80 px-5 py-4 text-foreground shadow-sm">
+        <LoaderCircleIcon className="size-4 animate-spin" />
+        <span className="text-sm text-muted-foreground">正在加载治理页</span>
       </div>
     )
   }
 
-  if (itemQuery.error || !itemQuery.data) {
+  if (workspaceQuery.error || !workspaceQuery.data) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
-        <div className="max-w-xl space-y-4 rounded-[1.75rem] border border-border/60 bg-card/80 p-6 text-center">
+      <div className="rounded-[1.75rem] border border-border/60 bg-card/80 px-6 py-8 text-foreground shadow-sm">
+        <div className="max-w-xl space-y-4">
           <h1 className="text-2xl font-semibold tracking-tight">
             治理页暂时不可用
           </h1>
           <p className="text-sm text-muted-foreground">
-            {itemQuery.error?.message ?? '未找到对应媒体条目。'}
+            {workspaceQuery.error?.message ?? '未找到对应治理工作区。'}
           </p>
           <Button asChild variant="outline">
-            <Link to="/metadata">返回治理工作台</Link>
+            <Link to="/settings/metadata">返回治理工作台</Link>
           </Button>
         </div>
       </div>
     )
   }
 
-  const item = itemQuery.data
+  const workspace = workspaceQuery.data
+  const item = buildPreviewItem(workspace)
   const activeCandidates = searchMutation.data ?? []
+  const firstInventoryFileId = workspace.assets.find(
+    (asset) => asset.file_ids.length > 0,
+  )?.file_ids[0]
 
-  async function handleNavigateAway(to: '/' | '/metadata' | '/media/$id') {
+  async function handleNavigateAway(
+    to: '/' | '/settings/metadata' | '/media/$id',
+  ) {
     if (isDirty && !window.confirm('当前有未保存修改，确认离开治理页吗？')) {
       return
     }
 
     if (to === '/media/$id') {
-      await navigate({ to, params: { id: String(mediaItemId) } })
+      await navigate({
+        to,
+        params: { id: String(itemId) },
+        search: { view: undefined },
+      })
       return
     }
 
@@ -412,142 +558,218 @@ export function MetadataGovernanceDetail({
 
   return (
     <>
-      <div className="min-h-svh bg-background px-4 py-6 text-foreground sm:px-6 lg:px-8 xl:px-10">
-        <div className="mx-auto max-w-7xl space-y-4">
-          <div className="flex flex-col gap-4 rounded-[1.75rem] border border-border/60 bg-card/80 p-5 shadow-sm backdrop-blur-sm lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  variant="outline"
-                  className="border-border/60 bg-background/70"
-                >
-                  单条目治理
-                </Badge>
-                <Badge variant="secondary">{formatMediaType(item.type)}</Badge>
-                <Badge
-                  variant="outline"
-                  className="border-border/60 bg-background/70"
-                >
-                  {formatMatchStatus(item.match_status)}
-                </Badge>
-              </div>
-              <div>
-                <h1 className="text-3xl font-semibold tracking-tight">
-                  {item.title}
-                </h1>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  通过统一草稿会话处理基础字段校正、候选比对和异步匹配动作。当前页面已接入手工保存、候选应用、重新匹配和元数据重抓。
-                </p>
-              </div>
+      <div className="space-y-4 text-foreground">
+        <div className="flex flex-col gap-4 rounded-[1.75rem] border border-border/60 bg-card/80 p-5 shadow-sm backdrop-blur-sm lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant="outline"
+                className="border-border/60 bg-background/70"
+              >
+                单条目治理
+              </Badge>
+              <Badge variant="secondary">
+                {formatMediaType(workspace.type)}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="border-border/60 bg-background/70"
+              >
+                {formatMatchStatus(workspace.governance_status)}
+              </Badge>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                className="border-border/60 bg-background/70"
-                onClick={() => void handleNavigateAway('/metadata')}
-              >
-                返回工作台
-              </Button>
-              <Button
-                variant="outline"
-                className="border-border/60 bg-background/70"
-                onClick={() => void handleNavigateAway('/media/$id')}
-              >
-                查看详情页
-              </Button>
+            <div>
+              <h1 className="text-3xl font-semibold tracking-tight">
+                {workspace.title}
+              </h1>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                当前页面已切到 catalog governance
+                workspace，支持字段锁、来源证据、图片选择、资产链接与候选应用。
+              </p>
             </div>
           </div>
 
-          {isDirty ? (
-            <Alert>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              className="border-border/60 bg-background/70"
+              onClick={() => void handleNavigateAway('/settings/metadata')}
+            >
+              返回工作台
+            </Button>
+            <Button
+              variant="outline"
+              className="border-border/60 bg-background/70"
+              onClick={() => void handleNavigateAway('/media/$id')}
+            >
+              查看详情页
+            </Button>
+          </div>
+        </div>
+
+        {isDirty ? (
+          <Alert>
+            <WandSparklesIcon className="size-4" />
+            <AlertTitle>存在未保存草稿</AlertTitle>
+            <AlertDescription>
+              离开当前页面前会要求确认。保存后会同步刷新治理页、媒体详情和工作台摘要。
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {saveSuccessMessage ? (
+          <Alert>
+            <CheckCircle2Icon className="size-4" />
+            <AlertTitle>保存成功</AlertTitle>
+            <AlertDescription>{saveSuccessMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {asyncActionState ? (
+          <Alert>
+            {asyncActionState.status === 'failed' ? (
               <WandSparklesIcon className="size-4" />
-              <AlertTitle>存在未保存草稿</AlertTitle>
-              <AlertDescription>
-                离开当前页面前会要求确认。保存后会同步刷新治理页、媒体详情和工作台摘要。
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          {saveSuccessMessage ? (
-            <Alert>
+            ) : asyncActionState.status === 'completed' ? (
               <CheckCircle2Icon className="size-4" />
-              <AlertTitle>保存成功</AlertTitle>
-              <AlertDescription>{saveSuccessMessage}</AlertDescription>
-            </Alert>
-          ) : null}
+            ) : (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            )}
+            <AlertTitle>{formatAsyncActionTitle(asyncActionState)}</AlertTitle>
+            <AlertDescription>{asyncActionState.message}</AlertDescription>
+          </Alert>
+        ) : null}
 
-          {asyncActionState ? (
-            <Alert>
-              {asyncActionState.status === 'failed' ? (
-                <WandSparklesIcon className="size-4" />
-              ) : asyncActionState.status === 'completed' ? (
-                <CheckCircle2Icon className="size-4" />
-              ) : (
-                <LoaderCircleIcon className="size-4 animate-spin" />
-              )}
-              <AlertTitle>
-                {formatAsyncActionTitle(asyncActionState)}
-              </AlertTitle>
-              <AlertDescription>{asyncActionState.message}</AlertDescription>
-            </Alert>
-          ) : null}
+        {searchMutation.error ||
+        saveDraftMutation.error ||
+        applyCandidateMutation.error ||
+        rematchMutation.error ||
+        refetchMutation.error ||
+        reprobeMutation.error ||
+        lockMutation.error ||
+        imageMutation.error ||
+        assetLinkMutation.error ? (
+          <Alert>
+            <AlertTitle>操作失败</AlertTitle>
+            <AlertDescription>
+              {searchMutation.error?.message ||
+                saveDraftMutation.error?.message ||
+                applyCandidateMutation.error?.message ||
+                rematchMutation.error?.message ||
+                refetchMutation.error?.message ||
+                reprobeMutation.error?.message ||
+                lockMutation.error?.message ||
+                imageMutation.error?.message ||
+                assetLinkMutation.error?.message}
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
-          {searchMutation.error ||
-          saveDraftMutation.error ||
-          applyCandidateMutation.error ||
-          rematchMutation.error ||
-          refetchMutation.error ? (
-            <Alert>
-              <AlertTitle>操作失败</AlertTitle>
-              <AlertDescription>
-                {searchMutation.error?.message ||
-                  saveDraftMutation.error?.message ||
-                  applyCandidateMutation.error?.message ||
-                  rematchMutation.error?.message ||
-                  refetchMutation.error?.message}
-              </AlertDescription>
-            </Alert>
-          ) : null}
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+          <div className="space-y-4">
+            <DraftEditorCard
+              draft={draft}
+              baselineDraft={baselineDraft}
+              isDirty={isDirty}
+              isPending={saveDraftMutation.isPending}
+              onDraftChange={(updater) => setDraft(updater)}
+              onReset={setDraft}
+              onSave={() => void saveDraftMutation.mutateAsync()}
+            />
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <div className="space-y-4">
-              <DraftEditorCard
-                draft={draft}
-                baselineDraft={baselineDraft}
-                isDirty={isDirty}
-                isPending={saveDraftMutation.isPending}
-                onDraftChange={(updater) => setDraft(updater)}
-                onReset={setDraft}
-                onSave={() => void saveDraftMutation.mutateAsync()}
-              />
+            <CandidateSearchCard
+              searchTitle={searchTitle}
+              searchYear={searchYear}
+              searchIMDbId={searchIMDbId}
+              searchTMDBId={searchTMDBId}
+              searchTVDBId={searchTVDBId}
+              isPending={searchMutation.isPending}
+              isSuccess={searchMutation.isSuccess}
+              activeCandidates={activeCandidates}
+              onSearchTitleChange={setSearchTitle}
+              onSearchYearChange={setSearchYear}
+              onSearchIMDbIdChange={setSearchIMDbId}
+              onSearchTMDBIdChange={setSearchTMDBId}
+              onSearchTVDBIdChange={setSearchTVDBId}
+              onSearch={() => void searchMutation.mutateAsync()}
+              onPreview={setCandidatePreview}
+            />
 
-              <CandidateSearchCard
-                searchTitle={searchTitle}
-                searchYear={searchYear}
-                isPending={searchMutation.isPending}
-                isSuccess={searchMutation.isSuccess}
-                activeCandidates={activeCandidates}
-                onSearchTitleChange={setSearchTitle}
-                onSearchYearChange={setSearchYear}
-                onSearch={() => void searchMutation.mutateAsync()}
-                onPreview={setCandidatePreview}
-              />
-            </div>
+            <FieldLocksCard
+              fieldStates={workspace.field_states}
+              isPending={lockMutation.isPending}
+              onToggleLock={(fieldKey, nextLocked) => {
+                void lockMutation.mutateAsync({ fieldKey, nextLocked })
+              }}
+            />
 
-            <div className="space-y-4">
-              <MetadataSummaryCard item={item} />
-              <AsyncActionsCard
-                rematchPending={rematchMutation.isPending}
-                refetchPending={refetchMutation.isPending}
-                onRematch={() => void rematchMutation.mutateAsync()}
-                onRefetch={() => void refetchMutation.mutateAsync()}
-              />
-              <ArtworkCard
-                posterUrl={draft.posterUrl}
-                backdropUrl={draft.backdropUrl}
-              />
-            </div>
+            <SourceEvidenceCard sourceEvidence={workspace.source_evidence} />
+
+            <ImageCandidatesCard
+              selectedImages={workspace.selected_images}
+              imageCandidates={workspace.image_candidates}
+              isPending={imageMutation.isPending}
+              onSelect={(imageType, url) => {
+                void imageMutation.mutateAsync({ imageType, url })
+              }}
+            />
+          </div>
+
+          <div className="space-y-4">
+            <MetadataSummaryCard item={item} />
+            <AsyncActionsCard
+              rematchPending={rematchMutation.isPending}
+              refetchPending={refetchMutation.isPending}
+              reprobePending={reprobeMutation.isPending}
+              reprobeDisabled={!firstInventoryFileId}
+              onRematch={() => void rematchMutation.mutateAsync()}
+              onRefetch={() => void refetchMutation.mutateAsync()}
+              onReprobe={() => {
+                if (!firstInventoryFileId) return
+                void reprobeMutation.mutateAsync(firstInventoryFileId)
+              }}
+            />
+            <ArtworkCard
+              posterUrl={item.poster_url}
+              backdropUrl={item.backdrop_url}
+            />
+            <AssetLinksCard
+              workspaceItem={{
+                id: workspace.item_id,
+                title: workspace.title,
+                type: workspace.type,
+                availability_status: workspace.availability_status,
+                governance_status: workspace.governance_status,
+              }}
+              relatedChildren={workspace.recommended_children}
+              assets={workspace.assets}
+              reprobePendingFileId={
+                typeof reprobeMutation.variables === 'number'
+                  ? reprobeMutation.variables
+                  : undefined
+              }
+              linkMutation={assetLinkMutation.variables}
+              onReprobe={(fileId) => {
+                void reprobeMutation.mutateAsync(fileId)
+              }}
+              onLink={(assetId, targetItemId) => {
+                void assetLinkMutation.mutateAsync({
+                  assetId,
+                  targetItemId,
+                  mode: 'link',
+                })
+              }}
+              onUnlink={(assetId, targetItemId) => {
+                void assetLinkMutation.mutateAsync({
+                  assetId,
+                  targetItemId,
+                  mode: 'unlink',
+                })
+              }}
+            />
+            <RelatedChildrenCard
+              workspace={workspace}
+              assets={workspace.assets}
+            />
           </div>
         </div>
       </div>
@@ -599,15 +821,105 @@ export function MetadataGovernanceDetail({
   )
 }
 
-function buildDraftFromItem(item: MediaItemDetail): MetadataDraft {
+function buildDraftFromWorkspace(
+  workspace: CatalogGovernanceWorkspace,
+): MetadataDraft {
+  const year = fieldStateNumber(workspace, 'year')
+
   return {
-    title: item.title || '',
-    originalTitle: item.original_title || '',
-    year: item.year ? String(item.year) : '',
-    overview: item.overview || '',
-    posterUrl: item.poster_url || '',
-    backdropUrl: item.backdrop_url || '',
+    title: workspace.title || '',
+    originalTitle: fieldStateString(workspace, 'original_title'),
+    year: year ? String(year) : '',
+    overview: fieldStateString(workspace, 'overview'),
   }
+}
+
+function buildPreviewItem(
+  workspace: CatalogGovernanceWorkspace,
+): MediaItemDetail {
+  return {
+    id: workspace.item_id,
+    library_id: workspace.library_id,
+    type: workspace.type === 'series' ? 'show' : workspace.type,
+    title: workspace.title,
+    original_title: fieldStateString(workspace, 'original_title'),
+    series_title: workspace.type === 'series' ? workspace.title : '',
+    overview: fieldStateString(workspace, 'overview'),
+    poster_url: selectedImageUrl(workspace, 'poster'),
+    logo_url: selectedImageUrl(workspace, 'logo') || undefined,
+    backdrop_url: selectedImageUrl(workspace, 'backdrop'),
+    year: fieldStateNumber(workspace, 'year'),
+    vote_average: undefined,
+    release_date: '',
+    runtime_seconds: fieldStateNumber(workspace, 'runtime_seconds'),
+    season_number: undefined,
+    episode_number: undefined,
+    source_path: '',
+    match_status: workspace.governance_status,
+    metadata_provider: workspace.external_identities?.[0]?.provider ?? '',
+    external_id: workspace.external_identities?.[0]?.external_id ?? '',
+    metadata_confidence: workspace.external_identities?.[0]?.confidence,
+    status: workspace.availability_status,
+    created_at: '',
+    updated_at: '',
+    series_tmdb_id: undefined,
+    series_title_display: workspace.title,
+    default_season_number: undefined,
+    genres: [],
+    cast: [],
+    directors: [],
+    trailer: undefined,
+    files: workspace.assets.map((asset) => ({
+      id: asset.file_ids?.[0] ?? asset.id,
+      library_id: asset.library_id,
+      media_item_id: workspace.item_id,
+      storage_path: '',
+      container: '',
+      size_bytes: 0,
+      fingerprint: '',
+      probe_status: asset.probe_status,
+      probe_error: '',
+      duration_seconds: asset.duration_seconds,
+      video_codec: '',
+      audio_tracks: [],
+      subtitle_tracks: [],
+    })),
+  }
+}
+
+function selectedImageUrl(
+  workspace: CatalogGovernanceWorkspace,
+  imageType: string,
+) {
+  return (
+    (workspace.selected_images || []).find(
+      (image) => image.image_type === imageType,
+    )?.url || ''
+  )
+}
+
+function fieldStateString(
+  workspace: CatalogGovernanceWorkspace,
+  fieldKey: string,
+) {
+  const value = fieldStateValue(workspace, fieldKey)
+  return typeof value === 'string' ? value : ''
+}
+
+function fieldStateNumber(
+  workspace: CatalogGovernanceWorkspace,
+  fieldKey: string,
+) {
+  const value = fieldStateValue(workspace, fieldKey)
+  return typeof value === 'number' ? value : undefined
+}
+
+function fieldStateValue(
+  workspace: CatalogGovernanceWorkspace | undefined,
+  fieldKey: string,
+) {
+  return workspace?.field_states.find((field) => field.field_key === fieldKey)
+    ?.value
 }
 
 function parseOptionalNumber(value: string) {
@@ -619,7 +931,16 @@ function parseOptionalNumber(value: string) {
 }
 
 function describeAsyncAction(type: AsyncActionState['type']) {
-  return type === 'rematch' ? '重新匹配' : '元数据重抓'
+  switch (type) {
+    case 'rematch':
+      return '重新匹配'
+    case 'refetch':
+      return '元数据重抓'
+    case 'reprobe':
+      return '重新探测'
+    default:
+      return '后台动作'
+  }
 }
 
 function formatAsyncActionTitle(state: AsyncActionState) {

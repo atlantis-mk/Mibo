@@ -19,7 +19,6 @@ import {
   mediaSourcesQueryOptions,
   miboQueryKeys,
 } from '#/lib/mibo-query'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 
 import { EMPTY_LIBRARY_FORM, type LibraryFormState } from './library-form'
 import { LibraryDrawer, MediaSourceDrawer } from './library-management-drawers'
@@ -33,7 +32,13 @@ import {
 } from './media-source-form'
 import { MediaSourcesTab } from './media-sources-tab'
 
-export function LibraryManagementPanel({ token }: { token: string | null }) {
+export function LibraryManagementPanel({
+  token,
+  activeTab,
+}: {
+  token: string | null
+  activeTab: 'sources' | 'libraries'
+}) {
   const queryClient = useQueryClient()
   const queryToken = token ?? 'guest'
   const api = useMemo(
@@ -236,23 +241,8 @@ export function LibraryManagementPanel({ token }: { token: string | null }) {
         </div>
       ) : null}
 
-      <Tabs defaultValue="sources" orientation="horizontal">
-        <TabsList className="!flex w-fit !flex-row">
-          <TabsTrigger
-            value="sources"
-            className="!w-auto flex-none !justify-center"
-          >
-            媒体源
-          </TabsTrigger>
-          <TabsTrigger
-            value="libraries"
-            className="!w-auto flex-none !justify-center"
-          >
-            媒体库
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="sources" className="mt-0 space-y-4">
+      {activeTab === 'sources' ? (
+        <div>
           <MediaSourcesTab
             mediaSources={mediaSources}
             isLoading={mediaSourcesQuery.isLoading}
@@ -263,9 +253,11 @@ export function LibraryManagementPanel({ token }: { token: string | null }) {
             }}
             onDelete={setDeletingSource}
           />
-        </TabsContent>
+        </div>
+      ) : null}
 
-        <TabsContent value="libraries" className="mt-0 space-y-4">
+      {activeTab === 'libraries' ? (
+        <div>
           <LibrariesTab
             libraries={libraries}
             mediaSources={mediaSources}
@@ -275,8 +267,8 @@ export function LibraryManagementPanel({ token }: { token: string | null }) {
             onScan={(libraryId) => scanLibraryMutation.mutate(libraryId)}
             onDelete={setDeletingLibrary}
           />
-        </TabsContent>
-      </Tabs>
+        </div>
+      ) : null}
 
       <MediaSourceDrawer
         open={isCreateSourceOpen}

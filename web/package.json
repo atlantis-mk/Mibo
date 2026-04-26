@@ -79,6 +79,7 @@
       "@sentry/cli",
       "esbuild",
       "lightningcss",
+      "msw",
       "unrs-resolver"
     ]
   }

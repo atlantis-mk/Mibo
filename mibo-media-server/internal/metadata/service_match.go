@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -37,12 +38,11 @@ func (s *Service) MatchItem(ctx context.Context, mediaItemID uint) error {
 	}
 
 	mediaType := tmdbMediaType(item.Type)
-	query := defaultQuery(item, mediaType)
-	searchResult, confidence, err := s.searchBestMatch(ctx, tmdbCfg, mediaType, query, item.Year)
+	searchMatch, err := s.searchBestMatch(ctx, tmdbCfg, item, mediaType)
 	if err != nil {
 		return err
 	}
-	if searchResult == nil {
+	if searchMatch == nil {
 		return s.db.WithContext(ctx).Model(&database.MediaItem{}).Where("id = ?", item.ID).Updates(map[string]any{
 			"match_status":        StatusUnmatched,
 			"metadata_provider":   "",
@@ -51,11 +51,15 @@ func (s *Service) MatchItem(ctx context.Context, mediaItemID uint) error {
 		}).Error
 	}
 
-	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, searchResult.ID)
+	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, searchMatch.result.ID)
 	if err != nil {
 		return err
 	}
-	return s.applyDetail(ctx, item, tmdbCfg, mediaType, detail, confidence)
+	episodeMatch, err := s.resolveTVEpisodeMatch(ctx, tmdbCfg, item, mediaType, detail.ID)
+	if err != nil {
+		return err
+	}
+	return s.applyDetail(ctx, item, tmdbCfg, mediaType, detail, searchMatch.confidence, episodeMatch)
 }
 
 func (s *Service) ApplyCandidate(ctx context.Context, mediaItemID uint, input ApplyCandidateInput) error {
@@ -82,23 +86,12 @@ func (s *Service) ApplyCandidate(ctx context.Context, mediaItemID uint, input Ap
 	}
 
 	confidence := 1.0
-	query := defaultQuery(item, mediaType)
-	if query != "" {
-		confidence = calculateConfidence(mediaType, query, item.Year, searchResult{
-			ID:            detail.ID,
-			Title:         detail.Title,
-			Name:          detail.Name,
-			OriginalTitle: detail.OriginalTitle,
-			OriginalName:  detail.OriginalName,
-			ReleaseDate:   detail.ReleaseDate,
-			FirstAirDate:  detail.FirstAirDate,
-			Overview:      detail.Overview,
-			PosterPath:    detail.PosterPath,
-			BackdropPath:  detail.BackdropPath,
-		})
+	episodeMatch, err := s.resolveTVEpisodeMatch(ctx, tmdbCfg, item, mediaType, detail.ID)
+	if err != nil {
+		return err
 	}
 
-	return s.applyDetail(ctx, item, tmdbCfg, mediaType, detail, confidence)
+	return s.applyDetail(ctx, item, tmdbCfg, mediaType, detail, confidence, episodeMatch)
 }
 
 func (s *Service) UpdateManualMetadata(ctx context.Context, mediaItemID uint, input ManualMetadataInput) error {
@@ -159,7 +152,11 @@ func (s *Service) RefetchItem(ctx context.Context, mediaItemID uint) error {
 	if item.MetadataConfidence != nil && *item.MetadataConfidence > 0 {
 		confidence = *item.MetadataConfidence
 	}
-	if err := s.applyDetail(ctx, item, tmdbCfg, mediaType, detail, confidence); err != nil {
+	episodeMatch, err := s.resolveTVEpisodeMatch(ctx, tmdbCfg, item, mediaType, externalID)
+	if err != nil {
+		return err
+	}
+	if err := s.applyDetail(ctx, item, tmdbCfg, mediaType, detail, confidence, episodeMatch); err != nil {
 		return err
 	}
 	if mediaType == "tv" {
@@ -170,7 +167,37 @@ func (s *Service) RefetchItem(ctx context.Context, mediaItemID uint) error {
 	return nil
 }
 
-func (s *Service) applyDetail(ctx context.Context, item database.MediaItem, tmdbCfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64) error {
+type tvEpisodeMatch struct {
+	seasonFound  bool
+	episodeFound bool
+	season       seasonDetailResponse
+	episode      seasonEpisodeResponse
+}
+
+func (s *Service) resolveTVEpisodeMatch(ctx context.Context, tmdbCfg config.TMDBConfig, item database.MediaItem, mediaType string, seriesTMDBID int) (*tvEpisodeMatch, error) {
+	if mediaType != "tv" || item.Type != "episode" || item.SeasonNumber == nil || item.EpisodeNumber == nil {
+		return nil, nil
+	}
+	seasonDetail, err := s.fetchTVSeason(ctx, tmdbCfg, seriesTMDBID, *item.SeasonNumber)
+	if err != nil {
+		var tmdbFailure tmdbRequestFailure
+		if errors.As(err, &tmdbFailure) && tmdbFailure.StatusCode() == 404 {
+			return &tvEpisodeMatch{}, nil
+		}
+		return nil, err
+	}
+	match := &tvEpisodeMatch{seasonFound: true, season: seasonDetail}
+	for _, episode := range seasonDetail.Episodes {
+		if episode.EpisodeNumber == *item.EpisodeNumber {
+			match.episodeFound = true
+			match.episode = episode
+			break
+		}
+	}
+	return match, nil
+}
+
+func (s *Service) applyDetail(ctx context.Context, item database.MediaItem, tmdbCfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64, episodeMatch *tvEpisodeMatch) error {
 	status := StatusMatched
 	if confidence < 0.85 {
 		status = StatusNeedsReview
@@ -200,6 +227,7 @@ func (s *Service) applyDetail(ctx context.Context, item database.MediaItem, tmdb
 	title := item.Title
 	originalTitle := item.OriginalTitle
 	seriesTitle := item.SeriesTitle
+	overview := detail.Overview
 	releaseDate := detail.ReleaseDate
 	runtimeSeconds := runtimeFromDetail(detail)
 	if mediaType == "movie" {
@@ -219,21 +247,49 @@ func (s *Service) applyDetail(ctx context.Context, item database.MediaItem, tmdb
 		if releaseDate == "" {
 			releaseDate = detail.FirstAirDate
 		}
+		if item.Type == "episode" && episodeMatch != nil {
+			if !episodeMatch.seasonFound || !episodeMatch.episodeFound {
+				status = StatusNeedsReview
+			}
+			if episodeMatch.episodeFound {
+				if strings.TrimSpace(episodeMatch.episode.Name) != "" {
+					title = episodeMatch.episode.Name
+				}
+				if strings.TrimSpace(episodeMatch.episode.Overview) != "" {
+					overview = episodeMatch.episode.Overview
+				}
+				if strings.TrimSpace(episodeMatch.episode.AirDate) != "" {
+					releaseDate = episodeMatch.episode.AirDate
+				}
+				if runtime := runtimeSecondsFromMinutes(episodeMatch.episode.Runtime); runtime != nil {
+					runtimeSeconds = runtime
+				}
+			}
+		}
 	}
+	posterURL := preferArtworkURL(item.PosterURL, imageURL(tmdbCfg, detail.PosterPath))
+	backdropCandidate := imageURL(tmdbCfg, detail.BackdropPath)
+	if mediaType == "tv" && item.Type == "episode" && episodeMatch != nil && episodeMatch.episodeFound {
+		backdropCandidate = imageURL(tmdbCfg, episodeMatch.episode.StillPath)
+	}
+	backdropURL := preferArtworkURL(item.BackdropURL, backdropCandidate)
+	logoURL := preferArtworkURL(item.LogoURL, imageURL(tmdbCfg, pickLogoPath(tmdbCfg.Language, detail.Images.Logos)))
+	year := parseYear(releaseDate)
 
 	if err := s.db.WithContext(ctx).Model(&database.MediaItem{}).Where("id = ?", item.ID).Updates(map[string]any{
 		"title":               title,
 		"original_title":      originalTitle,
 		"series_title":        seriesTitle,
-		"overview":            detail.Overview,
-		"poster_url":          imageURL(tmdbCfg, detail.PosterPath),
-		"logo_url":            imageURL(tmdbCfg, pickLogoPath(tmdbCfg.Language, detail.Images.Logos)),
-		"backdrop_url":        imageURL(tmdbCfg, detail.BackdropPath),
+		"overview":            overview,
+		"poster_url":          posterURL,
+		"logo_url":            logoURL,
+		"backdrop_url":        backdropURL,
 		"genres_json":         genresJSON,
 		"regions_json":        regionsJSON,
 		"cast_json":           castJSON,
 		"directors_json":      directorsJSON,
 		"vote_average":        detail.VoteAverage,
+		"year":                year,
 		"release_date":        releaseDate,
 		"runtime_seconds":     runtimeSeconds,
 		"trailer_json":        trailerJSON,
@@ -263,6 +319,14 @@ func extractCountryValues(values []countryValue, limit int) []string {
 	return result
 }
 
+func preferArtworkURL(current, candidate string) string {
+	trimmedCandidate := strings.TrimSpace(candidate)
+	if trimmedCandidate != "" {
+		return trimmedCandidate
+	}
+	return strings.TrimSpace(current)
+}
+
 func (s *Service) SearchCandidates(ctx context.Context, mediaItemID uint, input ManualSearchInput) ([]SearchCandidate, error) {
 	tmdbCfg, err := s.tmdbConfig(ctx)
 	if err != nil {
@@ -288,20 +352,38 @@ func (s *Service) SearchCandidates(ctx context.Context, mediaItemID uint, input 
 			return nil, err
 		}
 		candidate := detailToCandidate(tmdbCfg, mediaType, detail, 1)
+		candidate.MatchedQuery = "TMDB ID " + tmdbID
+		candidate.ReasonSummary = "通过 TMDB ID 精确定位"
 		return []SearchCandidate{candidate}, nil
 	}
-
-	query := strings.TrimSpace(input.Title)
-	if query == "" {
-		query = defaultQuery(item, mediaType)
+	if imdbID := strings.TrimSpace(input.IMDbID); imdbID != "" {
+		results, err := s.findByExternalID(ctx, tmdbCfg, mediaType, "imdb_id", imdbID)
+		if err != nil {
+			return nil, err
+		}
+		candidates := make([]SearchCandidate, 0, len(results))
+		for _, result := range results {
+			candidate := searchResultToCandidate(tmdbCfg, mediaType, scoredMatchCandidate{result: result, confidence: 1, matchedQuery: "IMDb ID " + imdbID, reasonSummary: "通过 IMDb ID 精确定位"})
+			candidates = append(candidates, candidate)
+		}
+		return candidates, nil
 	}
-	if query == "" {
+	if tvdbID := strings.TrimSpace(input.TVDBID); tvdbID != "" {
+		results, err := s.findByExternalID(ctx, tmdbCfg, mediaType, "tvdb_id", tvdbID)
+		if err != nil {
+			return nil, err
+		}
+		candidates := make([]SearchCandidate, 0, len(results))
+		for _, result := range results {
+			candidate := searchResultToCandidate(tmdbCfg, mediaType, scoredMatchCandidate{result: result, confidence: 1, matchedQuery: "TVDB ID " + tvdbID, reasonSummary: "通过 TVDB ID 精确定位"})
+			candidates = append(candidates, candidate)
+		}
+		return candidates, nil
+	}
+
+	queries := buildManualSearchQueries(input, item, mediaType)
+	if len(queries) == 0 {
 		return nil, fmt.Errorf("标题不能为空")
 	}
-
-	year := input.Year
-	if year == nil {
-		year = item.Year
-	}
-	return s.searchCandidates(ctx, tmdbCfg, mediaType, query, year)
+	return s.searchCandidates(ctx, tmdbCfg, mediaType, queries, item)
 }

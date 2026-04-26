@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowLeft, Home, Search, Settings, Tv, User } from 'lucide-react'
-import type { Swiper as SwiperType } from 'swiper/types'
 
 import 'swiper/css'
 import 'swiper/css/free-mode'
@@ -10,28 +9,41 @@ import 'swiper/css/free-mode'
 import { AppTopBar } from '#/components/app-top-bar'
 import { Button } from '#/components/ui/button'
 import { SidebarTrigger } from '#/components/ui/sidebar'
-import type { MediaItemDetail, ProgressState } from '#/lib/mibo-api'
+import type { CatalogAssetDetail, ProgressState } from '#/lib/mibo-api'
+import type {
+  CatalogDetailPresentation,
+  CatalogSeasonRail,
+} from '#/lib/media-presentation'
 
 import {
-  CastSection,
   DetailHeroSection,
+  SeriesEpisodesSection,
   SpecsSection,
 } from './standalone-media-detail-sections'
-import { StandaloneMediaDetailTrailerDialog } from './standalone-media-detail-trailer-dialog'
 import {
-  formatDate,
-  formatFileSize,
+  formatAssetLabel,
+  formatAvailabilityStatus,
   formatMediaType,
   formatProbeStatus,
+  getDisplayDatabaseLinks,
+  getDisplaySourcePath,
+  getPrimaryCatalogAsset,
 } from './standalone-media-detail-utils'
 
 type StandaloneMediaDetailProps = {
-  item: MediaItemDetail
+  item: CatalogDetailPresentation
   itemProgressPercent: number
   progress: ProgressState | null
+  seriesSeasons: CatalogSeasonRail[]
+  isSeriesEpisodesLoading: boolean
+  seriesEpisodesErrorMessage: string | null
   onGoBack: () => void
   onOpenPlaybackEntry: (options?: { fromStart?: boolean }) => void
+  onOpenAssetPlaybackEntry?: (assetId: number) => void
+  assetChoices?: CatalogAssetDetail[]
   onRematchItem: () => void
+  onReprobePrimaryFile: () => void
+  isReprobePending: boolean
   onManageMetadata: () => void
   onMarkWatched: () => void
 }
@@ -40,19 +52,22 @@ export function StandaloneMediaDetail({
   item,
   itemProgressPercent,
   progress,
+  seriesSeasons,
+  isSeriesEpisodesLoading,
+  seriesEpisodesErrorMessage,
   onGoBack,
   onOpenPlaybackEntry,
+  onOpenAssetPlaybackEntry,
+  assetChoices = [],
   onRematchItem,
+  onReprobePrimaryFile,
+  isReprobePending,
   onManageMetadata,
   onMarkWatched,
 }: StandaloneMediaDetailProps) {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const [showHeaderLogo, setShowHeaderLogo] = useState(Boolean(item.logo_url))
   const [overviewExpanded, setOverviewExpanded] = useState(false)
-  const [castSwiper, setCastSwiper] = useState<SwiperType | null>(null)
-  const [canScrollCastPrev, setCanScrollCastPrev] = useState(false)
-  const [canScrollCastNext, setCanScrollCastNext] = useState(false)
-  const [isTrailerOpen, setIsTrailerOpen] = useState(false)
 
   useEffect(() => {
     setShowHeaderLogo(Boolean(item.logo_url))
@@ -62,36 +77,18 @@ export function StandaloneMediaDetail({
     setOverviewExpanded(false)
   }, [item.id])
 
-  useEffect(() => {
-    setIsTrailerOpen(false)
-  }, [item.id])
-
-  const updateCastNavigation = (swiper: SwiperType) => {
-    setCanScrollCastPrev(!swiper.isBeginning)
-    setCanScrollCastNext(!swiper.isEnd)
-  }
-
-  const primaryFile = item.files[0]
-  const databaseLinks = [
-    item.metadata_provider?.toUpperCase() || null,
-    item.external_id || null,
-  ]
-    .filter(Boolean)
-    .join('，')
+  const primaryAsset = getPrimaryCatalogAsset(item)
+  const databaseLinks = getDisplayDatabaseLinks(item)
 
   const detailGroups = useMemo(
     () => [
       {
         title: '类型',
-        value: item.genres?.length
-          ? item.genres.join('、')
-          : formatMediaType(item.type),
+        value: formatMediaType(item.type),
       },
       {
-        title: '导演',
-        value:
-          (item.directors ?? []).map((person) => person.name).join('、') ||
-          '暂未识别',
+        title: '可用性',
+        value: formatAvailabilityStatus(item.availability_status),
       },
       {
         title: '数据库链接',
@@ -100,25 +97,17 @@ export function StandaloneMediaDetail({
       {
         title: '媒体信息',
         value: [
-          item.source_path,
-          primaryFile ? primaryFile.container.toUpperCase() : null,
-          primaryFile?.size_bytes
-            ? `${formatFileSize(primaryFile.size_bytes)}  添加于 ${formatDate(item.created_at)}`
-            : formatProbeStatus(primaryFile?.probe_status ?? 'pending'),
+          getDisplaySourcePath(item),
+          formatAssetLabel(primaryAsset),
+          primaryAsset
+            ? `文件 ${primaryAsset.file_ids.length} 个 · ${formatProbeStatus(primaryAsset.probe_status)}`
+            : null,
         ]
           .filter(Boolean)
           .join('\n'),
       },
     ],
-    [
-      databaseLinks,
-      item.created_at,
-      item.directors,
-      item.genres,
-      item.source_path,
-      item.type,
-      primaryFile,
-    ],
+    [databaseLinks, item, primaryAsset],
   )
 
   return (
@@ -221,39 +210,30 @@ export function StandaloneMediaDetail({
               overviewExpanded={overviewExpanded}
               onOverviewExpandedChange={setOverviewExpanded}
               onOpenPlaybackEntry={onOpenPlaybackEntry}
+              onOpenAssetPlaybackEntry={onOpenAssetPlaybackEntry}
+              assetChoices={assetChoices}
               onManageMetadata={onManageMetadata}
               onRematchItem={onRematchItem}
+              onReprobePrimaryFile={
+                primaryAsset && primaryAsset.file_ids.length > 0
+                  ? onReprobePrimaryFile
+                  : undefined
+              }
+              isReprobePending={isReprobePending}
               onMarkWatched={onMarkWatched}
             />
           </section>
 
-          <CastSection
+          <SeriesEpisodesSection
             item={item}
-            canScrollCastPrev={canScrollCastPrev}
-            canScrollCastNext={canScrollCastNext}
-            onSwiper={(instance) => {
-              setCastSwiper(instance)
-              updateCastNavigation(instance)
-            }}
-            onSlideChange={updateCastNavigation}
-            onPrev={() => castSwiper?.slidePrev()}
-            onNext={() => castSwiper?.slideNext()}
+            seasons={seriesSeasons}
+            isLoading={isSeriesEpisodesLoading}
+            errorMessage={seriesEpisodesErrorMessage}
           />
 
-          <SpecsSection
-            detailGroups={detailGroups}
-            item={item}
-            onOpenTrailer={() => setIsTrailerOpen(true)}
-          />
+          <SpecsSection detailGroups={detailGroups} item={item} />
         </div>
       </div>
-
-      <StandaloneMediaDetailTrailerDialog
-        open={isTrailerOpen}
-        trailer={item.trailer}
-        title={item.title}
-        onOpenChange={setIsTrailerOpen}
-      />
     </div>
   )
 }

@@ -282,6 +282,10 @@ func TestRunSyncLibraryReusesStableIdentityCatalogRowsOnRename(t *testing.T) {
 	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&firstAsset).Error; err != nil {
 		t.Fatalf("load first media asset: %v", err)
 	}
+	var firstItem database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&firstItem).Error; err != nil {
+		t.Fatalf("load first catalog item: %v", err)
+	}
 
 	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, "/library"); err != nil {
 		t.Fatalf("run rename scan: %v", err)
@@ -290,6 +294,8 @@ func TestRunSyncLibraryReusesStableIdentityCatalogRowsOnRename(t *testing.T) {
 	assertTableCount(t, ctx, db, &database.InventoryFile{}, 1)
 	assertTableCount(t, ctx, db, &database.MediaAsset{}, 1)
 	assertTableCount(t, ctx, db, &database.AssetFile{}, 1)
+	assertTableCount(t, ctx, db, &database.CatalogItem{}, 1)
+	assertTableCount(t, ctx, db, &database.AssetItem{}, 1)
 
 	var file database.InventoryFile
 	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&file).Error; err != nil {
@@ -311,6 +317,75 @@ func TestRunSyncLibraryReusesStableIdentityCatalogRowsOnRename(t *testing.T) {
 	}
 	if asset.Status != "available" {
 		t.Fatalf("expected reused asset to stay available after rename, got %#v", asset)
+	}
+
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&item).Error; err != nil {
+		t.Fatalf("reload catalog item: %v", err)
+	}
+	if item.ID != firstItem.ID {
+		t.Fatalf("expected stable identity rename to reuse catalog item id %d, got %d", firstItem.ID, item.ID)
+	}
+	if item.Path != "/library/Renamed.Movie.2024.mkv" {
+		t.Fatalf("expected reused catalog item path to update, got %#v", item)
+	}
+}
+
+func TestRunSyncLibraryDeduplicatesScannerMetadataSourcesOnRescan(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	moviePath := filepath.Join(moviesRoot, "Movie A (2024)", "Movie.A.2024.mkv")
+	mustWriteFixtureFile(t, moviePath)
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run initial sync: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run rescan: %v", err)
+	}
+
+	assertTableCount(t, ctx, db, &database.CatalogItem{}, 1)
+	assertTableCount(t, ctx, db, &database.MetadataSource{}, 1)
+}
+
+func TestRunSyncLibraryMarksAncestorAvailabilityMissingWhenEpisodesDeleted(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	episodePath := filepath.Join(showsRoot, "Show One", "Season 1", "Show.One.S01E02.mkv")
+	mustWriteFixtureFile(t, episodePath)
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run initial show sync: %v", err)
+	}
+	if err := os.Remove(episodePath); err != nil {
+		t.Fatalf("remove episode file: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run delete sync: %v", err)
+	}
+
+	var items []database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", showLibrary.ID).Order("id asc").Find(&items).Error; err != nil {
+		t.Fatalf("list catalog items: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected series, season, and episode rows, got %#v", items)
+	}
+	for _, item := range items {
+		if item.AvailabilityStatus != catalog.AvailabilityMissing {
+			t.Fatalf("expected deleted hierarchy item to become missing, got %#v", item)
+		}
+	}
+	if items[0].Type != catalog.ItemTypeSeries || items[1].Type != catalog.ItemTypeSeason || items[2].Type != catalog.ItemTypeEpisode {
+		t.Fatalf("unexpected item ordering for hierarchy: %#v", items)
 	}
 }
 
@@ -469,6 +544,115 @@ func TestScanCatalogWriterCreatesEpisodeHierarchyWithLocalEvidence(t *testing.T)
 	}
 	if result.Item.Path != "show-one/season-01/episode-0002" {
 		t.Fatalf("expected episode leaf item, got %#v", result.Item)
+	}
+}
+
+func TestScanCatalogWriterReusesProviderCreatedDescendantsByHierarchyIdentity(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	catalogSvc := catalog.NewService(db)
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{
+		LibraryID:          libraryRecord.ID,
+		Type:               catalog.ItemTypeSeries,
+		Path:               "show-one",
+		SortKey:            "Show One",
+		Title:              "Matched Show One",
+		AvailabilityStatus: catalog.AvailabilityMissing,
+		GovernanceStatus:   catalog.GovernanceMatched,
+	})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonNumber := 1
+	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{
+		LibraryID:          libraryRecord.ID,
+		Type:               catalog.ItemTypeSeason,
+		ParentID:           &series.ID,
+		Path:               "show-one/Season 01",
+		SortKey:            "Show One S01",
+		Title:              "Season 1",
+		IndexNumber:        &seasonNumber,
+		ParentIndexNumber:  &seasonNumber,
+		AvailabilityStatus: catalog.AvailabilityMissing,
+		GovernanceStatus:   catalog.GovernanceMatched,
+	})
+	if err != nil {
+		t.Fatalf("create provider season: %v", err)
+	}
+	episodeNumber := 2
+	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{
+		LibraryID:          libraryRecord.ID,
+		Type:               catalog.ItemTypeEpisode,
+		ParentID:           &season.ID,
+		Path:               "show-one/Season 01/Episode 02",
+		SortKey:            "Show One S01E02",
+		Title:              "Matched Episode 2",
+		IndexNumber:        &episodeNumber,
+		ParentIndexNumber:  &seasonNumber,
+		AvailabilityStatus: catalog.AvailabilityMissing,
+		GovernanceStatus:   catalog.GovernanceMatched,
+	})
+	if err != nil {
+		t.Fatalf("create provider episode: %v", err)
+	}
+	if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: episode.ID, Provider: "tmdb", ProviderType: "tv_episode", ExternalID: "tv:1002", IsPrimary: true}); err != nil {
+		t.Fatalf("seed provider identity: %v", err)
+	}
+	if _, err := catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{ItemID: episode.ID, SourceType: catalog.SourceTypeProvider, SourceName: "tmdb", ExternalID: "tv:1002", PayloadJSON: `{"matched_title":"Matched Episode 2"}`}); err != nil {
+		t.Fatalf("seed provider evidence: %v", err)
+	}
+
+	modifiedAt := time.Date(2026, 4, 25, 13, 0, 0, 0, time.UTC)
+	result, err := svc.writeCatalogScanEpisodeHierarchy(ctx, libraryRecord, catalogScanArtifact{
+		ItemType:          catalog.ItemTypeEpisode,
+		SourcePath:        "/library/Show One/Season 1/Show One.S01E02.mkv",
+		SeriesPath:        "show-one",
+		SeasonPath:        "show-one/season-01",
+		Title:             "Show One S01E02",
+		OriginalTitle:     "Show.One.S01E02",
+		SeriesTitle:       "Show One",
+		SeasonNumber:      &seasonNumber,
+		EpisodeSlots:      []catalogEpisodeSlot{{EpisodeNumber: 2, ItemPath: "show-one/season-01/episode-0002"}},
+		StorageProvider:   "local",
+		StableIdentityKey: "local:show-one-s01e02",
+		ProviderName:      "scanner-provider",
+		HashesJSON:        `{"sha1":"deadbeef"}`,
+		SizeBytes:         8192,
+		ModifiedAt:        &modifiedAt,
+		Container:         "mkv",
+	})
+	if err != nil {
+		t.Fatalf("write scan hierarchy: %v", err)
+	}
+
+	assertCatalogCounts(t, ctx, db, 3, 1, 1, 1, 1, 2)
+	if result.Item.ID != episode.ID {
+		t.Fatalf("expected scanner to reuse provider-created episode %d, got %#v", episode.ID, result.Item)
+	}
+
+	var reloadedSeason database.CatalogItem
+	if err := db.WithContext(ctx).First(&reloadedSeason, season.ID).Error; err != nil {
+		t.Fatalf("reload season: %v", err)
+	}
+	if reloadedSeason.Path != "show-one/season-01" || reloadedSeason.GovernanceStatus != catalog.GovernanceMatched {
+		t.Fatalf("expected season path rewrite without governance loss, got %#v", reloadedSeason)
+	}
+
+	var reloadedEpisode database.CatalogItem
+	if err := db.WithContext(ctx).First(&reloadedEpisode, episode.ID).Error; err != nil {
+		t.Fatalf("reload episode: %v", err)
+	}
+	if reloadedEpisode.Path != "show-one/season-01/episode-0002" || reloadedEpisode.AvailabilityStatus != catalog.AvailabilityAvailable || reloadedEpisode.GovernanceStatus != catalog.GovernanceMatched {
+		t.Fatalf("expected reused episode to become available while preserving governance, got %#v", reloadedEpisode)
+	}
+
+	var externalID database.CatalogExternalID
+	if err := db.WithContext(ctx).Where("item_id = ? AND provider = ? AND provider_type = ?", episode.ID, "tmdb", "tv_episode").First(&externalID).Error; err != nil {
+		t.Fatalf("reload external id: %v", err)
+	}
+	if externalID.ExternalID != "tv:1002" {
+		t.Fatalf("expected descendant identity to survive scanner reuse, got %#v", externalID)
 	}
 }
 

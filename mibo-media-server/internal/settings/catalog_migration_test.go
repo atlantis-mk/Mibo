@@ -21,23 +21,84 @@ func TestCatalogMigrationStateDefaultsToZeroValues(t *testing.T) {
 		t.Fatalf("expected nil backfill timestamp, got %v", state.CatalogBackfillCompletedAt)
 	}
 	if state.CatalogReadEnabled {
-		t.Fatal("expected catalog_read_enabled to default false")
+		t.Fatal("expected catalog_read_enabled to stay false before validation gate completes")
+	}
+	if state.CatalogValidationCompletedAt != nil {
+		t.Fatalf("expected nil validation timestamp, got %v", state.CatalogValidationCompletedAt)
 	}
 	if state.LegacyCleanupCompletedAt != nil {
 		t.Fatalf("expected nil cleanup timestamp, got %v", state.LegacyCleanupCompletedAt)
 	}
 }
 
+func TestCatalogMigrationStateDefaultsReadDisabledForLegacyOnlyData(t *testing.T) {
+	svc := newCatalogMigrationTestService(t)
+	ctx := context.Background()
+	legacyItem := database.MediaItem{LibraryID: 1, Type: "movie", Title: "Legacy", SourcePath: "/legacy.mkv", MatchStatus: "pending", Status: "ready"}
+	if err := svc.db.WithContext(ctx).Create(&legacyItem).Error; err != nil {
+		t.Fatalf("create legacy item: %v", err)
+	}
+
+	state, err := svc.GetCatalogMigrationState(ctx)
+	if err != nil {
+		t.Fatalf("get catalog migration state: %v", err)
+	}
+	if state.CatalogReadEnabled {
+		t.Fatal("expected catalog_read_enabled to stay false for legacy-only data")
+	}
+}
+
+func TestCatalogMigrationStateDefaultsReadDisabledForCatalogDataWithoutValidation(t *testing.T) {
+	svc := newCatalogMigrationTestService(t)
+	ctx := context.Background()
+	catalogItem := database.CatalogItem{LibraryID: 1, Type: "movie", Title: "Catalog", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := svc.db.WithContext(ctx).Create(&catalogItem).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	state, err := svc.GetCatalogMigrationState(ctx)
+	if err != nil {
+		t.Fatalf("get catalog migration state: %v", err)
+	}
+	if state.CatalogReadEnabled {
+		t.Fatal("expected catalog_read_enabled to stay false until validation completes")
+	}
+}
+
+func TestCatalogMigrationStateDefaultsReadEnabledAfterValidationCompletes(t *testing.T) {
+	svc := newCatalogMigrationTestService(t)
+	ctx := context.Background()
+	validatedAt := time.Date(2026, time.April, 26, 9, 0, 0, 0, time.UTC)
+	if err := svc.db.WithContext(ctx).Create(&database.SystemSetting{
+		Category: catalogMigrationCategory,
+		Key:      catalogValidationCompletedAtKey,
+		Value:    validatedAt.Format(time.RFC3339),
+	}).Error; err != nil {
+		t.Fatalf("seed validation timestamp: %v", err)
+	}
+
+	state, err := svc.GetCatalogMigrationState(ctx)
+	if err != nil {
+		t.Fatalf("get catalog migration state: %v", err)
+	}
+	if !state.CatalogReadEnabled {
+		t.Fatal("expected catalog_read_enabled to default true after validation completes")
+	}
+	assertCatalogMigrationTimeEqual(t, state.CatalogValidationCompletedAt, validatedAt)
+}
+
 func TestCatalogMigrationStateRoundTripsPersistedValues(t *testing.T) {
 	svc := newCatalogMigrationTestService(t)
 	ctx := context.Background()
 	backfillAt := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	validationAt := time.Date(2026, time.April, 25, 18, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
 	cleanupAt := time.Date(2026, time.April, 26, 11, 30, 0, 0, time.FixedZone("UTC-3", -3*60*60))
 
 	updated, err := svc.UpdateCatalogMigrationState(ctx, UpdateCatalogMigrationStateInput{
-		CatalogBackfillCompletedAt: &backfillAt,
-		CatalogReadEnabled:         true,
-		LegacyCleanupCompletedAt:   &cleanupAt,
+		CatalogBackfillCompletedAt:   &backfillAt,
+		CatalogReadEnabled:           true,
+		CatalogValidationCompletedAt: &validationAt,
+		LegacyCleanupCompletedAt:     &cleanupAt,
 	})
 	if err != nil {
 		t.Fatalf("update catalog migration state: %v", err)
@@ -47,6 +108,7 @@ func TestCatalogMigrationStateRoundTripsPersistedValues(t *testing.T) {
 	if !updated.CatalogReadEnabled {
 		t.Fatal("expected catalog_read_enabled to persist true")
 	}
+	assertCatalogMigrationTimeEqual(t, updated.CatalogValidationCompletedAt, validationAt.UTC())
 	assertCatalogMigrationTimeEqual(t, updated.LegacyCleanupCompletedAt, cleanupAt.UTC())
 
 	state, err := svc.GetCatalogMigrationState(ctx)
@@ -57,9 +119,11 @@ func TestCatalogMigrationStateRoundTripsPersistedValues(t *testing.T) {
 	if !state.CatalogReadEnabled {
 		t.Fatal("expected catalog_read_enabled to round-trip true")
 	}
+	assertCatalogMigrationTimeEqual(t, state.CatalogValidationCompletedAt, validationAt.UTC())
 	assertCatalogMigrationTimeEqual(t, state.LegacyCleanupCompletedAt, cleanupAt.UTC())
 	assertCatalogMigrationStoredValue(t, svc, catalogMigrationCategory, catalogBackfillCompletedAtKey, backfillAt.UTC().Format(time.RFC3339))
 	assertCatalogMigrationStoredValue(t, svc, catalogMigrationCategory, catalogReadEnabledKey, "true")
+	assertCatalogMigrationStoredValue(t, svc, catalogMigrationCategory, catalogValidationCompletedAtKey, validationAt.UTC().Format(time.RFC3339))
 	assertCatalogMigrationStoredValue(t, svc, catalogMigrationCategory, legacyCleanupCompletedAtKey, cleanupAt.UTC().Format(time.RFC3339))
 }
 

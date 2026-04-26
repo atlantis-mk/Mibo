@@ -75,6 +75,9 @@ func TestMatchItemUsesDatabaseTMDBConfig(t *testing.T) {
 	if stored.MatchStatus != StatusMatched || stored.MetadataProvider != "tmdb" || stored.Overview == "" {
 		t.Fatalf("unexpected matched item: %#v", stored)
 	}
+	if stored.Year == nil || *stored.Year != 2024 {
+		t.Fatalf("expected matched year 2024, got %#v", stored.Year)
+	}
 	if stored.LogoURL != tmdb.URL+"/images/movie-a-logo-en.png" {
 		t.Fatalf("unexpected logo url: %q", stored.LogoURL)
 	}
@@ -332,6 +335,59 @@ func TestSearchCandidatesReturnsHelpfulTMDBAuthError(t *testing.T) {
 	}
 }
 
+func TestSearchCandidatesSupportsIMDbLookup(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/find/tt1234567":
+			if req.URL.Query().Get("external_source") != "imdb_id" {
+				t.Fatalf("expected imdb_id lookup, got %q", req.URL.Query().Get("external_source"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"movie_results": []map[string]any{{
+					"id":             101,
+					"title":          "MovieA",
+					"original_title": "MovieA",
+					"release_date":   "2024-02-02",
+					"overview":       "Matched by IMDb",
+					"poster_path":    "/movie-a.jpg",
+				}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "db-test-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	item := database.MediaItem{LibraryID: 1, Type: "movie", Title: "MovieA", SourcePath: "/movies/MovieA.2024.mkv", MatchStatus: StatusPending, Status: "ready"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	results, err := svc.SearchCandidates(ctx, item.ID, ManualSearchInput{IMDbID: "tt1234567"})
+	if err != nil {
+		t.Fatalf("search candidates: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected single result, got %#v", results)
+	}
+	if results[0].MatchedQuery != "IMDb ID tt1234567" || !strings.Contains(results[0].ReasonSummary, "IMDb") {
+		t.Fatalf("unexpected imdb lookup candidate: %#v", results[0])
+	}
+}
+
 func TestMatchItemSupportsTMDBBearerToken(t *testing.T) {
 	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -380,6 +436,114 @@ func TestMatchItemSupportsTMDBBearerToken(t *testing.T) {
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
 	if err := svc.MatchItem(ctx, item.ID); err != nil {
 		t.Fatalf("match item: %v", err)
+	}
+}
+
+func TestMatchItemUsesEpisodeMetadataWhenSeasonEpisodeExist(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 777, "name": "Show A", "original_name": "Show A", "first_air_date": "2024-01-01"}}})
+		case "/tv/777":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 777, "name": "Show A", "original_name": "Show A", "overview": "Series overview", "poster_path": "/show-a.jpg", "backdrop_path": "/show-a-bg.jpg", "first_air_date": "2024-01-01", "episode_run_time": []int{45}, "genres": []map[string]any{{"name": "Drama"}}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}})
+		case "/tv/777/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 701, "season_number": 1, "name": "Season 1", "episodes": []map[string]any{{"id": 1002, "season_number": 1, "episode_number": 2, "name": "Second Episode", "air_date": "2024-01-08", "overview": "Episode overview", "still_path": "/show-a-s1e2.jpg", "runtime": 47}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "tv-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	season := 1
+	episode := 2
+	item := database.MediaItem{LibraryID: 1, Type: "episode", Title: "Show A S01E02", SeriesTitle: "Show A", SeasonNumber: &season, EpisodeNumber: &episode, SourcePath: "/shows/ShowA/Season 1/ShowA.S01E02.mkv", MatchStatus: StatusPending, Status: "ready"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if err := svc.MatchItem(ctx, item.ID); err != nil {
+		t.Fatalf("match item: %v", err)
+	}
+
+	var stored database.MediaItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.MatchStatus != StatusMatched {
+		t.Fatalf("expected matched episode, got %#v", stored)
+	}
+	if stored.Title != "Second Episode" || stored.Overview != "Episode overview" {
+		t.Fatalf("expected episode metadata to win, got %#v", stored)
+	}
+	if stored.BackdropURL != tmdb.URL+"/images/show-a-s1e2.jpg" {
+		t.Fatalf("unexpected episode still url: %q", stored.BackdropURL)
+	}
+	if stored.Year == nil || *stored.Year != 2024 {
+		t.Fatalf("expected episode year 2024, got %#v", stored.Year)
+	}
+	if stored.ReleaseDate != "2024-01-08" {
+		t.Fatalf("unexpected episode air date: %q", stored.ReleaseDate)
+	}
+}
+
+func TestMatchItemMarksEpisodeNeedsReviewWhenEpisodeIsMissing(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 777, "name": "Show A", "original_name": "Show A", "first_air_date": "2024-01-01"}}})
+		case "/tv/777":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 777, "name": "Show A", "original_name": "Show A", "overview": "Series overview", "poster_path": "/show-a.jpg", "backdrop_path": "/show-a-bg.jpg", "first_air_date": "2024-01-01", "episode_run_time": []int{45}, "genres": []map[string]any{{"name": "Drama"}}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}})
+		case "/tv/777/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 701, "season_number": 1, "name": "Season 1", "episodes": []map[string]any{{"id": 1001, "season_number": 1, "episode_number": 1, "name": "Pilot"}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "tv-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	season := 1
+	episode := 2
+	item := database.MediaItem{LibraryID: 1, Type: "episode", Title: "Show A S01E02", SeriesTitle: "Show A", SeasonNumber: &season, EpisodeNumber: &episode, SourcePath: "/shows/ShowA/Season 1/ShowA.S01E02.mkv", MatchStatus: StatusPending, Status: "ready"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if err := svc.MatchItem(ctx, item.ID); err != nil {
+		t.Fatalf("match item: %v", err)
+	}
+
+	var stored database.MediaItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.MatchStatus != StatusNeedsReview {
+		t.Fatalf("expected episode review state, got %#v", stored)
 	}
 }
 
@@ -586,7 +750,7 @@ func TestMatchItemSupportsMetadataRefetch(t *testing.T) {
 	}
 
 	confidence := 0.91
-	year := 2024
+	year := 1999
 	item := database.MediaItem{
 		LibraryID:          1,
 		Type:               "movie",
@@ -621,6 +785,9 @@ func TestMatchItemSupportsMetadataRefetch(t *testing.T) {
 	}
 	if stored.PosterURL != tmdb.URL+"/images/movie-a-refetched.jpg" || stored.BackdropURL != tmdb.URL+"/images/movie-a-refetched-bg.jpg" {
 		t.Fatalf("unexpected refetched artwork: poster=%q backdrop=%q", stored.PosterURL, stored.BackdropURL)
+	}
+	if stored.Year == nil || *stored.Year != 2024 {
+		t.Fatalf("expected refetched year 2024, got %#v", stored.Year)
 	}
 	if stored.MetadataConfidence == nil || *stored.MetadataConfidence != confidence {
 		t.Fatalf("expected metadata confidence to be preserved, got %#v", stored.MetadataConfidence)

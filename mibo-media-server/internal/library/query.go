@@ -107,6 +107,26 @@ type MediaItemDetail struct {
 	Files               []MediaFileDetail `json:"files"`
 }
 
+type SeriesSeasonDetail struct {
+	SeasonNumber   int                   `json:"season_number"`
+	Name           string                `json:"name"`
+	Overview       string                `json:"overview"`
+	PosterURL      string                `json:"poster_url"`
+	RuntimeSeconds *int                  `json:"runtime_seconds,omitempty"`
+	Episodes       []SeriesEpisodeDetail `json:"episodes"`
+}
+
+type SeriesEpisodeDetail struct {
+	MediaItemID    uint   `json:"media_item_id"`
+	SeasonNumber   int    `json:"season_number"`
+	EpisodeNumber  int    `json:"episode_number"`
+	Name           string `json:"name"`
+	AirDate        string `json:"air_date,omitempty"`
+	Overview       string `json:"overview"`
+	StillURL       string `json:"still_url"`
+	RuntimeSeconds *int   `json:"runtime_seconds,omitempty"`
+}
+
 type MediaFileDetail struct {
 	database.MediaFile
 	AudioTracks    []TrackDetail `json:"audio_tracks"`

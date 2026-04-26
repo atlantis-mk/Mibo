@@ -131,8 +131,8 @@ func TestLegacyBackfillProgress(t *testing.T) {
 	}
 
 	assertTableCount(t, ctx, fx.db, &database.UserItemData{}, 0)
-	assertTableCount(t, ctx, fx.db, &database.ItemRollup{}, 0)
-	assertTableCount(t, ctx, fx.db, &database.CatalogSearchDocument{}, 0)
+	assertTableCount(t, ctx, fx.db, &database.ItemRollup{}, 1)
+	assertTableCount(t, ctx, fx.db, &database.CatalogSearchDocument{}, 1)
 
 	if err := fx.catalog.RunLegacyBackfill(ctx, catalog.LegacyBackfillPayload{RunID: run.ID, LibraryID: &fx.library.ID}); err != nil {
 		t.Fatalf("run legacy backfill: %v", err)
@@ -173,6 +173,123 @@ func TestLegacyBackfillProgress(t *testing.T) {
 	}
 	if report.Status != catalog.LegacyBackfillStatusCompleted {
 		t.Fatalf("expected run status %q, got %#v", catalog.LegacyBackfillStatusCompleted, report)
+	}
+}
+
+func TestLegacyBackfillProgressResolvesDuplicateEpisodeCandidates(t *testing.T) {
+	t.Parallel()
+
+	fx := newLegacyBackfillFixture(t)
+	ctx := fx.ctx
+
+	year := 2024
+	seasonNumber := 1
+	episodeNumber := 1
+	runtimeSeconds := 1800
+	canonical := database.MediaItem{
+		LibraryID:        fx.library.ID,
+		Type:             catalog.ItemTypeEpisode,
+		Title:            "Pilot",
+		SeriesTitle:      "Duplicate Progress Show",
+		SourcePath:       "/library/shows/duplicate-progress/canonical/pilot.mkv",
+		SeasonNumber:     &seasonNumber,
+		EpisodeNumber:    &episodeNumber,
+		Year:             &year,
+		RuntimeSeconds:   &runtimeSeconds,
+		MatchStatus:      "matched",
+		MetadataProvider: "tmdb",
+		ExternalID:       "tv:999",
+		Status:           "ready",
+	}
+	duplicate := database.MediaItem{
+		LibraryID:      fx.library.ID,
+		Type:           catalog.ItemTypeEpisode,
+		Title:          "Pilot",
+		SeriesTitle:    "Duplicate Progress Show",
+		SourcePath:     "/library/shows/duplicate-progress/duplicate/pilot.mkv",
+		SeasonNumber:   &seasonNumber,
+		EpisodeNumber:  &episodeNumber,
+		Year:           &year,
+		RuntimeSeconds: &runtimeSeconds,
+		MatchStatus:    "matched",
+		Status:         "ready",
+	}
+	for _, item := range []*database.MediaItem{&canonical, &duplicate} {
+		if err := fx.db.WithContext(ctx).Create(item).Error; err != nil {
+			t.Fatalf("create legacy episode %q: %v", item.SourcePath, err)
+		}
+	}
+
+	durationSeconds := 1800.0
+	canonicalFile := database.MediaFile{LibraryID: fx.library.ID, MediaItemID: &canonical.ID, StoragePath: canonical.SourcePath, StableIdentityKey: "stable:duplicate-progress:canonical", ProviderName: "local", ProbeStatus: "complete", DurationSeconds: &durationSeconds}
+	duplicateFile := database.MediaFile{LibraryID: fx.library.ID, MediaItemID: &duplicate.ID, StoragePath: duplicate.SourcePath, StableIdentityKey: "stable:duplicate-progress:duplicate", ProviderName: "local", ProbeStatus: "complete", DurationSeconds: &durationSeconds}
+	for _, file := range []*database.MediaFile{&canonicalFile, &duplicateFile} {
+		if err := fx.db.WithContext(ctx).Create(file).Error; err != nil {
+			t.Fatalf("create legacy media file %q: %v", file.StoragePath, err)
+		}
+	}
+
+	completedAt := time.Date(2026, time.April, 25, 11, 0, 0, 0, time.UTC)
+	legacyProgress := database.PlaybackProgress{
+		UserID:          fx.user.ID,
+		MediaItemID:     duplicate.ID,
+		MediaFileID:     &duplicateFile.ID,
+		PositionSeconds: 600,
+		DurationSeconds: &runtimeSeconds,
+		Watched:         false,
+		CompletedAt:     &completedAt,
+	}
+	if err := fx.db.WithContext(ctx).Create(&legacyProgress).Error; err != nil {
+		t.Fatalf("create duplicate playback progress: %v", err)
+	}
+
+	run, err := fx.catalog.CreateLegacyBackfillRun(ctx, catalog.CreateLegacyBackfillRunInput{
+		Scope:             catalog.LegacyBackfillScope{Kind: catalog.LegacyBackfillScopeLibrary, LibraryID: &fx.library.ID},
+		TriggeredByUserID: fx.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("create backfill run: %v", err)
+	}
+
+	if err := fx.catalog.RunLegacyBackfill(ctx, catalog.LegacyBackfillPayload{RunID: run.ID, LibraryID: &fx.library.ID}); err != nil {
+		t.Fatalf("run legacy backfill: %v", err)
+	}
+
+	var episodes []database.CatalogItem
+	if err := fx.db.WithContext(ctx).Where("library_id = ? AND type = ?", fx.library.ID, catalog.ItemTypeEpisode).Order("id asc").Find(&episodes).Error; err != nil {
+		t.Fatalf("list canonical catalog episodes: %v", err)
+	}
+	if len(episodes) != 1 {
+		t.Fatalf("expected one canonical episode after duplicate collapse, got %#v", episodes)
+	}
+
+	var userItemData []database.UserItemData
+	if err := fx.db.WithContext(ctx).Order("id asc").Find(&userItemData).Error; err != nil {
+		t.Fatalf("list user item data: %v", err)
+	}
+	if len(userItemData) != 1 {
+		t.Fatalf("expected one migrated progress row, got %#v", userItemData)
+	}
+	if userItemData[0].ItemID != episodes[0].ID || userItemData[0].AssetID == nil {
+		t.Fatalf("expected duplicate progress to map onto canonical episode %#v, got %#v", episodes[0], userItemData[0])
+	}
+
+	report, err := fx.catalog.GetLegacyBackfillRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("load backfill run: %v", err)
+	}
+	foundDuplicateEntry := false
+	foundProgressSuccess := false
+	for _, entry := range report.Entries {
+		if entry.EntryType == catalog.LegacyBackfillEntryTypeDuplicateEpisodeCandidate && entry.LegacyMediaItemID != nil && *entry.LegacyMediaItemID == duplicate.ID {
+			foundDuplicateEntry = true
+		}
+		if entry.EntryType == catalog.LegacyBackfillEntryTypeSuccess && entry.LegacyMediaItemID != nil && *entry.LegacyMediaItemID == duplicate.ID && entry.AssetID != nil {
+			foundProgressSuccess = true
+		}
+	}
+	if !foundDuplicateEntry || !foundProgressSuccess {
+		t.Fatalf("expected duplicate candidate and migrated progress entries, got %#v", report.Entries)
 	}
 }
 

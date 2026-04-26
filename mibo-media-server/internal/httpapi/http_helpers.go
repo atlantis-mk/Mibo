@@ -205,6 +205,18 @@ func parseOptionalUintQuery(req *http.Request, key string) (uint, error) {
 	return uint(parsed), nil
 }
 
+func parseOptionalIntQuery(req *http.Request, key string) (int, bool, error) {
+	value := strings.TrimSpace(req.URL.Query().Get(key))
+	if value == "" {
+		return 0, false, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid query parameter %q", key)
+	}
+	return parsed, true, nil
+}
+
 func containsOrigin(origins []string, target string) bool {
 	for _, origin := range origins {
 		if origin == target {
@@ -259,6 +271,17 @@ func (r *Router) requireUser(req *http.Request) (database.User, error) {
 		return database.User{}, err
 	}
 	return r.auth.Authenticate(req.Context(), token)
+}
+
+func (r *Router) requireAdminUser(req *http.Request) (database.User, error) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		return database.User{}, err
+	}
+	if strings.ToLower(strings.TrimSpace(user.Role)) != "admin" {
+		return database.User{}, errors.New("admin access required")
+	}
+	return user, nil
 }
 
 func (r *Router) optionalUser(req *http.Request) (*database.User, error) {

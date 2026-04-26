@@ -1,8 +1,11 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -137,29 +140,49 @@ func TestRunOnceProcessesSyncLibraryJob(t *testing.T) {
 		t.Fatalf("expected job status completed, got %q", storedJob.Status)
 	}
 
-	items, err := librarySvc.ListMediaItems(ctx, libraryRecord.ID, "", 20)
-	if err != nil {
-		t.Fatalf("list media items: %v", err)
+	var catalogCount int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Count(&catalogCount).Error; err != nil {
+		t.Fatalf("count catalog items: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 media items, got %d", len(items))
-	}
-	if items[0].MatchStatus != metadata.StatusMatched || items[0].Overview == "" || items[0].PosterURL == "" {
-		t.Fatalf("expected movie metadata enrichment, got %#v", items[0])
-	}
-	if items[1].MatchStatus != metadata.StatusMatched || items[1].SeriesTitle != "ShowB" {
-		t.Fatalf("expected episode metadata enrichment, got %#v", items[1])
+	if catalogCount != 4 {
+		t.Fatalf("expected 4 catalog items (movie + series/season/episode), got %d", catalogCount)
 	}
 
-	var files []database.MediaFile
+	var legacyItemCount int64
+	if err := db.WithContext(ctx).Model(&database.MediaItem{}).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Count(&legacyItemCount).Error; err != nil {
+		t.Fatalf("count legacy media items: %v", err)
+	}
+	if legacyItemCount != 0 {
+		t.Fatalf("expected catalog-first scan to leave legacy media_items empty, got %d", legacyItemCount)
+	}
+
+	var legacyFileCount int64
+	if err := db.WithContext(ctx).Model(&database.MediaFile{}).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Count(&legacyFileCount).Error; err != nil {
+		t.Fatalf("count legacy media files: %v", err)
+	}
+	if legacyFileCount != 0 {
+		t.Fatalf("expected catalog-first scan to leave legacy media_files empty, got %d", legacyFileCount)
+	}
+
+	var files []database.InventoryFile
 	if err := db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Order("storage_path asc").Find(&files).Error; err != nil {
-		t.Fatalf("list media files: %v", err)
+		t.Fatalf("list inventory files: %v", err)
 	}
 	if len(files) != 2 {
-		t.Fatalf("expected 2 media files, got %d", len(files))
+		t.Fatalf("expected 2 inventory files, got %d", len(files))
 	}
-	if files[0].ProbeStatus != probe.StatusReady || files[0].VideoCodec != "h264" || files[0].DurationSeconds == nil || *files[0].DurationSeconds <= 0 {
-		t.Fatalf("expected probe enrichment, got %#v", files[0])
+
+	var assets []database.MediaAsset
+	if err := db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Order("id asc").Find(&assets).Error; err != nil {
+		t.Fatalf("list media assets: %v", err)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("expected 2 media assets, got %d", len(assets))
+	}
+	for _, asset := range assets {
+		if asset.ProbeStatus != probe.StatusReady || asset.DurationSeconds == nil || *asset.DurationSeconds <= 0 {
+			t.Fatalf("expected inventory probe enrichment on asset, got %#v", asset)
+		}
 	}
 	if !listRequests["/movies"] || !listRequests["/movies/ShowB"] {
 		t.Fatalf("expected scan to refresh openlist directory cache, got %#v", listRequests)
@@ -485,6 +508,78 @@ func TestRunOnceIgnoresLegacyRefreshIntervalWithoutSchedules(t *testing.T) {
 	}
 }
 
+func TestRunOnceGeneratesFallbackArtworkWhenMetadataMissing(t *testing.T) {
+	mediaRoot := filepath.Join(t.TempDir(), "media-root")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatalf("create media root: %v", err)
+	}
+	moviePath := filepath.Join(mediaRoot, "MovieA.2024.mkv")
+	if err := os.WriteFile(moviePath, []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write movie file: %v", err)
+	}
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	artworkRoot := filepath.Join(t.TempDir(), "artwork")
+	ffprobePath := writeFakeFFprobe(t)
+	ffmpegPath := writeFakeFFmpeg(t)
+	cfg := config.Config{
+		Local:   config.LocalStorageConfig{RootPath: mediaRoot},
+		FFprobe: config.FFprobeConfig{Enabled: true, Path: ffprobePath, Timeout: 2 * time.Second},
+		FFmpeg:  config.FFmpegConfig{Enabled: true, Path: ffmpegPath, Timeout: 2 * time.Second, ArtworkRootPath: artworkRoot},
+		Worker:  config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond},
+	}
+	registry := providers.NewRegistry(cfg)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	probeSvc := probe.NewService(db, registry, cfg.FFprobe, cfg.FFmpeg)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, metadata.NewService(db, cfg.Metadata, settingsSvc), probeSvc, settingsSvc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: mediaRoot})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	item := database.MediaItem{LibraryID: record.ID, Type: "movie", Title: "MovieA", SourcePath: moviePath, MatchStatus: metadata.StatusSkipped, Status: "ready"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	file := database.MediaFile{LibraryID: record.ID, MediaItemID: &item.ID, StoragePath: moviePath, Container: "mkv", ProbeStatus: probe.StatusPending}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
+	if _, err := jobsSvc.Enqueue(ctx, "probe_media_file", map[string]any{"media_file_id": file.ID}); err != nil {
+		t.Fatalf("enqueue legacy probe job: %v", err)
+	}
+
+	runner.RunOnce(ctx)
+
+	var storedItem database.MediaItem
+	if err := db.WithContext(ctx).First(&storedItem, item.ID).Error; err != nil {
+		t.Fatalf("load media item: %v", err)
+	}
+	wantPosterURL := fmt.Sprintf("/api/v1/media-items/%d/artwork/poster", storedItem.ID)
+	wantBackdropURL := fmt.Sprintf("/api/v1/media-items/%d/artwork/backdrop", storedItem.ID)
+	if storedItem.PosterURL != wantPosterURL || storedItem.BackdropURL != wantBackdropURL {
+		t.Fatalf("expected generated artwork urls, got poster=%q backdrop=%q", storedItem.PosterURL, storedItem.BackdropURL)
+	}
+	for _, name := range []string{"poster.jpg", "backdrop.jpg"} {
+		if _, err := os.Stat(filepath.Join(artworkRoot, fmt.Sprintf("%d", storedItem.ID), name)); err != nil {
+			t.Fatalf("expected generated artwork %s: %v", name, err)
+		}
+	}
+}
+
 func TestPartialSyncDoesNotSoftDeleteUnseenLibraryRows(t *testing.T) {
 	t.Parallel()
 
@@ -539,9 +634,9 @@ func TestPartialSyncDoesNotSoftDeleteUnseenLibraryRows(t *testing.T) {
 	}
 	runner.RunOnce(ctx)
 
-	var movieFile database.MediaFile
+	var movieFile database.InventoryFile
 	if err := db.WithContext(ctx).Where("library_id = ? AND storage_path = ?", record.ID, filepath.Join(movieDir, "MovieA.2024.mkv")).First(&movieFile).Error; err != nil {
-		t.Fatalf("load movie file: %v", err)
+		t.Fatalf("load movie inventory file: %v", err)
 	}
 	if movieFile.DeletedAt != nil {
 		t.Fatalf("expected unrelated movie row to stay active after partial sync")
@@ -619,8 +714,8 @@ func TestRunOnceProcessesTargetedRefreshJob(t *testing.T) {
 	}
 
 	var episodeCount int64
-	if err := db.WithContext(ctx).Model(&database.MediaFile{}).Where("library_id = ? AND deleted_at IS NULL AND storage_path LIKE ?", record.ID, filepath.Join(showDir, "%")).Count(&episodeCount).Error; err != nil {
-		t.Fatalf("count episode files: %v", err)
+	if err := db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id = ? AND deleted_at IS NULL AND storage_path LIKE ?", record.ID, filepath.Join(showDir, "%")).Count(&episodeCount).Error; err != nil {
+		t.Fatalf("count episode inventory files: %v", err)
 	}
 	if episodeCount != 2 {
 		t.Fatalf("expected targeted refresh to scan subtree files, got %d", episodeCount)
@@ -830,6 +925,32 @@ func TestRunOnceEnsuresAndReseedsListenerReconcileJobs(t *testing.T) {
 	}
 }
 
+func TestScheduleMarkersIgnoreNonScheduleJobs(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	runner := NewRunner(config.WorkerConfig{}, nil, nil, nil, nil, nil, schedule.NewService(db))
+	job := database.Job{
+		ID:          7,
+		Kind:        listener.JobKindListenerReconcile,
+		PayloadJSON: `{"library_id":1,"reason":"listener_reconcile","scheduled_for":"2026-04-24T18:37:14Z"}`,
+	}
+
+	var logs bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(originalOutput)
+
+	runner.markScheduleRunRunning(context.Background(), job)
+	runner.markScheduleRunFinished(context.Background(), job, schedule.StatusCompleted, "completed")
+
+	if strings.Contains(logs.String(), "mark schedule job") {
+		t.Fatalf("expected non-schedule jobs to skip schedule markers, got logs %q", logs.String())
+	}
+}
+
 func newTMDBTestServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -842,6 +963,8 @@ func newTMDBTestServer() *httptest.Server {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "title": "MovieA", "original_title": "MovieA", "overview": "Movie overview", "poster_path": "/movie-a.jpg", "backdrop_path": "/movie-a-bg.jpg", "release_date": "2024-02-02", "runtime": 121, "genres": []map[string]any{{"name": "Action"}}, "credits": map[string]any{"cast": []map[string]any{{"name": "Actor A"}}, "crew": []map[string]any{{"name": "Director A", "job": "Director", "department": "Directing"}}}})
 		case "/tv/202":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 202, "name": "ShowB", "original_name": "ShowB", "overview": "Show overview", "poster_path": "/show-b.jpg", "backdrop_path": "/show-b-bg.jpg", "first_air_date": "2021-01-01", "episode_run_time": []int{48}, "genres": []map[string]any{{"name": "Drama"}}, "credits": map[string]any{"cast": []map[string]any{{"name": "Actor B"}}, "crew": []map[string]any{{"name": "Director B", "job": "Director", "department": "Directing"}}}})
+		case "/tv/202/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 301, "season_number": 1, "name": "Season 1", "poster_path": "/show-b-s1.jpg", "episodes": []map[string]any{{"id": 1002, "season_number": 1, "episode_number": 2, "name": "Episode 2", "air_date": "2021-01-08", "overview": "Episode overview", "still_path": "/show-b-s1e2.jpg", "runtime": 49}}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -854,6 +977,16 @@ func writeFakeFFprobe(t *testing.T) string {
 	content := "#!/bin/sh\ncat <<'EOF'\n{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080},{\"codec_type\":\"audio\",\"codec_name\":\"aac\",\"channels\":2,\"tags\":{\"language\":\"eng\",\"title\":\"Stereo\"}},{\"codec_type\":\"subtitle\",\"codec_name\":\"subrip\",\"tags\":{\"language\":\"eng\",\"title\":\"English\"}}],\"format\":{\"duration\":\"7260.25\",\"bit_rate\":\"5000000\"}}\nEOF\n"
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	return path
+}
+
+func writeFakeFFmpeg(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	content := "#!/bin/sh\nout=\"\"\nfor arg in \"$@\"; do\n  out=\"$arg\"\ndone\nmkdir -p \"$(dirname \"$out\")\"\nprintf 'fake-artwork' > \"$out\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
 	}
 	return path
 }

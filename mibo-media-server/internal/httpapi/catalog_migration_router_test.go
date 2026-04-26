@@ -49,10 +49,12 @@ func testCatalogMigrationSettingsEndpoints(t *testing.T) {
 	authHeader := createAuthHeader(t, ctx, authSvc)
 	backfillAt := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
 	cleanupAt := time.Date(2026, time.April, 26, 12, 30, 0, 0, time.UTC)
+	validationAt := time.Date(2026, time.April, 26, 8, 0, 0, 0, time.UTC)
 	if _, err := settingsSvc.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{
-		CatalogBackfillCompletedAt: &backfillAt,
-		CatalogReadEnabled:         true,
-		LegacyCleanupCompletedAt:   &cleanupAt,
+		CatalogBackfillCompletedAt:   &backfillAt,
+		CatalogReadEnabled:           true,
+		CatalogValidationCompletedAt: &validationAt,
+		LegacyCleanupCompletedAt:     &cleanupAt,
 	}); err != nil {
 		t.Fatalf("seed catalog migration state: %v", err)
 	}
@@ -76,6 +78,7 @@ func testCatalogMigrationSettingsEndpoints(t *testing.T) {
 		if !response.Data.CatalogReadEnabled {
 			t.Fatal("expected catalog_read_enabled=true")
 		}
+		assertCatalogMigrationHTTPTimeEqual(t, response.Data.CatalogValidationCompletedAt, validationAt)
 		assertCatalogMigrationHTTPTimeEqual(t, response.Data.LegacyCleanupCompletedAt, cleanupAt)
 	})
 
@@ -94,7 +97,7 @@ func testCatalogMigrationSettingsEndpoints(t *testing.T) {
 		}
 
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPut, "/api/v1/settings/catalog-migration", strings.NewReader(`{"catalog_backfill_completed_at":"2026-04-27T09:00:00Z","catalog_read_enabled":false}`))
+		request := httptest.NewRequest(http.MethodPut, "/api/v1/settings/catalog-migration", strings.NewReader(`{"catalog_backfill_completed_at":"2026-04-27T09:00:00Z","catalog_validation_completed_at":"2026-04-27T10:00:00Z","catalog_read_enabled":false}`))
 		request.Header.Set("Authorization", authHeader)
 		request.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(recorder, request)
@@ -112,6 +115,7 @@ func testCatalogMigrationSettingsEndpoints(t *testing.T) {
 			t.Fatal("expected catalog_read_enabled=false after update")
 		}
 		assertCatalogMigrationHTTPTimeEqual(t, response.Data.CatalogBackfillCompletedAt, time.Date(2026, time.April, 27, 9, 0, 0, 0, time.UTC))
+		assertCatalogMigrationHTTPTimeEqual(t, response.Data.CatalogValidationCompletedAt, time.Date(2026, time.April, 27, 10, 0, 0, 0, time.UTC))
 		if response.Data.LegacyCleanupCompletedAt != nil {
 			t.Fatalf("expected omitted cleanup timestamp to clear, got %v", response.Data.LegacyCleanupCompletedAt)
 		}
@@ -128,14 +132,17 @@ func testCatalogMigrationSettingsEndpoints(t *testing.T) {
 		if err := db.WithContext(ctx).Where("category = ?", "catalog_migration").Order("key asc").Find(&catalogSettings).Error; err != nil {
 			t.Fatalf("reload catalog migration settings: %v", err)
 		}
-		if len(catalogSettings) != 2 {
-			t.Fatalf("expected only two catalog migration rows after clearing cleanup timestamp, got %#v", catalogSettings)
+		if len(catalogSettings) != 3 {
+			t.Fatalf("expected only three catalog migration rows after clearing cleanup timestamp, got %#v", catalogSettings)
 		}
 		if catalogSettings[0].Key != "catalog_backfill_completed_at" || catalogSettings[0].Value != "2026-04-27T09:00:00Z" {
 			t.Fatalf("unexpected persisted backfill setting: %#v", catalogSettings[0])
 		}
 		if catalogSettings[1].Key != "catalog_read_enabled" || catalogSettings[1].Value != "false" {
 			t.Fatalf("unexpected persisted read setting: %#v", catalogSettings[1])
+		}
+		if catalogSettings[2].Key != "catalog_validation_completed_at" || catalogSettings[2].Value != "2026-04-27T10:00:00Z" {
+			t.Fatalf("unexpected persisted validation setting: %#v", catalogSettings[2])
 		}
 	})
 }
@@ -145,8 +152,9 @@ func testCatalogMigrationSystemInfo(t *testing.T) {
 	ctx := context.Background()
 	backfillAt := time.Date(2026, time.April, 25, 10, 0, 0, 0, time.UTC)
 	if _, err := settingsSvc.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{
-		CatalogBackfillCompletedAt: &backfillAt,
-		CatalogReadEnabled:         true,
+		CatalogBackfillCompletedAt:   &backfillAt,
+		CatalogReadEnabled:           true,
+		CatalogValidationCompletedAt: &backfillAt,
 	}); err != nil {
 		t.Fatalf("seed catalog migration state: %v", err)
 	}
@@ -161,9 +169,10 @@ func testCatalogMigrationSystemInfo(t *testing.T) {
 	var response struct {
 		Data struct {
 			CatalogMigration struct {
-				CatalogBackfillCompletedAt *time.Time `json:"catalog_backfill_completed_at"`
-				CatalogReadEnabled         bool       `json:"catalog_read_enabled"`
-				LegacyCleanupCompletedAt   *time.Time `json:"legacy_cleanup_completed_at"`
+				CatalogBackfillCompletedAt   *time.Time `json:"catalog_backfill_completed_at"`
+				CatalogReadEnabled           bool       `json:"catalog_read_enabled"`
+				CatalogValidationCompletedAt *time.Time `json:"catalog_validation_completed_at"`
+				LegacyCleanupCompletedAt     *time.Time `json:"legacy_cleanup_completed_at"`
 			} `json:"catalog_migration"`
 		} `json:"data"`
 	}
@@ -174,6 +183,7 @@ func testCatalogMigrationSystemInfo(t *testing.T) {
 	if !response.Data.CatalogMigration.CatalogReadEnabled {
 		t.Fatal("expected catalog_read_enabled in system info")
 	}
+	assertCatalogMigrationHTTPTimeEqual(t, response.Data.CatalogMigration.CatalogValidationCompletedAt, backfillAt)
 	if response.Data.CatalogMigration.LegacyCleanupCompletedAt != nil {
 		t.Fatalf("expected nil cleanup timestamp in system info, got %v", response.Data.CatalogMigration.LegacyCleanupCompletedAt)
 	}

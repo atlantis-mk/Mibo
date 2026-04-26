@@ -107,7 +107,7 @@
 | 11. Event-Driven Refresh Hardening | v2 Product Discovery And Operations | 5/5 | Complete | 2026-04-24 |
 | 12. Catalog Kernel Contracts & Migration Guards | v3 Catalog Kernel Migration | 6/6 | Complete | 2026-04-25 |
 | 13. Legacy Backfill Into Catalog Kernel | v3 Catalog Kernel Migration | 5/5 | Complete    | 2026-04-25 |
-| 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 4/4 | Complete | 2026-04-25 |
+| 14. Scanner Writes Catalog Assets | v3 Catalog Kernel Migration | 4/4 | Complete    | 2026-04-25 |
 | 15. Series-Level Metadata Governance Engine | v3 Catalog Kernel Migration | 0/0 | Planned | |
 | 16. Catalog API, Search, and Progress Cutover | v3 Catalog Kernel Migration | 0/4 | Planned | |
 | 17. Playback Item-to-Asset Cutover | v3 Catalog Kernel Migration | 0/3 | Planned | |

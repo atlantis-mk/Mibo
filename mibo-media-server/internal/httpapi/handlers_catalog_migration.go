@@ -19,10 +19,18 @@ type queueCatalogLegacyBackfillInput struct {
 	LibraryID *uint `json:"library_id,omitempty"`
 }
 
+type catalogMaintenanceScopeInput struct {
+	LibraryID *uint `json:"library_id,omitempty"`
+}
+
 func (r *Router) handleQueueCatalogLegacyBackfill(w http.ResponseWriter, req *http.Request) {
-	user, err := r.requireUser(req)
+	user, err := r.requireAdminUser(req)
 	if err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		status := http.StatusUnauthorized
+		if err.Error() == "admin access required" {
+			status = http.StatusForbidden
+		}
+		writeError(req.Context(), w, status, err)
 		return
 	}
 	if r.catalog == nil {
@@ -80,8 +88,12 @@ func (r *Router) handleQueueCatalogLegacyBackfill(w http.ResponseWriter, req *ht
 }
 
 func (r *Router) handleListCatalogMigrationRuns(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
+	if _, err := r.requireAdminUser(req); err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "admin access required" {
+			status = http.StatusForbidden
+		}
+		writeError(req.Context(), w, status, err)
 		return
 	}
 	if r.catalog == nil {
@@ -98,8 +110,12 @@ func (r *Router) handleListCatalogMigrationRuns(w http.ResponseWriter, req *http
 }
 
 func (r *Router) handleGetCatalogMigrationRun(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
+	if _, err := r.requireAdminUser(req); err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "admin access required" {
+			status = http.StatusForbidden
+		}
+		writeError(req.Context(), w, status, err)
 		return
 	}
 	if r.catalog == nil {
@@ -123,6 +139,62 @@ func (r *Router) handleGetCatalogMigrationRun(w http.ResponseWriter, req *http.R
 		return
 	}
 	writeJSON(req.Context(), w, http.StatusOK, run)
+}
+
+func (r *Router) handleRebuildCatalogDerivedData(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireAdminUser(req); err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "admin access required" {
+			status = http.StatusForbidden
+		}
+		writeError(req.Context(), w, status, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	var input catalogMaintenanceScopeInput
+	if err := decodeOptionalJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := r.catalog.RebuildDerivedData(req.Context(), input.LibraryID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, result)
+}
+
+func (r *Router) handleCheckCatalogConsistency(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireAdminUser(req); err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "admin access required" {
+			status = http.StatusForbidden
+		}
+		writeError(req.Context(), w, status, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	libraryID, err := parseOptionalUintQuery(req, "library_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var scope *uint
+	if libraryID != 0 {
+		scope = &libraryID
+	}
+	report, err := r.catalog.CheckConsistency(req.Context(), scope)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, report)
 }
 
 func (r *Router) resolveLegacyBackfillScope(ctx context.Context, libraryID *uint) (catalog.LegacyBackfillScope, string, error) {

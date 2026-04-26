@@ -25,7 +25,7 @@ func (s *Service) backfillProgress(ctx context.Context, run database.CatalogMigr
 			return err
 		}
 
-		catalogItem, assetID, legacyFileID, err := s.resolveLegacyProgressTarget(ctx, legacyItem, progressRow.MediaFileID)
+		catalogItem, assetID, legacyFileID, err := s.resolveLegacyProgressTarget(ctx, run.ID, legacyItem, progressRow.MediaFileID)
 		if err != nil {
 			return err
 		}
@@ -123,12 +123,9 @@ func (s *Service) loadLegacyProgressMediaItem(ctx context.Context, mediaItemID u
 	return item, err
 }
 
-func (s *Service) resolveLegacyProgressTarget(ctx context.Context, legacyItem database.MediaItem, mediaFileID *uint) (database.CatalogItem, *uint, *uint, error) {
-	var catalogItem database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("library_id = ? AND type = ? AND path = ? AND deleted_at IS NULL", legacyItem.LibraryID, strings.TrimSpace(legacyItem.Type), strings.TrimSpace(legacyItem.SourcePath)).
-		Order("id asc").
-		First(&catalogItem).Error; err != nil {
+func (s *Service) resolveLegacyProgressTarget(ctx context.Context, runID uint, legacyItem database.MediaItem, mediaFileID *uint) (database.CatalogItem, *uint, *uint, error) {
+	catalogItem, err := s.resolveLegacyProgressCatalogItem(ctx, runID, legacyItem)
+	if err != nil {
 		return database.CatalogItem{}, nil, nil, err
 	}
 
@@ -184,6 +181,34 @@ func (s *Service) resolveLegacyProgressTarget(ctx context.Context, legacyItem da
 	}
 
 	return catalogItem, uintPtr(asset.ID), uintPtr(legacyFile.ID), nil
+}
+
+func (s *Service) resolveLegacyProgressCatalogItem(ctx context.Context, runID uint, legacyItem database.MediaItem) (database.CatalogItem, error) {
+	var catalogItem database.CatalogItem
+	err := s.db.WithContext(ctx).
+		Where("library_id = ? AND type = ? AND path = ? AND deleted_at IS NULL", legacyItem.LibraryID, strings.TrimSpace(legacyItem.Type), strings.TrimSpace(legacyItem.SourcePath)).
+		Order("id asc").
+		First(&catalogItem).Error
+	if err == nil {
+		return catalogItem, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) || strings.TrimSpace(legacyItem.Type) != ItemTypeEpisode || runID == 0 {
+		return database.CatalogItem{}, err
+	}
+
+	var entry database.CatalogMigrationEntry
+	err = s.db.WithContext(ctx).
+		Where("run_id = ? AND legacy_media_item_id = ? AND catalog_item_id IS NOT NULL", runID, legacyItem.ID).
+		Where("entry_type IN ?", []string{LegacyBackfillEntryTypeDuplicateEpisodeCandidate, LegacyBackfillEntryTypeSuccess}).
+		Order("id asc").
+		First(&entry).Error
+	if err != nil {
+		return database.CatalogItem{}, err
+	}
+	err = s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", *entry.CatalogItemID).
+		First(&catalogItem).Error
+	return catalogItem, err
 }
 
 func progressDurationSeconds(progress database.PlaybackProgress, legacyItem database.MediaItem) *int {

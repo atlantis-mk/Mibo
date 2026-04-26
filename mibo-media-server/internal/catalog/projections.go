@@ -31,18 +31,22 @@ func (s *Service) RefreshItemProjection(ctx context.Context, itemID uint) error 
 	if itemID == 0 {
 		return errors.New("item id is required")
 	}
-	return s.refreshProjection(ctx, ProjectionRefreshRequest{ItemID: itemID})
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: itemID})
+	})
 }
 
 func (s *Service) RefreshLibraryProjection(ctx context.Context, libraryID uint, rootPath string) error {
 	if libraryID == 0 {
 		return errors.New("library id is required")
 	}
-	return s.refreshProjection(ctx, ProjectionRefreshRequest{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)})
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)})
+	})
 }
 
-func (s *Service) refreshProjection(ctx context.Context, request ProjectionRefreshRequest) error {
-	items, targetItemID, targetDocIDs, targetRollupIDs, err := s.loadProjectionScope(ctx, request)
+func (s *Service) refreshProjectionWithDB(ctx context.Context, db *gorm.DB, request ProjectionRefreshRequest) error {
+	items, targetItemID, targetDocIDs, targetRollupIDs, err := s.loadProjectionScope(ctx, db, request)
 	if err != nil {
 		return err
 	}
@@ -51,44 +55,42 @@ func (s *Service) refreshProjection(ctx context.Context, request ProjectionRefre
 	}
 
 	now := time.Now().UTC()
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if len(targetRollupIDs) > 0 {
-			if err := tx.Where("item_id IN ?", targetRollupIDs).Delete(&database.ItemRollup{}).Error; err != nil {
-				return err
-			}
-		}
-		if len(targetDocIDs) > 0 {
-			if err := tx.Where("item_id IN ?", targetDocIDs).Delete(&database.CatalogSearchDocument{}).Error; err != nil {
-				return err
-			}
-		}
-
-		rollups := buildItemRollups(items, targetRollupIDs, now)
-		if len(rollups) > 0 {
-			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&rollups).Error; err != nil {
-				return err
-			}
-		}
-
-		docs, err := s.buildCatalogSearchDocuments(ctx, tx, items, targetDocIDs, now)
-		if err != nil {
+	if len(targetRollupIDs) > 0 {
+		if err := db.WithContext(ctx).Where("item_id IN ?", targetRollupIDs).Delete(&database.ItemRollup{}).Error; err != nil {
 			return err
 		}
-		if len(docs) > 0 {
-			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&docs).Error; err != nil {
-				return err
-			}
+	}
+	if len(targetDocIDs) > 0 {
+		if err := db.WithContext(ctx).Where("item_id IN ?", targetDocIDs).Delete(&database.CatalogSearchDocument{}).Error; err != nil {
+			return err
 		}
+	}
 
-		_ = targetItemID
-		return nil
-	})
+	rollups := buildItemRollups(items, targetRollupIDs, now)
+	if len(rollups) > 0 {
+		if err := db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&rollups).Error; err != nil {
+			return err
+		}
+	}
+
+	docs, err := s.buildCatalogSearchDocuments(ctx, db.WithContext(ctx), items, targetDocIDs, now)
+	if err != nil {
+		return err
+	}
+	if len(docs) > 0 {
+		if err := db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&docs).Error; err != nil {
+			return err
+		}
+	}
+
+	_ = targetItemID
+	return nil
 }
 
-func (s *Service) loadProjectionScope(ctx context.Context, request ProjectionRefreshRequest) ([]database.CatalogItem, uint, []uint, []uint, error) {
+func (s *Service) loadProjectionScope(ctx context.Context, db *gorm.DB, request ProjectionRefreshRequest) ([]database.CatalogItem, uint, []uint, []uint, error) {
 	if request.ItemID != 0 {
 		var item database.CatalogItem
-		err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", request.ItemID).First(&item).Error
+		err := db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", request.ItemID).First(&item).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, 0, nil, nil, nil
 		}
@@ -96,7 +98,7 @@ func (s *Service) loadProjectionScope(ctx context.Context, request ProjectionRef
 			return nil, 0, nil, nil, err
 		}
 
-		query := s.db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", item.LibraryID)
+		query := db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", item.LibraryID)
 		if item.RootID != nil {
 			query = query.Where("id = ? OR root_id = ?", item.ID, *item.RootID)
 		} else {
@@ -111,7 +113,7 @@ func (s *Service) loadProjectionScope(ctx context.Context, request ProjectionRef
 	}
 
 	var items []database.CatalogItem
-	if err := s.db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", request.LibraryID).Order("id asc").Find(&items).Error; err != nil {
+	if err := db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", request.LibraryID).Order("id asc").Find(&items).Error; err != nil {
 		return nil, 0, nil, nil, err
 	}
 	if len(items) == 0 {

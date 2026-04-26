@@ -73,33 +73,6 @@ func pickLogoPath(language string, logos []imageAsset) string {
 	return best.FilePath
 }
 
-func calculateConfidence(mediaType, query string, year *int, result searchResult) float64 {
-	target := normalizeString(query)
-	candidate := normalizeString(result.Title)
-	if mediaType == "tv" {
-		candidate = normalizeString(result.Name)
-	}
-	confidence := 0.4
-	if target == candidate {
-		confidence = 0.9
-	} else if strings.Contains(candidate, target) || strings.Contains(target, candidate) {
-		confidence = 0.75
-	}
-	if year != nil {
-		resultYear := parseYear(result.ReleaseDate)
-		if mediaType == "tv" {
-			resultYear = parseYear(result.FirstAirDate)
-		}
-		if resultYear != nil && *resultYear == *year {
-			confidence += 0.08
-		}
-	}
-	if confidence > 0.99 {
-		confidence = 0.99
-	}
-	return confidence
-}
-
 func extractNamedValues(values []namedValue, max int) []string {
 	limit := len(values)
 	if max > 0 && limit > max {
@@ -345,12 +318,6 @@ func trailerThumbnailURL(site, key string) string {
 	}
 }
 
-func normalizeString(input string) string {
-	lower := strings.ToLower(strings.TrimSpace(input))
-	replacer := strings.NewReplacer(".", " ", "_", " ", "-", " ")
-	return strings.Join(strings.Fields(replacer.Replace(lower)), " ")
-}
-
 func parseYear(input string) *int {
 	if len(input) < 4 {
 		return nil
@@ -382,14 +349,8 @@ func tmdbMediaType(itemType string) string {
 	return "movie"
 }
 
-func defaultQuery(item database.MediaItem, mediaType string) string {
-	if mediaType == "tv" && strings.TrimSpace(item.SeriesTitle) != "" {
-		return item.SeriesTitle
-	}
-	return item.Title
-}
-
-func searchResultToCandidate(cfg config.TMDBConfig, mediaType string, result searchResult, confidence float64) SearchCandidate {
+func searchResultToCandidate(cfg config.TMDBConfig, mediaType string, candidate scoredMatchCandidate) SearchCandidate {
+	result := candidate.result
 	title := result.Title
 	originalTitle := result.OriginalTitle
 	releaseDate := result.ReleaseDate
@@ -398,7 +359,7 @@ func searchResultToCandidate(cfg config.TMDBConfig, mediaType string, result sea
 		originalTitle = result.OriginalName
 		releaseDate = result.FirstAirDate
 	}
-	return SearchCandidate{Provider: "tmdb", MediaType: mediaType, ExternalID: mediaType + ":" + strconv.Itoa(result.ID), Title: title, OriginalTitle: originalTitle, Overview: result.Overview, PosterURL: imageURL(cfg, result.PosterPath), BackdropURL: imageURL(cfg, result.BackdropPath), ReleaseDate: releaseDate, Year: parseYear(releaseDate), Confidence: confidence}
+	return SearchCandidate{Provider: "tmdb", MediaType: mediaType, ExternalID: mediaType + ":" + strconv.Itoa(result.ID), Title: title, OriginalTitle: originalTitle, Overview: result.Overview, PosterURL: imageURL(cfg, result.PosterPath), BackdropURL: imageURL(cfg, result.BackdropPath), ReleaseDate: releaseDate, Year: parseYear(releaseDate), Confidence: candidate.confidence, MatchedQuery: candidate.matchedQuery, ReasonSummary: candidate.reasonSummary}
 }
 
 func detailToCandidate(cfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64) SearchCandidate {

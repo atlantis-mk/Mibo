@@ -76,9 +76,10 @@ type TVDBConfig struct {
 }
 
 type FFmpegConfig struct {
-	Enabled bool
-	Path    string
-	Timeout time.Duration
+	Enabled         bool
+	Path            string
+	Timeout         time.Duration
+	ArtworkRootPath string
 }
 
 type FFprobeConfig struct {
@@ -95,8 +96,8 @@ type HLSConfig struct {
 }
 
 type WorkerConfig struct {
-	Enabled            bool
-	PollInterval      time.Duration
+	Enabled              bool
+	PollInterval         time.Duration
 	RefreshIntervalHours int
 }
 
@@ -144,9 +145,10 @@ func Load() (Config, error) {
 			},
 		},
 		FFmpeg: FFmpegConfig{
-			Enabled: getBoolEnv("MIBO_FFMPEG_ENABLED", true),
-			Path:    getEnv("MIBO_FFMPEG_PATH", "ffmpeg"),
-			Timeout: getDurationEnv("MIBO_FFMPEG_TIMEOUT", 2*time.Minute),
+			Enabled:         getBoolEnv("MIBO_FFMPEG_ENABLED", true),
+			Path:            getEnv("MIBO_FFMPEG_PATH", "ffmpeg"),
+			Timeout:         getDurationEnv("MIBO_FFMPEG_TIMEOUT", 2*time.Minute),
+			ArtworkRootPath: normalizeWorkPath(getEnv("MIBO_ARTWORK_ROOT_PATH", filepath.Join("tmp", "artwork"))),
 		},
 		FFprobe: FFprobeConfig{
 			Enabled: getBoolEnv("MIBO_FFPROBE_ENABLED", true),
@@ -161,7 +163,7 @@ func Load() (Config, error) {
 		},
 		Worker: WorkerConfig{
 			Enabled:              getBoolEnv("MIBO_WORKER_ENABLED", true),
-			PollInterval:        getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
+			PollInterval:         getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
 			RefreshIntervalHours: getIntEnv("MIBO_WORKER_REFRESH_INTERVAL_HOURS", 0),
 		},
 	}

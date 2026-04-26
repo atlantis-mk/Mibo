@@ -6,4 +6,4 @@ summary: Ported the web-new authenticated route skeleton.
 
 # Quick Task 260423-4p3 Summary
 
-Completed. See `260423-4p3-SUMMARY.md` for the full task record.
+Completed.

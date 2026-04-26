@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ type Service struct {
 	db      *gorm.DB
 	storage *providers.Registry
 	cfg     config.FFprobeConfig
+	ffmpeg  config.FFmpegConfig
 }
 
 type ffprobeOutput struct {
@@ -60,8 +62,12 @@ type Track struct {
 	Channels int    `json:"channels,omitempty"`
 }
 
-func NewService(db *gorm.DB, registry *providers.Registry, cfg config.FFprobeConfig) *Service {
-	return &Service{db: db, storage: registry, cfg: cfg}
+func NewService(db *gorm.DB, registry *providers.Registry, cfg config.FFprobeConfig, args ...config.FFmpegConfig) *Service {
+	service := &Service{db: db, storage: registry, cfg: cfg}
+	if len(args) > 0 {
+		service.ffmpeg = args[0]
+	}
+	return service
 }
 
 func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
@@ -70,10 +76,6 @@ func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
 		Where("id = ? AND deleted_at IS NULL", mediaFileID).
 		First(&file).Error; err != nil {
 		return err
-	}
-
-	if !s.cfg.Enabled {
-		return s.markUnavailable(ctx, file.ID, "ffprobe disabled")
 	}
 
 	provider, err := s.providerForFile(ctx, file.LibraryID)
@@ -86,11 +88,18 @@ func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
 		return s.markProbeError(ctx, file.ID, err)
 	}
 
+	var runtimeSeconds *int
+	if !s.cfg.Enabled {
+		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
+		return s.markUnavailable(ctx, file.ID, "ffprobe disabled")
+	}
+
 	probeCtx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
 	defer cancel()
 
 	output, err := exec.CommandContext(probeCtx, s.cfg.Path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", target).Output()
 	if err != nil {
+		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
 		var execErr *exec.Error
 		if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
 			return s.markUnavailable(ctx, file.ID, "ffprobe not found")
@@ -100,11 +109,13 @@ func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
 
 	var parsed ffprobeOutput
 	if err := json.Unmarshal(output, &parsed); err != nil {
+		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
 		return s.markProbeError(ctx, file.ID, err)
 	}
 
 	updates, runtimeSeconds, err := buildProbeUpdates(parsed)
 	if err != nil {
+		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
 		return s.markProbeError(ctx, file.ID, err)
 	}
 
@@ -128,6 +139,7 @@ func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
 			return err
 		}
 	}
+	s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
 
 	return nil
 }
@@ -142,16 +154,16 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 
 	provider, err := s.providerForFile(ctx, file.LibraryID)
 	if err != nil {
-		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 
 	target, err := s.resolveProbeTarget(ctx, provider, file.StoragePath)
 	if err != nil {
-		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 
 	if !s.cfg.Enabled {
-		return s.markInventoryUnavailable(ctx, inventoryFileID, "ffprobe disabled")
+		return s.markInventoryUnavailable(ctx, file.ID, "ffprobe disabled")
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
@@ -161,132 +173,28 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 	if err != nil {
 		var execErr *exec.Error
 		if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
-			return s.markInventoryUnavailable(ctx, inventoryFileID, "ffprobe not found")
+			return s.markInventoryUnavailable(ctx, file.ID, "ffprobe not found")
 		}
-		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 
 	var parsed ffprobeOutput
 	if err := json.Unmarshal(output, &parsed); err != nil {
-		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 
 	updates, runtimeSeconds, err := buildProbeUpdates(parsed)
 	if err != nil {
-		return s.markInventoryProbeError(ctx, inventoryFileID, err)
+		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
-	if err := s.applyInventoryProbeUpdates(ctx, inventoryFileID, parsed, updates, runtimeSeconds); err != nil {
-		return s.markInventoryProbeError(ctx, inventoryFileID, err)
-	}
-
-	return nil
-}
-
-func (s *Service) resolveProbeTarget(ctx context.Context, provider storage.Provider, storagePath string) (string, error) {
-	link, err := provider.Link(ctx, storage.LinkRequest{Path: storagePath})
-	if err == nil && strings.TrimSpace(link.URL) != "" {
-		return link.URL, nil
-	}
-
-	object, getErr := provider.Get(ctx, storage.GetRequest{Path: storagePath})
-	if getErr == nil && strings.TrimSpace(object.RawURL) != "" {
-		return object.RawURL, nil
-	}
-
-	if err != nil {
-		return "", err
-	}
-	return "", fmt.Errorf("no probe target available for %s", storagePath)
-}
-
-func (s *Service) providerForFile(ctx context.Context, libraryID uint) (storage.Provider, error) {
-	var libraryRecord database.Library
-	if err := s.db.WithContext(ctx).First(&libraryRecord, libraryID).Error; err != nil {
-		return nil, err
-	}
-	var source database.MediaSource
-	if err := s.db.WithContext(ctx).First(&source, libraryRecord.MediaSourceID).Error; err != nil {
-		return nil, err
-	}
-	return s.storage.BuildForSource(source)
-}
-
-func buildProbeUpdates(parsed ffprobeOutput) (map[string]any, *int, error) {
-	audioTracks := make([]Track, 0)
-	subtitleTracks := make([]Track, 0)
-	var videoCodec string
-	var width *int
-	var height *int
-
-	for _, stream := range parsed.Streams {
-		switch stream.CodecType {
-		case "video":
-			if videoCodec == "" {
-				videoCodec = stream.CodecName
-				if stream.Width > 0 {
-					width = &stream.Width
-				}
-				if stream.Height > 0 {
-					height = &stream.Height
-				}
-			}
-		case "audio":
-			audioTracks = append(audioTracks, Track{Codec: stream.CodecName, Language: stream.Tags.Language, Title: stream.Tags.Title, Channels: stream.Channels})
-		case "subtitle":
-			subtitleTracks = append(subtitleTracks, Track{Codec: stream.CodecName, Language: stream.Tags.Language, Title: stream.Tags.Title})
-		}
-	}
-
-	audioJSON, err := json.Marshal(audioTracks)
-	if err != nil {
-		return nil, nil, err
-	}
-	subtitleJSON, err := json.Marshal(subtitleTracks)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var durationSeconds *float64
-	var runtimeSeconds *int
-	if strings.TrimSpace(parsed.Format.Duration) != "" {
-		value, err := strconv.ParseFloat(parsed.Format.Duration, 64)
-		if err == nil && value > 0 {
-			durationSeconds = &value
-			runtime := int(value + 0.5)
-			runtimeSeconds = &runtime
-		}
-	}
-
-	var bitrate *int64
-	if strings.TrimSpace(parsed.Format.BitRate) != "" {
-		value, err := strconv.ParseInt(parsed.Format.BitRate, 10, 64)
-		if err == nil && value > 0 {
-			bitrate = &value
-		}
-	}
-
-	return map[string]any{
-		"probe_status":         StatusReady,
-		"probe_error":          "",
-		"duration_seconds":     durationSeconds,
-		"bit_rate":             bitrate,
-		"width":                width,
-		"height":               height,
-		"video_codec":          videoCodec,
-		"audio_tracks_json":    string(audioJSON),
-		"subtitle_tracks_json": string(subtitleJSON),
-	}, runtimeSeconds, nil
-}
-
-func (s *Service) applyInventoryProbeUpdates(ctx context.Context, inventoryFileID uint, parsed ffprobeOutput, updates map[string]any, runtimeSeconds *int) error {
-	streams := buildInventoryMediaStreams(inventoryFileID, parsed, updates)
+	streams := buildInventoryMediaStreams(file.ID, parsed, updates)
 	technicalSummaryJSON, err := buildTechnicalSummaryJSON(parsed, updates)
 	if err != nil {
-		return err
+		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("file_id = ?", inventoryFileID).Delete(&database.MediaStream{}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("file_id = ?", file.ID).Delete(&database.MediaStream{}).Error; err != nil {
 			return err
 		}
 		if len(streams) > 0 {
@@ -295,7 +203,7 @@ func (s *Service) applyInventoryProbeUpdates(ctx context.Context, inventoryFileI
 			}
 		}
 
-		assetIDs, err := assetIDsForInventoryFile(tx, inventoryFileID)
+		assetIDs, err := assetIDsForInventoryFile(tx, file.ID)
 		if err != nil {
 			return err
 		}
@@ -313,22 +221,32 @@ func (s *Service) applyInventoryProbeUpdates(ctx context.Context, inventoryFileI
 		}
 
 		if runtimeSeconds != nil {
-			if err := updateCatalogRuntimeForInventoryFile(tx, inventoryFileID, *runtimeSeconds); err != nil {
+			if err := updateCatalogRuntimeForInventoryFile(tx, file.ID, *runtimeSeconds); err != nil {
 				return err
 			}
 		}
 
 		return nil
-	})
+	}); err != nil {
+		return s.markInventoryProbeError(ctx, file.ID, err)
+	}
+
+	return nil
 }
 
-func buildInventoryMediaStreams(inventoryFileID uint, parsed ffprobeOutput, updates map[string]any) []database.MediaStream {
+func (s *Service) tryGenerateFallbackArtwork(ctx context.Context, file database.MediaFile, target string, runtimeSeconds *int) {
+	if err := s.generateFallbackArtwork(ctx, file, target, runtimeSeconds); err != nil {
+		log.Printf("probe: fallback artwork generation failed for media_file=%d: %v", file.ID, err)
+	}
+}
+
+func buildInventoryMediaStreams(fileID uint, parsed ffprobeOutput, updates map[string]any) []database.MediaStream {
 	streams := make([]database.MediaStream, 0, len(parsed.Streams))
 	durationSeconds, _ := updates["duration_seconds"].(*float64)
 	bitRate, _ := updates["bit_rate"].(*int64)
 	for index, stream := range parsed.Streams {
 		row := database.MediaStream{
-			FileID:          inventoryFileID,
+			FileID:          fileID,
 			StreamIndex:     index,
 			StreamType:      strings.TrimSpace(stream.CodecType),
 			Codec:           strings.TrimSpace(stream.CodecName),
@@ -433,21 +351,123 @@ func (s *Service) markInventoryUnavailable(ctx context.Context, inventoryFileID 
 }
 
 func (s *Service) markInventoryProbeError(ctx context.Context, inventoryFileID uint, err error) error {
+	message := "probe failed"
+	if err != nil {
+		message = err.Error()
+	}
 	assetIDs, queryErr := assetIDsForInventoryFile(s.db.WithContext(ctx), inventoryFileID)
 	if queryErr != nil {
 		return queryErr
 	}
-	if len(assetIDs) > 0 {
-		if updateErr := s.db.WithContext(ctx).
-			Model(&database.MediaAsset{}).
-			Where("id IN ?", assetIDs).
-			Updates(map[string]any{
-				"probe_status": StatusError,
-			}).Error; updateErr != nil {
-			return updateErr
-		}
+	if len(assetIDs) == 0 {
+		return err
+	}
+	if updateErr := s.db.WithContext(ctx).
+		Model(&database.MediaAsset{}).
+		Where("id IN ?", assetIDs).
+		Updates(map[string]any{
+			"probe_status":           StatusError,
+			"technical_summary_json": message,
+		}).Error; updateErr != nil {
+		return updateErr
 	}
 	return err
+}
+
+func (s *Service) resolveProbeTarget(ctx context.Context, provider storage.Provider, storagePath string) (string, error) {
+	link, err := provider.Link(ctx, storage.LinkRequest{Path: storagePath})
+	if err == nil && strings.TrimSpace(link.URL) != "" {
+		return link.URL, nil
+	}
+
+	object, getErr := provider.Get(ctx, storage.GetRequest{Path: storagePath})
+	if getErr == nil && strings.TrimSpace(object.RawURL) != "" {
+		return object.RawURL, nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("no probe target available for %s", storagePath)
+}
+
+func (s *Service) providerForFile(ctx context.Context, libraryID uint) (storage.Provider, error) {
+	var libraryRecord database.Library
+	if err := s.db.WithContext(ctx).First(&libraryRecord, libraryID).Error; err != nil {
+		return nil, err
+	}
+	var source database.MediaSource
+	if err := s.db.WithContext(ctx).First(&source, libraryRecord.MediaSourceID).Error; err != nil {
+		return nil, err
+	}
+	return s.storage.BuildForSource(source)
+}
+
+func buildProbeUpdates(parsed ffprobeOutput) (map[string]any, *int, error) {
+	audioTracks := make([]Track, 0)
+	subtitleTracks := make([]Track, 0)
+	var videoCodec string
+	var width *int
+	var height *int
+
+	for _, stream := range parsed.Streams {
+		switch stream.CodecType {
+		case "video":
+			if videoCodec == "" {
+				videoCodec = stream.CodecName
+				if stream.Width > 0 {
+					width = &stream.Width
+				}
+				if stream.Height > 0 {
+					height = &stream.Height
+				}
+			}
+		case "audio":
+			audioTracks = append(audioTracks, Track{Codec: stream.CodecName, Language: stream.Tags.Language, Title: stream.Tags.Title, Channels: stream.Channels})
+		case "subtitle":
+			subtitleTracks = append(subtitleTracks, Track{Codec: stream.CodecName, Language: stream.Tags.Language, Title: stream.Tags.Title})
+		}
+	}
+
+	audioJSON, err := json.Marshal(audioTracks)
+	if err != nil {
+		return nil, nil, err
+	}
+	subtitleJSON, err := json.Marshal(subtitleTracks)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var durationSeconds *float64
+	var runtimeSeconds *int
+	if strings.TrimSpace(parsed.Format.Duration) != "" {
+		value, err := strconv.ParseFloat(parsed.Format.Duration, 64)
+		if err == nil && value > 0 {
+			durationSeconds = &value
+			runtime := int(value + 0.5)
+			runtimeSeconds = &runtime
+		}
+	}
+
+	var bitrate *int64
+	if strings.TrimSpace(parsed.Format.BitRate) != "" {
+		value, err := strconv.ParseInt(parsed.Format.BitRate, 10, 64)
+		if err == nil && value > 0 {
+			bitrate = &value
+		}
+	}
+
+	return map[string]any{
+		"probe_status":         StatusReady,
+		"probe_error":          "",
+		"duration_seconds":     durationSeconds,
+		"bit_rate":             bitrate,
+		"width":                width,
+		"height":               height,
+		"video_codec":          videoCodec,
+		"audio_tracks_json":    string(audioJSON),
+		"subtitle_tracks_json": string(subtitleJSON),
+	}, runtimeSeconds, nil
 }
 
 func (s *Service) markUnavailable(ctx context.Context, mediaFileID uint, message string) error {

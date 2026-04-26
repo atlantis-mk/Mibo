@@ -10,6 +10,10 @@ import {
   DiscoveryControls,
   createDefaultDiscoveryFilters,
 } from '#/features/discovery/controls'
+import {
+  formatMediaCardTitle,
+  getMediaCardType,
+} from '#/lib/media-presentation'
 import { createAuthedMiboApi } from '#/lib/mibo-query'
 import { useAuthStore } from '#/stores/auth-store'
 
@@ -44,7 +48,10 @@ export default function SearchPage({
         }),
         api.listSearchHistory(),
       ])
-      return { items: results.items, history }
+      return {
+        items: results.items,
+        history,
+      }
     },
   })
 
@@ -137,12 +144,19 @@ export default function SearchPage({
               const item = 'item' in result ? result.item : result
               const watchedState =
                 'watched_state' in result ? result.watched_state : ''
-              const highlight = 'highlight' in result ? result.highlight : ''
+              const highlight =
+                'highlight' in result && typeof result.highlight === 'string'
+                  ? result.highlight
+                  : ''
               return (
                 <Link
                   key={item.id}
                   to="/media/$id"
                   params={{ id: String(item.id) }}
+                  search={{
+                    view:
+                      getMediaCardType(item) === 'show' ? 'series' : undefined,
+                  }}
                   className="rounded-[1.5rem] border border-border/40 bg-card/70 p-4 backdrop-blur-sm"
                 >
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -150,13 +164,13 @@ export default function SearchPage({
                       variant="outline"
                       className="border-border/50 bg-background/80"
                     >
-                      {item.type === 'movie' ? '电影' : '剧集'}
+                      {getMediaCardType(item) === 'movie' ? '电影' : '剧集'}
                     </Badge>
                     <span>{item.year ?? '未知年份'}</span>
                     <span>{formatWatchedState(watchedState)}</span>
                   </div>
                   <div className="mt-3 text-xl font-semibold tracking-tight">
-                    {item.series_title || item.title}
+                    {formatMediaCardTitle(item)}
                   </div>
                   {highlight ? (
                     <p className="mt-2 text-sm text-muted-foreground">

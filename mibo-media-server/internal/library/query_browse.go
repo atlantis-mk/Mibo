@@ -182,11 +182,7 @@ func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]database.
 	if limit <= 0 || limit > 20 {
 		limit = 5
 	}
-	var items []database.MediaItem
-	if err := s.db.WithContext(ctx).Where("deleted_at IS NULL").Order("created_at desc, id desc").Limit(limit).Find(&items).Error; err != nil {
-		return nil, err
-	}
-	return items, nil
+	return s.BrowseMediaItems(ctx, BrowseMediaItemsInput{Scope: BrowseScopeAll, TypeFilter: BrowseTypeFilterAll, Sort: BrowseSortRecent, Limit: limit})
 }
 
 func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]LatestByLibrarySection, error) {
@@ -208,15 +204,19 @@ func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]LatestB
 	return sections, nil
 }
 
-func (s *Service) ListAllLatestMediaByLibrary(ctx context.Context) ([]LatestByLibrarySection, error) {
+func (s *Service) ListAllLatestMediaByLibrary(ctx context.Context, limit int) ([]LatestByLibrarySection, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 12
+	}
+
 	libraries, err := s.ListLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}
 	sections := make([]LatestByLibrarySection, 0, len(libraries))
 	for _, libraryRecord := range libraries {
-		var items []database.MediaItem
-		if err := s.db.WithContext(ctx).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Order("created_at desc, id desc").Find(&items).Error; err != nil {
+		items, err := s.BrowseMediaItems(ctx, BrowseMediaItemsInput{LibraryID: libraryRecord.ID, Scope: BrowseScopeLibrary, TypeFilter: BrowseTypeFilterAll, Sort: BrowseSortRecent, Limit: limit})
+		if err != nil {
 			return nil, err
 		}
 		sections = append(sections, LatestByLibrarySection{LibraryID: libraryRecord.ID, LibraryName: libraryRecord.Name, Items: items})

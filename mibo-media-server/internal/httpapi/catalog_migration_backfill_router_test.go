@@ -62,7 +62,7 @@ func TestQueueCatalogLegacyBackfill(t *testing.T) {
 
 	ctx := context.Background()
 	router, db, authSvc, jobsSvc, catalogSvc, libraryID := newCatalogMigrationBackfillTestRouter(t)
-	authHeader, user := createBackfillAuthHeader(t, ctx, authSvc)
+	authHeader, user := createBackfillAuthHeader(t, ctx, db, authSvc)
 
 	queueAll := func() catalog.LegacyBackfillRun {
 		return queueCatalogLegacyBackfillRequest(t, router, authHeader, `{}`)
@@ -109,7 +109,7 @@ func TestCatalogMigrationBackfillRunReads(t *testing.T) {
 
 	ctx := context.Background()
 	router, db, authSvc, _, catalogSvc, libraryID := newCatalogMigrationBackfillTestRouter(t)
-	authHeader, user := createBackfillAuthHeader(t, ctx, authSvc)
+	authHeader, user := createBackfillAuthHeader(t, ctx, db, authSvc)
 
 	olderRun, err := catalogSvc.CreateLegacyBackfillRun(ctx, catalog.CreateLegacyBackfillRunInput{
 		Scope:             catalog.LegacyBackfillScope{Kind: catalog.LegacyBackfillScopeLibrary, LibraryID: &libraryID},
@@ -215,6 +215,110 @@ func TestCatalogMigrationBackfillRunReads(t *testing.T) {
 	}
 }
 
+func TestCatalogMigrationBackfillRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	router, db, authSvc, _, catalogSvc, libraryID := newCatalogMigrationBackfillTestRouter(t)
+	adminHeader, admin := createBackfillAuthHeader(t, ctx, db, authSvc)
+	userHeader, _ := createBackfillUserAuthHeader(t, ctx, authSvc)
+
+	run, err := catalogSvc.CreateLegacyBackfillRun(ctx, catalog.CreateLegacyBackfillRunInput{
+		Scope:             catalog.LegacyBackfillScope{Kind: catalog.LegacyBackfillScopeLibrary, LibraryID: &libraryID},
+		TriggeredByUserID: admin.ID,
+	})
+	if err != nil {
+		t.Fatalf("create admin run: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		method     string
+		url        string
+		body       string
+		authHeader string
+		want       int
+	}{
+		{name: "queue forbidden for regular user", method: http.MethodPost, url: "/api/v1/catalog-migration/backfill", body: `{}`, authHeader: userHeader, want: http.StatusForbidden},
+		{name: "list forbidden for regular user", method: http.MethodGet, url: "/api/v1/catalog-migration/runs", authHeader: userHeader, want: http.StatusForbidden},
+		{name: "detail forbidden for regular user", method: http.MethodGet, url: fmt.Sprintf("/api/v1/catalog-migration/runs/%d", run.ID), authHeader: userHeader, want: http.StatusForbidden},
+		{name: "queue allowed for admin", method: http.MethodPost, url: "/api/v1/catalog-migration/backfill", body: `{}`, authHeader: adminHeader, want: http.StatusAccepted},
+		{name: "list allowed for admin", method: http.MethodGet, url: "/api/v1/catalog-migration/runs", authHeader: adminHeader, want: http.StatusOK},
+		{name: "detail allowed for admin", method: http.MethodGet, url: fmt.Sprintf("/api/v1/catalog-migration/runs/%d", run.ID), authHeader: adminHeader, want: http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tc.method, tc.url, strings.NewReader(tc.body))
+			request.Header.Set("Authorization", tc.authHeader)
+			if tc.body != "" {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != tc.want {
+				t.Fatalf("expected %d, got %d body=%s", tc.want, recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestCatalogMigrationBackfillJobsEndpointsStayAdminOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	router, db, authSvc, jobsSvc, catalogSvc, libraryID := newCatalogMigrationBackfillTestRouter(t)
+	adminHeader, admin := createBackfillAuthHeader(t, ctx, db, authSvc)
+	userHeader, _ := createBackfillUserAuthHeader(t, ctx, authSvc)
+
+	run, err := catalogSvc.CreateLegacyBackfillRun(ctx, catalog.CreateLegacyBackfillRunInput{
+		Scope:             catalog.LegacyBackfillScope{Kind: catalog.LegacyBackfillScopeLibrary, LibraryID: &libraryID},
+		TriggeredByUserID: admin.ID,
+	})
+	if err != nil {
+		t.Fatalf("create backfill run: %v", err)
+	}
+	job, err := jobsSvc.EnqueueUnique(ctx, catalog.JobKindLegacyBackfill, fmt.Sprintf("catalog-backfill-legacy:library:%d", libraryID), catalog.LegacyBackfillPayload{RunID: run.ID, LibraryID: &libraryID})
+	if err != nil {
+		t.Fatalf("enqueue backfill job: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.Job{}).Where("id = ?", job.ID).Updates(map[string]any{"status": jobs.StatusFailed, "error_message": "boom", "finished_at": time.Now().UTC()}).Error; err != nil {
+		t.Fatalf("mark backfill job failed: %v", err)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/jobs?kind="+catalog.JobKindLegacyBackfill, nil)
+	listRequest.Header.Set("Authorization", userHeader)
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusForbidden {
+		t.Fatalf("expected regular user jobs list forbidden, got %d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+
+	retryRecorder := httptest.NewRecorder()
+	retryRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/jobs/%d/retry", job.ID), nil)
+	retryRequest.Header.Set("Authorization", userHeader)
+	router.ServeHTTP(retryRecorder, retryRequest)
+	if retryRecorder.Code != http.StatusForbidden {
+		t.Fatalf("expected regular user retry forbidden, got %d body=%s", retryRecorder.Code, retryRecorder.Body.String())
+	}
+
+	adminListRecorder := httptest.NewRecorder()
+	adminListRequest := httptest.NewRequest(http.MethodGet, "/api/v1/jobs?kind="+catalog.JobKindLegacyBackfill, nil)
+	adminListRequest.Header.Set("Authorization", adminHeader)
+	router.ServeHTTP(adminListRecorder, adminListRequest)
+	if adminListRecorder.Code != http.StatusOK {
+		t.Fatalf("expected admin jobs list ok, got %d body=%s", adminListRecorder.Code, adminListRecorder.Body.String())
+	}
+
+	adminRetryRecorder := httptest.NewRecorder()
+	adminRetryRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/jobs/%d/retry", job.ID), nil)
+	adminRetryRequest.Header.Set("Authorization", adminHeader)
+	router.ServeHTTP(adminRetryRecorder, adminRetryRequest)
+	if adminRetryRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected admin legacy retry rejected, got %d body=%s", adminRetryRecorder.Code, adminRetryRecorder.Body.String())
+	}
+}
+
 func newCatalogMigrationBackfillTestRouter(t *testing.T) (http.Handler, *gorm.DB, *auth.Service, *jobs.Service, *catalog.Service, uint) {
 	t.Helper()
 
@@ -259,14 +363,35 @@ func newCatalogMigrationBackfillTestRouter(t *testing.T) (http.Handler, *gorm.DB
 	return router, db, authSvc, jobsSvc, catalogSvc, record.ID
 }
 
-func createBackfillAuthHeader(t *testing.T, ctx context.Context, authSvc *auth.Service) (string, database.User) {
+func createBackfillAuthHeader(t *testing.T, ctx context.Context, db *gorm.DB, authSvc *auth.Service) (string, database.User) {
 	t.Helper()
+	return createBackfillAuthHeaderForRole(t, ctx, db, authSvc, "admin")
+}
 
+func createBackfillUserAuthHeader(t *testing.T, ctx context.Context, authSvc *auth.Service) (string, database.User) {
+	t.Helper()
+	user, err := authSvc.Register(ctx, fmt.Sprintf("backfill-user-%d", time.Now().UnixNano()), "password123")
+	if err != nil {
+		t.Fatalf("register auth user: %v", err)
+	}
+	loginResult, err := authSvc.Login(ctx, user.Username, "password123")
+	if err != nil {
+		t.Fatalf("login auth user: %v", err)
+	}
+	return fmt.Sprintf("Bearer %s", loginResult.Token), user
+}
+
+func createBackfillAuthHeaderForRole(t *testing.T, ctx context.Context, db *gorm.DB, authSvc *auth.Service, role string) (string, database.User) {
+	t.Helper()
 	username := fmt.Sprintf("backfill-user-%d", time.Now().UnixNano())
 	user, err := authSvc.Register(ctx, username, "password123")
 	if err != nil {
 		t.Fatalf("register auth user: %v", err)
 	}
+	if err := db.WithContext(ctx).Model(&database.User{}).Where("id = ?", user.ID).Update("role", role).Error; err != nil {
+		t.Fatalf("update auth user role: %v", err)
+	}
+	user.Role = role
 	loginResult, err := authSvc.Login(ctx, username, "password123")
 	if err != nil {
 		t.Fatalf("login auth user: %v", err)

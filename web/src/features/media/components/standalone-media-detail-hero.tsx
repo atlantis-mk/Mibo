@@ -4,7 +4,9 @@ import {
   Ellipsis,
   Heart,
   Image as ImageIcon,
+  LoaderCircle,
   Play,
+  RefreshCw,
   Sparkles,
   Star,
   Trash2,
@@ -23,17 +25,20 @@ import {
 } from '#/components/ui/alert-dialog'
 import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Button } from '#/components/ui/button'
-import type { MediaItemDetail, ProgressState } from '#/lib/mibo-api'
+import type { CatalogAssetDetail, ProgressState } from '#/lib/mibo-api'
+import type { CatalogDetailPresentation } from '#/lib/media-presentation'
 import { cn } from '#/lib/utils'
 
 import {
   describeMatchStatus,
-  formatAudioTrackLabel,
+  formatAssetLabel,
   formatDateTime,
   formatMediaType,
   formatRuntime,
   formatSeconds,
-  formatVideoTrackLabel,
+  getDisplayDatabaseLinks,
+  getDisplayMatchStatus,
+  getPrimaryCatalogAsset,
 } from './standalone-media-detail-utils'
 
 export function DetailHeroSection({
@@ -43,28 +48,29 @@ export function DetailHeroSection({
   overviewExpanded,
   onOverviewExpandedChange,
   onOpenPlaybackEntry,
+  onOpenAssetPlaybackEntry,
+  assetChoices = [],
   onManageMetadata,
   onRematchItem,
+  onReprobePrimaryFile,
+  isReprobePending,
   onMarkWatched,
 }: {
-  item: MediaItemDetail
+  item: CatalogDetailPresentation
   progress: ProgressState | null
   itemProgressPercent: number
   overviewExpanded: boolean
   onOverviewExpandedChange: (value: boolean) => void
   onOpenPlaybackEntry: (options?: { fromStart?: boolean }) => void
+  onOpenAssetPlaybackEntry?: (assetId: number) => void
+  assetChoices?: CatalogAssetDetail[]
   onManageMetadata: () => void
   onRematchItem: () => void
+  onReprobePrimaryFile?: () => void
+  isReprobePending: boolean
   onMarkWatched: () => void
 }) {
-  const primaryFile = item.files[0]
-  const audioTracks = Array.isArray(primaryFile?.audio_tracks)
-    ? primaryFile.audio_tracks
-    : []
-  const subtitleTracks = Array.isArray(primaryFile?.subtitle_tracks)
-    ? primaryFile.subtitle_tracks
-    : []
-  const primaryAudioTrack = audioTracks[0]
+  const primaryAsset = getPrimaryCatalogAsset(item)
   const hasResumableProgress = Boolean(
     progress && !progress.watched && progress.position_seconds > 0,
   )
@@ -76,14 +82,9 @@ export function DetailHeroSection({
   const yearLabel =
     item.year ?? (item.release_date ? item.release_date.slice(0, 4) : null)
   const titleLine = item.original_title || item.title
-  const audioSummary = formatAudioTrackLabel(primaryAudioTrack)
-  const videoSummary = formatVideoTrackLabel(primaryFile)
-  const databaseLinks = [
-    item.metadata_provider?.toUpperCase() || null,
-    item.external_id || null,
-  ]
-    .filter(Boolean)
-    .join('，')
+  const assetSummary = formatAssetLabel(primaryAsset)
+  const databaseLinks = getDisplayDatabaseLinks(item)
+  const matchStatus = getDisplayMatchStatus(item)
 
   return (
     <div className="min-w-0 max-w-[980px] pt-1">
@@ -123,10 +124,12 @@ export function DetailHeroSection({
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[15px] text-muted-foreground lg:text-base">
-            <span>视频 {videoSummary}</span>
-            <span>音频 {audioSummary}</span>
-            {subtitleTracks.length > 0 ? (
-              <span>字幕 {subtitleTracks.length} 轨</span>
+            <span>资源 {assetSummary}</span>
+            {primaryAsset ? (
+              <span>文件 {primaryAsset.file_ids.length} 个</span>
+            ) : null}
+            {primaryAsset?.probe_status ? (
+              <span>探测 {primaryAsset.probe_status}</span>
             ) : null}
           </div>
         </div>
@@ -185,14 +188,38 @@ export function DetailHeroSection({
             label="重新匹配"
             onClick={onRematchItem}
           />
+          <PillButton
+            icon={
+              isReprobePending ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )
+            }
+            label={isReprobePending ? '探测排队中' : '重新探测'}
+            onClick={isReprobePending ? undefined : onReprobePrimaryFile}
+          />
         </div>
 
-        {describeMatchStatus(item.match_status) &&
-        item.match_status !== 'matched' ? (
+        {assetChoices.length > 1 && onOpenAssetPlaybackEntry ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-muted-foreground">播放版本</span>
+            {assetChoices.map((asset) => (
+              <PillButton
+                key={asset.id}
+                icon={<Play className="size-4" />}
+                label={describeAssetChoice(asset)}
+                onClick={() => onOpenAssetPlaybackEntry(asset.id)}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        {describeMatchStatus(matchStatus) && matchStatus !== 'matched' ? (
           <Alert className="border-border/40 bg-card/75 text-foreground backdrop-blur-sm">
             <AlertTitle>元数据状态</AlertTitle>
             <AlertDescription className="text-muted-foreground">
-              {describeMatchStatus(item.match_status)}
+              {describeMatchStatus(matchStatus)}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -282,5 +309,13 @@ function PillIconButton({ icon }: { icon: ReactNode }) {
     >
       {icon}
     </Button>
+  )
+}
+
+function describeAssetChoice(asset: CatalogAssetDetail) {
+  return (
+    [asset.display_name, asset.edition, asset.quality_label]
+      .filter(Boolean)
+      .join(' · ') || `版本 ${asset.id}`
   )
 }

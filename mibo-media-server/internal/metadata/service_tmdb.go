@@ -8,16 +8,15 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 )
 
-func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, mediaType, query string, year *int) (*searchResult, float64, error) {
+func (s *Service) searchTMDB(ctx context.Context, cfg config.TMDBConfig, mediaType, query string, year *int) (searchResponse, error) {
 	if strings.TrimSpace(query) == "" {
-		return nil, 0, nil
+		return searchResponse{}, nil
 	}
 	params := url.Values{}
 	params.Set("query", query)
@@ -31,68 +30,27 @@ func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, me
 	}
 	var response searchResponse
 	if err := s.request(ctx, cfg, path.Join("search", mediaType), params, &response); err != nil {
-		return nil, 0, err
+		return searchResponse{}, err
 	}
-	var best *searchResult
-	bestConfidence := 0.0
-	for i := range response.Results {
-		candidate := &response.Results[i]
-		confidence := calculateConfidence(mediaType, query, year, *candidate)
-		if confidence > bestConfidence {
-			best = candidate
-			bestConfidence = confidence
-		}
-	}
-	return best, bestConfidence, nil
+	return response, nil
 }
 
-func (s *Service) searchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType, query string, year *int) ([]SearchCandidate, error) {
-	if strings.TrimSpace(query) == "" {
+func (s *Service) findByExternalID(ctx context.Context, cfg config.TMDBConfig, mediaType, externalSource, externalID string) ([]searchResult, error) {
+	trimmedID := strings.TrimSpace(externalID)
+	if trimmedID == "" {
 		return nil, nil
 	}
 	params := url.Values{}
-	params.Set("query", query)
+	params.Set("external_source", strings.TrimSpace(externalSource))
 	params.Set("language", cfg.Language)
-	if year != nil {
-		if mediaType == "movie" {
-			params.Set("year", strconv.Itoa(*year))
-		} else {
-			params.Set("first_air_date_year", strconv.Itoa(*year))
-		}
-	}
-	var response searchResponse
-	if err := s.request(ctx, cfg, path.Join("search", mediaType), params, &response); err != nil {
+	var response findResponse
+	if err := s.request(ctx, cfg, path.Join("find", trimmedID), params, &response); err != nil {
 		return nil, err
 	}
-	type scoredCandidate struct {
-		result     searchResult
-		confidence float64
+	if mediaType == "tv" {
+		return response.TVResults, nil
 	}
-	scored := make([]scoredCandidate, 0, len(response.Results))
-	for _, candidate := range response.Results {
-		title := strings.TrimSpace(candidate.Title)
-		if mediaType == "tv" {
-			title = strings.TrimSpace(candidate.Name)
-		}
-		if title == "" {
-			continue
-		}
-		scored = append(scored, scoredCandidate{result: candidate, confidence: calculateConfidence(mediaType, query, year, candidate)})
-	}
-	sort.Slice(scored, func(i, j int) bool {
-		if scored[i].confidence == scored[j].confidence {
-			return scored[i].result.ID < scored[j].result.ID
-		}
-		return scored[i].confidence > scored[j].confidence
-	})
-	if len(scored) > 8 {
-		scored = scored[:8]
-	}
-	results := make([]SearchCandidate, 0, len(scored))
-	for _, candidate := range scored {
-		results = append(results, searchResultToCandidate(cfg, mediaType, candidate.result, candidate.confidence))
-	}
-	return results, nil
+	return response.MovieResults, nil
 }
 
 func (s *Service) fetchDetail(ctx context.Context, cfg config.TMDBConfig, mediaType string, id int) (detailResponse, error) {
@@ -162,21 +120,21 @@ func tmdbRequestError(statusCode int, body []byte) error {
 		if message == "" {
 			message = "API Key 无效或已失效"
 		}
-		return fmt.Errorf("TMDB 认证失败，请检查 API Key: %s", message)
+		return tmdbRequestFailure{statusCode: statusCode, message: fmt.Sprintf("TMDB 认证失败，请检查 API Key: %s", message)}
 	case http.StatusForbidden:
 		if message == "" {
 			message = "请求被 TMDB 拒绝"
 		}
-		return fmt.Errorf("TMDB 请求被拒绝: %s", message)
+		return tmdbRequestFailure{statusCode: statusCode, message: fmt.Sprintf("TMDB 请求被拒绝: %s", message)}
 	case http.StatusTooManyRequests:
 		if message == "" {
 			message = "请求过于频繁"
 		}
-		return fmt.Errorf("TMDB 触发限流: %s", message)
+		return tmdbRequestFailure{statusCode: statusCode, message: fmt.Sprintf("TMDB 触发限流: %s", message)}
 	default:
 		if message != "" {
-			return fmt.Errorf("TMDB 请求失败(%d): %s", statusCode, message)
+			return tmdbRequestFailure{statusCode: statusCode, message: fmt.Sprintf("TMDB 请求失败(%d): %s", statusCode, message)}
 		}
-		return fmt.Errorf("TMDB 请求失败(%d)", statusCode)
+		return tmdbRequestFailure{statusCode: statusCode, message: fmt.Sprintf("TMDB 请求失败(%d)", statusCode)}
 	}
 }

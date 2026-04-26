@@ -17,15 +17,16 @@ import (
 )
 
 type legacySeriesGroup struct {
-	key           string
-	fallbackKey   string
-	libraryID     uint
-	seriesTitle   string
-	year          *int
-	provider      string
-	externalID    string
-	representative database.MediaItem
-	items         []legacySeriesGroupItem
+	key              string
+	fallbackKey      string
+	libraryID        uint
+	seriesTitle      string
+	year             *int
+	provider         string
+	externalID       string
+	providerEvidence database.MediaItem
+	representative   database.MediaItem
+	items            []legacySeriesGroupItem
 }
 
 type legacySeriesGroupItem struct {
@@ -106,6 +107,9 @@ func (s *Service) backfillSeries(ctx context.Context, run database.CatalogMigrat
 					if betterLegacySeriesRepresentative(fallbackGroup.representative, existingGroup.representative) {
 						existingGroup.representative = fallbackGroup.representative
 					}
+					if existingGroup.providerEvidence.ID == 0 && fallbackGroup.providerEvidence.ID != 0 {
+						existingGroup.providerEvidence = fallbackGroup.providerEvidence
+					}
 					if existingGroup.seriesTitle == "" {
 						existingGroup.seriesTitle = fallbackGroup.seriesTitle
 					}
@@ -119,7 +123,33 @@ func (s *Service) backfillSeries(ctx context.Context, run database.CatalogMigrat
 				fallbackAliases[identity.fallbackKey] = groupKey
 			}
 			if alias := fallbackAliases[identity.fallbackKey]; alias != "" {
-				groupKey = alias
+				if alias != groupKey {
+					details, err := json.Marshal(map[string]any{
+						"reason":               "provider_series_title_collision",
+						"existing_group_key":   alias,
+						"incoming_provider":    strings.TrimSpace(legacyItem.MetadataProvider),
+						"incoming_external_id": strings.TrimSpace(legacyItem.ExternalID),
+						"series_title":         strings.TrimSpace(legacyItem.SeriesTitle),
+						"season_number":        *legacyItem.SeasonNumber,
+						"episode_number":       *legacyItem.EpisodeNumber,
+					})
+					if err != nil {
+						return err
+					}
+					if _, err := s.recordLegacyBackfillEntry(ctx, run.ID, LegacyBackfillEntry{
+						EntryType:         LegacyBackfillEntryTypeConflict,
+						LibraryID:         uintPtr(legacyItem.LibraryID),
+						LegacyMediaItemID: uintPtr(legacyItem.ID),
+						StoragePath:       strings.TrimSpace(legacyItem.SourcePath),
+						Title:             strings.TrimSpace(legacyItem.Title),
+						Message:           "provider-backed series shares a fallback title/year with a different provider identity",
+						Details:           details,
+					}); err != nil {
+						return err
+					}
+				} else {
+					groupKey = alias
+				}
 			}
 		}
 		group, ok := groups[groupKey]
@@ -135,12 +165,18 @@ func (s *Service) backfillSeries(ctx context.Context, run database.CatalogMigrat
 				representative: legacyItem,
 				items:          make([]legacySeriesGroupItem, 0),
 			}
+			if identity.providerKey != "" {
+				group.providerEvidence = legacyItem
+			}
 			groups[groupKey] = group
 			groupOrder = append(groupOrder, groupKey)
 		}
 		if identity.providerKey != "" {
 			group.provider = strings.TrimSpace(legacyItem.MetadataProvider)
 			group.externalID = strings.TrimSpace(legacyItem.ExternalID)
+			if group.providerEvidence.ID == 0 || strings.TrimSpace(group.providerEvidence.MetadataProvider) == "" || !isLegacySeriesProviderID(group.providerEvidence.ExternalID) {
+				group.providerEvidence = legacyItem
+			}
 			if identity.fallbackKey != "" {
 				fallbackAliases[identity.fallbackKey] = groupKey
 				group.fallbackKey = identity.fallbackKey
@@ -188,7 +224,7 @@ func (s *Service) processLegacySeriesGroup(ctx context.Context, run database.Cat
 	if err := s.upsertLegacyMovieImages(ctx, seriesItem.ID, group.representative); err != nil {
 		return err
 	}
-	if err := s.upsertLegacySeriesProviderEvidence(ctx, seriesItem.ID, group.representative); err != nil {
+	if err := s.upsertLegacySeriesProviderEvidence(ctx, seriesItem.ID, group.providerEvidence); err != nil {
 		return err
 	}
 
@@ -253,10 +289,10 @@ func (s *Service) processLegacySeasonEpisodes(ctx context.Context, run database.
 				}
 				// duplicate_episode_candidate entries preserve every non-canonical slot claimant.
 				details, err := json.Marshal(map[string]any{
-					"canonical_episode_item_id": episodeItem.ID,
+					"canonical_episode_item_id":      episodeItem.ID,
 					"canonical_legacy_media_item_id": canonical.item.ID,
-					"season_number":              *candidate.item.SeasonNumber,
-					"episode_number":             *candidate.item.EpisodeNumber,
+					"season_number":                  *candidate.item.SeasonNumber,
+					"episode_number":                 *candidate.item.EpisodeNumber,
 				})
 				if err != nil {
 					return err
@@ -657,7 +693,7 @@ func (s *Service) recordLegacyOrphanFiles(ctx context.Context, run database.Cata
 	for _, file := range files {
 		// orphan_file entries surface active legacy files with no active owning media item.
 		details, err := json.Marshal(map[string]any{
-			"provider_name":      strings.TrimSpace(file.ProviderName),
+			"provider_name":       strings.TrimSpace(file.ProviderName),
 			"stable_identity_key": strings.TrimSpace(file.StableIdentityKey),
 		})
 		if err != nil {

@@ -68,7 +68,36 @@ func (r *Router) handleListTVSeasonEpisodes(w http.ResponseWriter, req *http.Req
 	writeJSON(req.Context(), w, http.StatusOK, episodes)
 }
 
+func (r *Router) handleListMediaItemSeriesEpisodes(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/series/"+req.PathValue("id")+"/seasons") {
+		return
+	}
+	mediaItemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	seasons, err := r.library.ListSeriesEpisodes(req.Context(), mediaItemID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	for seasonIdx := range seasons {
+		seasons[seasonIdx].PosterURL = buildAssetURL(req, seasons[seasonIdx].PosterURL)
+		for episodeIdx := range seasons[seasonIdx].Episodes {
+			seasons[seasonIdx].Episodes[episodeIdx].StillURL = buildAssetURL(req, seasons[seasonIdx].Episodes[episodeIdx].StillURL)
+		}
+	}
+
+	writeJSON(req.Context(), w, http.StatusOK, seasons)
+}
+
 func (r *Router) handleGetMediaItemProgress(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")) {
+		return
+	}
 	user, err := r.requireUser(req)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
@@ -88,6 +117,9 @@ func (r *Router) handleGetMediaItemProgress(w http.ResponseWriter, req *http.Req
 }
 
 func (r *Router) handleQueueMediaItemMatch(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")+"/match") {
+		return
+	}
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -109,6 +141,9 @@ func (r *Router) handleQueueMediaItemMatch(w http.ResponseWriter, req *http.Requ
 }
 
 func (r *Router) handleQueueMediaItemMetadataRefetch(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")+"/metadata/refetch") {
+		return
+	}
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -129,7 +164,34 @@ func (r *Router) handleQueueMediaItemMetadataRefetch(w http.ResponseWriter, req 
 	writeJSON(req.Context(), w, http.StatusAccepted, job)
 }
 
+func (r *Router) handleQueueMediaFileProbe(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/inventory-files/{id}/probe") {
+		return
+	}
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+
+	mediaFileID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	job, err := r.library.QueueMediaFileProbe(req.Context(), mediaFileID, true)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	writeJSON(req.Context(), w, http.StatusAccepted, job)
+}
+
 func (r *Router) handleSearchMediaItemMetadata(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")+"/metadata/search") {
+		return
+	}
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -165,6 +227,9 @@ func (r *Router) handleSearchMediaItemMetadata(w http.ResponseWriter, req *http.
 }
 
 func (r *Router) handleUpdateMediaItemMetadata(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")+"/governance/fields") {
+		return
+	}
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -200,11 +265,15 @@ func (r *Router) handleUpdateMediaItemMetadata(w http.ResponseWriter, req *http.
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeMediaItemDetailArtworkURLs(req, &item)
 
 	writeJSON(req.Context(), w, http.StatusOK, item)
 }
 
 func (r *Router) handleApplyMediaItemMetadata(w http.ResponseWriter, req *http.Request) {
+	if r.rejectLegacyMediaEndpoint(req, w, "/api/v1/items/"+req.PathValue("id")+"/metadata/apply") {
+		return
+	}
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -240,6 +309,7 @@ func (r *Router) handleApplyMediaItemMetadata(w http.ResponseWriter, req *http.R
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeMediaItemDetailArtworkURLs(req, &item)
 
 	writeJSON(req.Context(), w, http.StatusOK, item)
 }

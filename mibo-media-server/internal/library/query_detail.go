@@ -86,26 +86,35 @@ func buildMediaFileDetails(files []database.MediaFile) ([]MediaFileDetail, error
 
 func parseStringList(input string) ([]string, error) {
 	if input == "" {
-		return nil, nil
+		return []string{}, nil
 	}
 	var values []string
 	if err := json.Unmarshal([]byte(input), &values); err != nil {
 		return nil, err
+	}
+	if values == nil {
+		return []string{}, nil
 	}
 	return values, nil
 }
 
 func parsePeopleList(input string) ([]PersonDetail, error) {
 	if input == "" {
-		return nil, nil
+		return []PersonDetail{}, nil
 	}
 	var people []PersonDetail
 	if err := json.Unmarshal([]byte(input), &people); err == nil {
+		if people == nil {
+			return []PersonDetail{}, nil
+		}
 		return people, nil
 	}
 	var names []string
 	if err := json.Unmarshal([]byte(input), &names); err != nil {
 		return nil, err
+	}
+	if names == nil {
+		return []PersonDetail{}, nil
 	}
 	people = make([]PersonDetail, 0, len(names))
 	for _, name := range names {
@@ -116,11 +125,14 @@ func parsePeopleList(input string) ([]PersonDetail, error) {
 
 func parseTrackList(input string) ([]TrackDetail, error) {
 	if input == "" {
-		return nil, nil
+		return []TrackDetail{}, nil
 	}
 	var values []TrackDetail
 	if err := json.Unmarshal([]byte(input), &values); err != nil {
 		return nil, err
+	}
+	if values == nil {
+		return []TrackDetail{}, nil
 	}
 	return values, nil
 }

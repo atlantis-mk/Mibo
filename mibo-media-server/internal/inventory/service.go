@@ -179,6 +179,15 @@ func (s *Service) ListAssetItems(ctx context.Context, assetID uint) ([]database.
 	return links, err
 }
 
+func (s *Service) UnlinkAssetFromItem(ctx context.Context, assetID uint, itemID uint) error {
+	if assetID == 0 || itemID == 0 {
+		return errors.New("asset id and item id are required")
+	}
+	return s.db.WithContext(ctx).
+		Where("asset_id = ? AND item_id = ?", assetID, itemID).
+		Delete(&database.AssetItem{}).Error
+}
+
 func defaultString(value string, fallback string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {

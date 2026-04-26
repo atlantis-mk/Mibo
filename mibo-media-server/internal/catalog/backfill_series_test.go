@@ -475,3 +475,185 @@ func TestLegacyBackfillSeriesConflicts(t *testing.T) {
 		t.Fatalf("expected conflict message to explain missing identity, got %#v", conflictEntry)
 	}
 }
+
+func TestLegacyBackfillSeriesSeparatesDistinctProviderBackedShows(t *testing.T) {
+	svc, ctx := newTestService(t)
+
+	libraryID := uint(13)
+	run, err := svc.createLegacyBackfillRun(ctx, LegacyBackfillScope{Kind: LegacyBackfillScopeLibrary, LibraryID: &libraryID}, 79)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	year := 2023
+	seasonNumber := 1
+	episodeNumber := 1
+	runtimeSeconds := 1800
+	first := database.MediaItem{
+		LibraryID:        libraryID,
+		Type:             ItemTypeEpisode,
+		Title:            "Pilot",
+		SeriesTitle:      "Shared Title",
+		Year:             &year,
+		SeasonNumber:     &seasonNumber,
+		EpisodeNumber:    &episodeNumber,
+		SourcePath:       "/library/shows/shared-title-a/Season 01/pilot.mkv",
+		MatchStatus:      "matched",
+		MetadataProvider: "tmdb",
+		ExternalID:       "tv:100",
+		RuntimeSeconds:   &runtimeSeconds,
+		Status:           "ready",
+	}
+	second := database.MediaItem{
+		LibraryID:        libraryID,
+		Type:             ItemTypeEpisode,
+		Title:            "Pilot",
+		SeriesTitle:      "Shared Title",
+		Year:             &year,
+		SeasonNumber:     &seasonNumber,
+		EpisodeNumber:    &episodeNumber,
+		SourcePath:       "/library/shows/shared-title-b/Season 01/pilot.mkv",
+		MatchStatus:      "matched",
+		MetadataProvider: "tmdb",
+		ExternalID:       "tv:200",
+		RuntimeSeconds:   &runtimeSeconds,
+		Status:           "ready",
+	}
+	for _, item := range []*database.MediaItem{&first, &second} {
+		if err := svc.db.WithContext(ctx).Create(item).Error; err != nil {
+			t.Fatalf("create legacy episode %q: %v", item.SourcePath, err)
+		}
+	}
+
+	durationSeconds := 1800.0
+	for _, file := range []database.MediaFile{
+		{LibraryID: libraryID, MediaItemID: &first.ID, StoragePath: first.SourcePath, StableIdentityKey: "stable:shared-a", ProviderName: "local", ProbeStatus: "complete", DurationSeconds: &durationSeconds},
+		{LibraryID: libraryID, MediaItemID: &second.ID, StoragePath: second.SourcePath, StableIdentityKey: "stable:shared-b", ProviderName: "local", ProbeStatus: "complete", DurationSeconds: &durationSeconds},
+	} {
+		legacyFile := file
+		if err := svc.db.WithContext(ctx).Create(&legacyFile).Error; err != nil {
+			t.Fatalf("create legacy file %q: %v", legacyFile.StoragePath, err)
+		}
+	}
+
+	if err := svc.backfillSeries(ctx, run); err != nil {
+		t.Fatalf("backfill series: %v", err)
+	}
+
+	finalized, err := svc.finalizeLegacyBackfillRun(ctx, run.ID, LegacyBackfillStatusCompleted, "")
+	if err != nil {
+		t.Fatalf("finalize run: %v", err)
+	}
+	if finalized.SuccessCount != 2 || finalized.ConflictCount != 1 {
+		t.Fatalf("unexpected finalized counts: %#v", finalized)
+	}
+
+	var seriesItems []database.CatalogItem
+	if err := svc.db.WithContext(ctx).Where("library_id = ? AND type = ?", libraryID, ItemTypeSeries).Order("id asc").Find(&seriesItems).Error; err != nil {
+		t.Fatalf("list series items: %v", err)
+	}
+	if len(seriesItems) != 2 {
+		t.Fatalf("expected separate provider-backed series rows, got %#v", seriesItems)
+	}
+
+	var externalIDs []database.CatalogExternalID
+	if err := svc.db.WithContext(ctx).Where("provider_type = ?", "series").Order("external_id asc").Find(&externalIDs).Error; err != nil {
+		t.Fatalf("list series external ids: %v", err)
+	}
+	if len(externalIDs) != 2 || externalIDs[0].ExternalID != "tv:100" || externalIDs[1].ExternalID != "tv:200" {
+		t.Fatalf("expected both provider identities to persist, got %#v", externalIDs)
+	}
+}
+
+func TestLegacyBackfillSeriesPreservesProviderEvidenceFromProviderRow(t *testing.T) {
+	svc, ctx := newTestService(t)
+
+	libraryID := uint(14)
+	run, err := svc.createLegacyBackfillRun(ctx, LegacyBackfillScope{Kind: LegacyBackfillScopeLibrary, LibraryID: &libraryID}, 80)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	confidence := 0.88
+	year := 2022
+	seasonNumber := 1
+	firstEpisode := 1
+	secondEpisode := 2
+	runtimeSeconds := 2400
+	providerRow := database.MediaItem{
+		LibraryID:          libraryID,
+		Type:               ItemTypeEpisode,
+		Title:              "Episode One",
+		SeriesTitle:        "Provider Evidence Show",
+		Year:               &year,
+		SeasonNumber:       &seasonNumber,
+		EpisodeNumber:      &firstEpisode,
+		SourcePath:         "/library/shows/provider-evidence/Season 01/episode-one.mkv",
+		MatchStatus:        "matched",
+		MetadataProvider:   "tmdb",
+		ExternalID:         "tv:555",
+		MetadataConfidence: &confidence,
+		RuntimeSeconds:     &runtimeSeconds,
+		Status:             "ready",
+	}
+	fallbackRow := database.MediaItem{
+		LibraryID:      libraryID,
+		Type:           ItemTypeEpisode,
+		Title:          "Episode Two",
+		SeriesTitle:    "Provider Evidence Show",
+		Overview:       "Richer overview",
+		PosterURL:      "https://images.example.com/provider-evidence/poster.jpg",
+		BackdropURL:    "https://images.example.com/provider-evidence/backdrop.jpg",
+		LogoURL:        "https://images.example.com/provider-evidence/logo.png",
+		Year:           &year,
+		SeasonNumber:   &seasonNumber,
+		EpisodeNumber:  &secondEpisode,
+		SourcePath:     "/library/shows/provider-evidence/Season 01/episode-two.mkv",
+		MatchStatus:    "matched",
+		RuntimeSeconds: &runtimeSeconds,
+		Status:         "ready",
+	}
+	for _, item := range []*database.MediaItem{&providerRow, &fallbackRow} {
+		if err := svc.db.WithContext(ctx).Create(item).Error; err != nil {
+			t.Fatalf("create legacy episode %q: %v", item.SourcePath, err)
+		}
+	}
+
+	durationSeconds := 2400.0
+	for _, file := range []database.MediaFile{
+		{LibraryID: libraryID, MediaItemID: &providerRow.ID, StoragePath: providerRow.SourcePath, StableIdentityKey: "stable:provider-evidence:1", ProviderName: "local", ProbeStatus: "complete", DurationSeconds: &durationSeconds},
+		{LibraryID: libraryID, MediaItemID: &fallbackRow.ID, StoragePath: fallbackRow.SourcePath, StableIdentityKey: "stable:provider-evidence:2", ProviderName: "local", ProbeStatus: "complete", DurationSeconds: &durationSeconds},
+	} {
+		legacyFile := file
+		if err := svc.db.WithContext(ctx).Create(&legacyFile).Error; err != nil {
+			t.Fatalf("create legacy file %q: %v", legacyFile.StoragePath, err)
+		}
+	}
+
+	if err := svc.backfillSeries(ctx, run); err != nil {
+		t.Fatalf("backfill series: %v", err)
+	}
+
+	var externalIDs []database.CatalogExternalID
+	if err := svc.db.WithContext(ctx).Where("provider = ? AND provider_type = ?", "tmdb", "series").Find(&externalIDs).Error; err != nil {
+		t.Fatalf("list series external ids: %v", err)
+	}
+	if len(externalIDs) != 1 || externalIDs[0].ExternalID != providerRow.ExternalID {
+		t.Fatalf("expected provider identity from provider row, got %#v", externalIDs)
+	}
+
+	var sources []database.MetadataSource
+	if err := svc.db.WithContext(ctx).Where("source_name = ?", "tmdb").Find(&sources).Error; err != nil {
+		t.Fatalf("list provider metadata sources: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("expected provider metadata source, got %#v", sources)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(sources[0].PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode provider metadata payload: %v", err)
+	}
+	if payload["legacy_media_item_id"] != float64(providerRow.ID) {
+		t.Fatalf("expected provider payload to reference provider row %d, got %#v", providerRow.ID, payload)
+	}
+}

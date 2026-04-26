@@ -173,6 +173,7 @@ type CatalogAssetDetail struct {
 	DurationSeconds *float64           `json:"duration_seconds,omitempty"`
 	Status          string             `json:"status"`
 	ProbeStatus     string             `json:"probe_status"`
+	FileIDs         []uint             `json:"file_ids,omitempty"`
 	Links           []CatalogAssetLink `json:"links"`
 }
 
@@ -184,6 +185,7 @@ type CatalogGovernanceWorkspace struct {
 	AvailabilityStatus  string                    `json:"availability_status"`
 	GovernanceStatus    string                    `json:"governance_status"`
 	SelectedImages      []CatalogSelectedImage    `json:"selected_images,omitempty"`
+	ImageCandidates     []CatalogSelectedImage    `json:"image_candidates,omitempty"`
 	ExternalIdentities  []CatalogExternalIdentity `json:"external_identities,omitempty"`
 	SourceEvidence      []CatalogSourceEvidence   `json:"source_evidence"`
 	FieldStates         []CatalogFieldState       `json:"field_states"`
@@ -230,8 +232,9 @@ type CatalogEpisodeDetailInput struct {
 }
 
 type CatalogAssetDetailInput struct {
-	Asset database.MediaAsset
-	Links []database.AssetItem
+	Asset   database.MediaAsset
+	Links   []database.AssetItem
+	FileIDs []uint
 }
 
 type CatalogGovernanceWorkspaceInput struct {
@@ -362,6 +365,7 @@ func BuildCatalogAssetDetail(input CatalogAssetDetailInput) CatalogAssetDetail {
 		DurationSeconds: asset.DurationSeconds,
 		Status:          normalizeAvailabilityStatus(asset.Status),
 		ProbeStatus:     strings.TrimSpace(asset.ProbeStatus),
+		FileIDs:         append([]uint(nil), input.FileIDs...),
 		Links:           buildCatalogAssetLinks(input.Links),
 	}
 }
@@ -376,6 +380,7 @@ func BuildCatalogGovernanceWorkspace(input CatalogGovernanceWorkspaceInput) Cata
 		AvailabilityStatus:  normalizeAvailabilityStatus(item.AvailabilityStatus),
 		GovernanceStatus:    normalizeGovernanceStatus(item.GovernanceStatus),
 		SelectedImages:      buildCatalogSelectedImages(input.Images),
+		ImageCandidates:     buildCatalogImageCandidates(input.Images),
 		ExternalIdentities:  buildCatalogExternalIdentities(input.ExternalIDs),
 		SourceEvidence:      buildCatalogSourceEvidence(input.Sources),
 		FieldStates:         buildCatalogFieldStates(input.FieldStates),
@@ -402,6 +407,23 @@ func buildCatalogSelectedImages(images []database.ItemImage) []CatalogSelectedIm
 		})
 	}
 	return selected
+}
+
+func buildCatalogImageCandidates(images []database.ItemImage) []CatalogSelectedImage {
+	if images == nil {
+		return []CatalogSelectedImage{}
+	}
+	candidates := make([]CatalogSelectedImage, 0, len(images))
+	for _, image := range images {
+		candidates = append(candidates, CatalogSelectedImage{
+			ImageType: strings.TrimSpace(image.ImageType),
+			URL:       strings.TrimSpace(image.URL),
+			Language:  strings.TrimSpace(image.Language),
+			Width:     image.Width,
+			Height:    image.Height,
+		})
+	}
+	return candidates
 }
 
 func buildCatalogExternalIdentities(externalIDs []database.CatalogExternalID) []CatalogExternalIdentity {
@@ -534,7 +556,7 @@ func projectCatalogSourceSummary(raw string) any {
 		return nil
 	}
 
-	const scalarSummaryKeys = "title,name,original_title,overview,release_date,first_air_date,last_air_date,runtime,status,season_number,episode_number"
+	const scalarSummaryKeys = "title,name,original_title,overview,release_date,first_air_date,last_air_date,runtime,status,media_type,external_id,matched_title,air_date,poster_path,still_path,series_tmdb_id,storage_path,stable_identity_key,provider_name,detected_title,series_title,season_number,episode_number"
 	summary := make(map[string]any)
 	for _, key := range strings.Split(scalarSummaryKeys, ",") {
 		value, exists := payload[key]

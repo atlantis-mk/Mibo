@@ -7,14 +7,27 @@ import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { StandaloneMediaDetail } from '#/features/media/components/standalone-media-detail'
 import {
+  buildPresentedCatalogItem,
+  catalogItemDetailToPresentation,
+  catalogSeasonsToRails,
+  type MediaDetailView,
+} from '#/lib/media-presentation'
+import {
+  catalogItemDetailQueryOptions,
+  catalogItemProgressQueryOptions,
+  catalogSeriesSeasonsQueryOptions,
   createAuthedMiboApi,
   homeDataQueryOptions,
-  mediaItemDetailQueryOptions,
-  mediaItemProgressQueryOptions,
 } from '#/lib/mibo-query'
 import { useAuthStore } from '#/stores/auth-store'
 
-export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
+export default function MediaDetail({
+  mediaItemId,
+  detailView,
+}: {
+  mediaItemId: number
+  detailView: MediaDetailView
+}) {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
@@ -24,13 +37,28 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
   const hasValidMediaItemId = Number.isFinite(mediaItemId) && mediaItemId > 0
 
   const itemQuery = useQuery({
-    ...mediaItemDetailQueryOptions(queryToken, mediaItemId),
+    ...catalogItemDetailQueryOptions(queryToken, mediaItemId),
     enabled: hasHydrated && !!token && hasValidMediaItemId,
   })
   const progressQuery = useQuery({
-    ...mediaItemProgressQueryOptions(queryToken, mediaItemId),
+    ...catalogItemProgressQueryOptions(queryToken, mediaItemId),
     enabled: hasHydrated && !!token && hasValidMediaItemId,
   })
+  const detailItem = itemQuery.data
+  const presentationItem = itemQuery.data
+    ? catalogItemDetailToPresentation(itemQuery.data)
+    : null
+  const seriesEpisodesQuery = useQuery({
+    ...catalogSeriesSeasonsQueryOptions(queryToken, detailItem?.id ?? 0),
+    enabled: hasHydrated && !!token && detailItem?.type === 'series',
+  })
+  const presentedItem = itemQuery.data
+    ? buildPresentedCatalogItem(
+        presentationItem ?? catalogItemDetailToPresentation(itemQuery.data),
+        catalogSeasonsToRails(seriesEpisodesQuery.data ?? []),
+        detailView,
+      )
+    : null
 
   const rematchMutation = useMutation({
     mutationFn: async () => {
@@ -38,12 +66,40 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
         throw new Error('当前未登录，无法重新匹配媒体。')
       }
 
-      return createAuthedMiboApi(token).rematchMediaItem(mediaItemId)
+      return createAuthedMiboApi(token).refetchCatalogItemMetadata(mediaItemId)
     },
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: mediaItemDetailQueryOptions(queryToken, mediaItemId)
+          queryKey: catalogItemDetailQueryOptions(queryToken, mediaItemId)
+            .queryKey,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: homeDataQueryOptions(queryToken).queryKey,
+        }),
+      ])
+    },
+  })
+
+  const reprobeMutation = useMutation({
+    mutationFn: async () => {
+      if (!token) {
+        throw new Error('当前未登录，无法重新探测媒体文件。')
+      }
+
+      const primaryFileId = itemQuery.data?.assets.find(
+        (asset) => asset.file_ids.length > 0,
+      )?.file_ids[0]
+      if (!primaryFileId) {
+        throw new Error('当前条目没有可重新探测的媒体资产。')
+      }
+
+      return createAuthedMiboApi(token).reprobeInventoryFile(primaryFileId)
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: catalogItemDetailQueryOptions(queryToken, mediaItemId)
             .queryKey,
         }),
         queryClient.invalidateQueries({
@@ -64,19 +120,16 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
         throw new Error('媒体详情尚未加载完成。')
       }
 
-      const primaryFile = item.files[0]
       const durationSeconds =
-        progressQuery.data?.duration_seconds ??
-        primaryFile?.duration_seconds ??
-        item.runtime_seconds
+        progressQuery.data?.duration_seconds ?? item.runtime_seconds
 
       if (!durationSeconds || durationSeconds <= 0) {
         throw new Error('当前媒体缺少时长信息，暂时无法标记为看完。')
       }
 
       return createAuthedMiboApi(token).updateProgress({
-        media_item_id: mediaItemId,
-        media_file_id: primaryFile?.id,
+        item_id: mediaItemId,
+        asset_id: item.assets[0]?.id,
         position_seconds: durationSeconds,
         duration_seconds: durationSeconds,
         completed: true,
@@ -85,7 +138,7 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: mediaItemProgressQueryOptions(queryToken, mediaItemId)
+          queryKey: catalogItemProgressQueryOptions(queryToken, mediaItemId)
             .queryKey,
         }),
         queryClient.invalidateQueries({
@@ -142,16 +195,13 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
     return <MediaDetailError message={itemQuery.error.message} />
   }
 
-  if (!itemQuery.data) {
+  if (!itemQuery.data || !presentationItem) {
     return <MediaDetailError message="未找到对应的媒体内容。" />
   }
 
   const progress = progressQuery.data ?? null
   const durationSeconds =
-    progress?.duration_seconds ??
-    itemQuery.data.files[0]?.duration_seconds ??
-    itemQuery.data.runtime_seconds ??
-    0
+    progress?.duration_seconds ?? itemQuery.data.runtime_seconds ?? 0
   const itemProgressPercent =
     durationSeconds > 0 && progress
       ? Math.min(
@@ -163,7 +213,9 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
         )
       : 0
   const mutationErrorMessage =
-    rematchMutation.error?.message || markWatchedMutation.error?.message
+    rematchMutation.error?.message ||
+    reprobeMutation.error?.message ||
+    markWatchedMutation.error?.message
 
   return (
     <div className="relative min-w-0 flex-1 overflow-x-hidden">
@@ -179,9 +231,12 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
       ) : null}
 
       <StandaloneMediaDetail
-        item={itemQuery.data}
+        item={presentedItem ?? presentationItem}
         itemProgressPercent={itemProgressPercent}
         progress={progress}
+        seriesSeasons={catalogSeasonsToRails(seriesEpisodesQuery.data ?? [])}
+        isSeriesEpisodesLoading={seriesEpisodesQuery.isLoading}
+        seriesEpisodesErrorMessage={seriesEpisodesQuery.error?.message ?? null}
         onGoBack={() => {
           if (window.history.length > 1) {
             window.history.back()
@@ -194,15 +249,30 @@ export default function MediaDetail({ mediaItemId }: { mediaItemId: number }) {
           void navigate({
             to: '/play/$id',
             params: { id: String(mediaItemId) },
-            search: { fromStart: Boolean(options?.fromStart) },
+            search: {
+              fromStart: Boolean(options?.fromStart),
+              assetId: undefined,
+            },
           })
         }}
+        onOpenAssetPlaybackEntry={(assetId) => {
+          void navigate({
+            to: '/play/$id',
+            params: { id: String(mediaItemId) },
+            search: { fromStart: false, assetId },
+          })
+        }}
+        assetChoices={itemQuery.data.assets}
         onRematchItem={() => {
           void rematchMutation.mutateAsync()
         }}
+        onReprobePrimaryFile={() => {
+          void reprobeMutation.mutateAsync()
+        }}
+        isReprobePending={reprobeMutation.isPending}
         onManageMetadata={() => {
           void navigate({
-            to: '/metadata/$id',
+            to: '/settings/metadata/$id',
             params: { id: String(mediaItemId) },
           })
         }}

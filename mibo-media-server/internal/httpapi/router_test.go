@@ -28,7 +28,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
-	"github.com/atlan/mibo-media-server/internal/worker"
 	"gorm.io/gorm"
 )
 
@@ -634,7 +633,6 @@ func TestLibraryItemEndpoints(t *testing.T) {
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc)
-	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
 	progressSvc := progress.NewService(db)
 	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progressSvc, search.NewService(), metadataSvc, settingsSvc)
 
@@ -648,10 +646,38 @@ func TestLibraryItemEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc).RunOnce(ctx)
+	mediaItem := database.MediaItem{
+		LibraryID:     createdLibrary.ID,
+		Type:          "movie",
+		Title:         "MovieA",
+		Overview:      "Movie overview",
+		GenresJSON:    `["Action"]`,
+		CastJSON:      fmt.Sprintf(`[{"name":"Actor A","role":"Lead","avatar_url":%q}]`, tmdb.URL+"/images/actor-a.jpg"),
+		DirectorsJSON: fmt.Sprintf(`[{"name":"Director A","role":"Director","avatar_url":%q}]`, tmdb.URL+"/images/director-a.jpg"),
+		SourcePath:    "/movies/MovieA.2024.mp4",
+		MatchStatus:   metadata.StatusMatched,
+		Status:        "ready",
+	}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{
+		LibraryID:        createdLibrary.ID,
+		MediaItemID:      &mediaItem.ID,
+		StoragePath:      mediaItem.SourcePath,
+		Container:        "mp4",
+		ProbeStatus:      probe.StatusReady,
+		VideoCodec:       "h264",
+		DurationSeconds:  float64Ptr(7260.25),
+		AudioTracksJSON:  `[{"codec":"aac","language":"eng","title":"Stereo","channels":2}]`,
+		SubtitleTracksJSON: `[{"codec":"subrip","language":"eng","title":"English"}]`,
+	}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/libraries/1/items", nil)
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/libraries/%d/items", createdLibrary.ID), nil)
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("list items status: %d body=%s", recorder.Code, recorder.Body.String())
@@ -667,7 +693,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		t.Fatalf("unexpected list response: %#v", listBody.Data)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/libraries/1", nil)
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/libraries/%d", createdLibrary.ID), nil)
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -684,7 +710,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		t.Fatalf("unexpected library detail: %#v", libraryBody.Data)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-items/1", nil)
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d", mediaItem.ID), nil)
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -708,7 +734,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		t.Fatalf("unexpected directors detail: %#v", itemBody.Data.Directors)
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/media-items/1/match", nil)
+	request = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/media-items/%d/match", mediaItem.ID), nil)
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", login.Token))
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -716,7 +742,7 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		t.Fatalf("rematch status: %d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-items/1/playback?client_profile=web", nil)
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/playback?client_profile=web", mediaItem.ID), nil)
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", login.Token))
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -730,11 +756,11 @@ func TestLibraryItemEndpoints(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &playbackBody); err != nil {
 		t.Fatalf("decode playback response: %v", err)
 	}
-	if !playbackBody.Data.Playable || playbackBody.Data.URL == "" || playbackBody.Data.MediaFileID != 1 {
+	if !playbackBody.Data.Playable || playbackBody.Data.URL == "" || playbackBody.Data.MediaFileID != mediaFile.ID {
 		t.Fatalf("unexpected playback response: %#v", playbackBody.Data)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-files/1/link", nil)
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-files/%d/link", mediaFile.ID), nil)
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -900,6 +926,61 @@ func TestGetMediaItemIncludesTrailerDetail(t *testing.T) {
 	}
 }
 
+func TestGetMediaItemSerializesEmptyCollectionsAsArrays(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	cfg := config.Config{Database: config.DatabaseConfig{Driver: "sqlite"}, Storage: config.StorageConfig{Provider: "local"}, Local: config.LocalStorageConfig{RootPath: t.TempDir()}}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc)
+
+	ctx := context.Background()
+	item := database.MediaItem{
+		LibraryID:   1,
+		Type:        "movie",
+		Title:       "MovieA",
+		SourcePath:  "/movies/MovieA.2024.mkv",
+		MatchStatus: "matched",
+		Status:      "ready",
+	}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d", item.ID), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get item status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data library.MediaItemDetail `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode item response: %v", err)
+	}
+
+	if response.Data.Genres == nil || len(response.Data.Genres) != 0 {
+		t.Fatalf("expected empty genres array, got %#v", response.Data.Genres)
+	}
+	if response.Data.Cast == nil || len(response.Data.Cast) != 0 {
+		t.Fatalf("expected empty cast array, got %#v", response.Data.Cast)
+	}
+	if response.Data.Directors == nil || len(response.Data.Directors) != 0 {
+		t.Fatalf("expected empty directors array, got %#v", response.Data.Directors)
+	}
+	if response.Data.Files == nil || len(response.Data.Files) != 0 {
+		t.Fatalf("expected empty files array, got %#v", response.Data.Files)
+	}
+}
+
 func TestGetMediaItemOmitsTrailerWhenUnavailable(t *testing.T) {
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {
@@ -946,6 +1027,86 @@ func TestGetMediaItemOmitsTrailerWhenUnavailable(t *testing.T) {
 	}
 	if body.Data.Trailer != nil {
 		t.Fatalf("expected trailer to be nil, got %#v", body.Data.Trailer)
+	}
+}
+
+func TestGeneratedArtworkURLsAreAbsoluteAndServed(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	artworkRoot := filepath.Join(t.TempDir(), "artwork")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Driver: "sqlite"},
+		Storage:  config.StorageConfig{Provider: "local"},
+		Local:    config.LocalStorageConfig{RootPath: t.TempDir()},
+		FFmpeg:   config.FFmpegConfig{ArtworkRootPath: artworkRoot},
+	}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc)
+
+	ctx := context.Background()
+	item := database.MediaItem{
+		LibraryID:   1,
+		Type:        "movie",
+		Title:       "MovieC",
+		SourcePath:  "/movies/MovieC.2024.mkv",
+		MatchStatus: "skipped",
+		Status:      "ready",
+	}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+	posterURL := fmt.Sprintf("/api/v1/media-items/%d/artwork/poster", item.ID)
+	backdropURL := fmt.Sprintf("/api/v1/media-items/%d/artwork/backdrop", item.ID)
+	if err := db.WithContext(ctx).Model(&database.MediaItem{}).Where("id = ?", item.ID).Updates(map[string]any{"poster_url": posterURL, "backdrop_url": backdropURL}).Error; err != nil {
+		t.Fatalf("set generated artwork urls: %v", err)
+	}
+	artworkDir := filepath.Join(artworkRoot, fmt.Sprintf("%d", item.ID))
+	if err := os.MkdirAll(artworkDir, 0o755); err != nil {
+		t.Fatalf("create artwork dir: %v", err)
+	}
+	posterBytes := []byte("poster-image")
+	if err := os.WriteFile(filepath.Join(artworkDir, "poster.jpg"), posterBytes, 0o644); err != nil {
+		t.Fatalf("write poster art: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d", item.ID), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get item status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var body struct {
+		Data library.MediaItemDetail `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode item response: %v", err)
+	}
+	if body.Data.PosterURL != "http://example.com"+posterURL {
+		t.Fatalf("expected absolute poster url, got %q", body.Data.PosterURL)
+	}
+	if body.Data.BackdropURL != "http://example.com"+backdropURL {
+		t.Fatalf("expected absolute backdrop url, got %q", body.Data.BackdropURL)
+	}
+
+	artworkRequest := httptest.NewRequest(http.MethodGet, posterURL, nil)
+	artworkRecorder := httptest.NewRecorder()
+	router.ServeHTTP(artworkRecorder, artworkRequest)
+	if artworkRecorder.Code != http.StatusOK {
+		t.Fatalf("artwork status: %d body=%s", artworkRecorder.Code, artworkRecorder.Body.String())
+	}
+	if contentType := artworkRecorder.Header().Get("Content-Type"); !strings.Contains(contentType, "image/jpeg") {
+		t.Fatalf("expected image/jpeg, got %q", contentType)
+	}
+	if string(artworkRecorder.Body.Bytes()) != string(posterBytes) {
+		t.Fatalf("unexpected artwork body: %q", artworkRecorder.Body.String())
 	}
 }
 
@@ -1141,6 +1302,39 @@ func TestManualMetadataSearchEndpoint(t *testing.T) {
 	if queuedJob.Data.Kind != library.JobKindRefetchMediaItem {
 		t.Fatalf("unexpected metadata refetch job: %#v", queuedJob.Data)
 	}
+
+	file := database.MediaFile{
+		LibraryID:   createdLibrary.ID,
+		MediaItemID: &item.ID,
+		StoragePath: "/movies/MovieA.2024.mkv",
+		ProbeStatus: probe.StatusReady,
+	}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/media-files/%d/probe", file.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+login.Token)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("media file reprobe status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	if err := json.Unmarshal(recorder.Body.Bytes(), &queuedJob); err != nil {
+		t.Fatalf("decode media file reprobe response: %v", err)
+	}
+	if queuedJob.Data.Kind != "probe_media_file" {
+		t.Fatalf("unexpected media file reprobe job: %#v", queuedJob.Data)
+	}
+
+	var storedFile database.MediaFile
+	if err := db.WithContext(ctx).First(&storedFile, file.ID).Error; err != nil {
+		t.Fatalf("reload media file: %v", err)
+	}
+	if storedFile.ProbeStatus != probe.StatusPending {
+		t.Fatalf("expected probe status reset to pending, got %q", storedFile.ProbeStatus)
+	}
 }
 
 func TestAuthAndProgressEndpoints(t *testing.T) {
@@ -1199,7 +1393,6 @@ func TestAuthAndProgressEndpoints(t *testing.T) {
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc)
-	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
 	progressSvc := progress.NewService(db)
 	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progressSvc, search.NewService(), metadataSvc, settingsSvc)
 
@@ -1209,10 +1402,19 @@ func TestAuthAndProgressEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	if _, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"}); err != nil {
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"})
+	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc).RunOnce(ctx)
+	runtimeSeconds := 7260
+	mediaItem := database.MediaItem{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieA", SourcePath: "/movies/MovieA.2024.mkv", MatchStatus: metadata.StatusMatched, Status: "ready", RuntimeSeconds: &runtimeSeconds}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{LibraryID: createdLibrary.ID, MediaItemID: &mediaItem.ID, StoragePath: mediaItem.SourcePath, Container: "mkv", ProbeStatus: probe.StatusReady, VideoCodec: "h264"}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
+	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"username":"alice","password":"password123"}`))
@@ -1250,7 +1452,7 @@ func TestAuthAndProgressEndpoints(t *testing.T) {
 	}
 
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/me/progress", strings.NewReader(`{"media_item_id":1,"media_file_id":1,"position_seconds":180}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/me/progress", strings.NewReader(fmt.Sprintf(`{"media_item_id":%d,"media_file_id":%d,"position_seconds":180}`, mediaItem.ID, mediaFile.ID)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", authHeader)
 	router.ServeHTTP(recorder, request)
@@ -1271,12 +1473,12 @@ func TestAuthAndProgressEndpoints(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &continueBody); err != nil {
 		t.Fatalf("decode continue response: %v", err)
 	}
-	if len(continueBody.Data) != 1 || continueBody.Data[0].MediaItem.ID != 1 || continueBody.Data[0].PositionSeconds != 180 {
+	if len(continueBody.Data) != 1 || continueBody.Data[0].MediaItem.ID != mediaItem.ID || continueBody.Data[0].PositionSeconds != 180 {
 		t.Fatalf("unexpected continue watching response: %#v", continueBody.Data)
 	}
 
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/media-items/1/progress", nil)
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/progress", mediaItem.ID), nil)
 	request.Header.Set("Authorization", authHeader)
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -1293,7 +1495,7 @@ func TestAuthAndProgressEndpoints(t *testing.T) {
 	}
 
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/me/progress", strings.NewReader(`{"media_item_id":1,"media_file_id":1,"position_seconds":7250,"completed":true}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/me/progress", strings.NewReader(fmt.Sprintf(`{"media_item_id":%d,"media_file_id":%d,"position_seconds":7250,"completed":true}`, mediaItem.ID, mediaFile.ID)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", authHeader)
 	router.ServeHTTP(recorder, request)
@@ -1389,8 +1591,6 @@ func TestRecentlyAddedEndpoint(t *testing.T) {
 	jobsSvc := jobs.NewService(db)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
-	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc)
-	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
 	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1400,12 +1600,25 @@ func TestRecentlyAddedEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	if _, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"}); err != nil {
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"})
+	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc).RunOnce(ctx)
 
-	var items []database.MediaItem
+	items := []database.MediaItem{
+		{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieA", SourcePath: "/movies/MovieA.2024.mkv", MatchStatus: "matched", Status: "ready"},
+		{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieB", SourcePath: "/movies/MovieB.2024.mkv", MatchStatus: "matched", Status: "ready"},
+		{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieC", SourcePath: "/movies/MovieC.2024.mkv", MatchStatus: "matched", Status: "ready"},
+		{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieD", SourcePath: "/movies/MovieD.2024.mkv", MatchStatus: "matched", Status: "ready"},
+		{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieE", SourcePath: "/movies/MovieE.2024.mkv", MatchStatus: "matched", Status: "ready"},
+		{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieF", SourcePath: "/movies/MovieF.2024.mkv", MatchStatus: "matched", Status: "ready"},
+	}
+	for idx := range items {
+		if err := db.WithContext(ctx).Create(&items[idx]).Error; err != nil {
+			t.Fatalf("create recently added media item %d: %v", idx, err)
+		}
+	}
+
 	if err := db.WithContext(ctx).Order("id asc").Find(&items).Error; err != nil {
 		t.Fatalf("list media items: %v", err)
 	}
@@ -1460,6 +1673,76 @@ func TestRecentlyAddedEndpoint(t *testing.T) {
 	}
 	if len(body.Data) != 5 {
 		t.Fatalf("expected fallback limit to return 5 items, got %d", len(body.Data))
+	}
+}
+
+func TestRecentlyAddedEndpointGroupsShowEpisodes(t *testing.T) {
+	router, db, authSvc, librarySvc, storageRoot := newDeleteTestRouter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	moviesDir := filepath.Join(storageRoot, "recently-added", "Movies")
+	showsDir := filepath.Join(storageRoot, "recently-added", "Shows")
+	for _, dir := range []string{moviesDir, showsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create recently-added dir: %v", err)
+		}
+	}
+
+	movieSource, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Recent Movies Source", RootPath: moviesDir})
+	if err != nil {
+		t.Fatalf("create recent movies source: %v", err)
+	}
+	showSource, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Recent Shows Source", RootPath: showsDir})
+	if err != nil {
+		t.Fatalf("create recent shows source: %v", err)
+	}
+
+	movieLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Recent Movies", Type: "movies", MediaSourceID: movieSource.ID, RootPath: moviesDir})
+	if err != nil {
+		t.Fatalf("create recent movies library: %v", err)
+	}
+	showLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Recent Shows", Type: "shows", MediaSourceID: showSource.ID, RootPath: showsDir})
+	if err != nil {
+		t.Fatalf("create recent shows library: %v", err)
+	}
+
+	_ = registerAndLoginRouterUser(t, ctx, authSvc, "recent-user")
+	createdAt := time.Now().UTC()
+	year2025 := 2025
+	entries := []database.MediaItem{
+		{LibraryID: movieLibrary.ID, Type: "movie", Title: "Movie New", SourcePath: filepath.Join(moviesDir, "movie-new.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-3 * time.Minute), UpdatedAt: createdAt.Add(-3 * time.Minute)},
+		{LibraryID: showLibrary.ID, Type: "episode", Title: "灵笼 S02E01", SeriesTitle: "灵笼", Year: &year2025, SeasonNumber: intPtr(2), EpisodeNumber: intPtr(1), SourcePath: filepath.Join(showsDir, "ling-cage-s02e01.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-1 * time.Minute), UpdatedAt: createdAt.Add(-1 * time.Minute)},
+		{LibraryID: showLibrary.ID, Type: "episode", Title: "灵笼 S02E02", SeriesTitle: "灵笼", Year: &year2025, SeasonNumber: intPtr(2), EpisodeNumber: intPtr(2), SourcePath: filepath.Join(showsDir, "ling-cage-s02e02.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-2 * time.Minute), UpdatedAt: createdAt.Add(-2 * time.Minute)},
+	}
+	for idx := range entries {
+		if err := db.WithContext(ctx).Create(&entries[idx]).Error; err != nil {
+			t.Fatalf("create recently-added media item: %v", err)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/home/recently-added?limit=6", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("recently added grouped status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var body struct {
+		Data []database.MediaItem `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode grouped recently added response: %v", err)
+	}
+	if len(body.Data) != 2 {
+		t.Fatalf("expected grouped recently added items, got %#v", body.Data)
+	}
+	if body.Data[0].Type != "show" || body.Data[0].Title != "灵笼" {
+		t.Fatalf("expected grouped show card first, got %#v", body.Data[0])
+	}
+	if body.Data[1].Type != "movie" || body.Data[1].Title != "Movie New" {
+		t.Fatalf("expected movie card second, got %#v", body.Data[1])
 	}
 }
 
@@ -1966,11 +2249,44 @@ func TestLatestByLibraryEndpoint(t *testing.T) {
 	}
 
 	createdAt := time.Now().UTC()
-	entries := []database.MediaItem{
-		{LibraryID: movieLibrary.ID, Type: "movie", Title: "Newest Movie", SourcePath: filepath.Join(moviesDir, "newest-movie.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt, UpdatedAt: createdAt},
-		{LibraryID: movieLibrary.ID, Type: "movie", Title: "Older Movie", SourcePath: filepath.Join(moviesDir, "older-movie.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-1 * time.Hour), UpdatedAt: createdAt.Add(-1 * time.Hour)},
-		{LibraryID: showLibrary.ID, Type: "episode", Title: "Pilot", SeriesTitle: "Newest Show", SourcePath: filepath.Join(showsDir, "newest-show-s01e01.mkv"), MatchStatus: "matched", Status: "ready", CreatedAt: createdAt.Add(-30 * time.Minute), UpdatedAt: createdAt.Add(-30 * time.Minute)},
+	entries := make([]database.MediaItem, 0, 15)
+	for idx := 0; idx < 14; idx++ {
+		timestamp := createdAt.Add(-1 * time.Duration(idx) * time.Minute)
+		entries = append(entries, database.MediaItem{
+			LibraryID:   movieLibrary.ID,
+			Type:        "movie",
+			Title:       fmt.Sprintf("Movie %02d", idx+1),
+			SourcePath:  filepath.Join(moviesDir, fmt.Sprintf("movie-%02d.mkv", idx+1)),
+			MatchStatus: "matched",
+			Status:      "ready",
+			CreatedAt:   timestamp,
+			UpdatedAt:   timestamp,
+		})
 	}
+	entries = append(entries, database.MediaItem{
+		LibraryID:   showLibrary.ID,
+		Type:        "episode",
+		Title:       "Pilot",
+		SeriesTitle: "Newest Show",
+		SourcePath:  filepath.Join(showsDir, "newest-show-s01e01.mkv"),
+		MatchStatus: "matched",
+		Status:      "ready",
+		CreatedAt:   createdAt.Add(-30 * time.Minute),
+		UpdatedAt:   createdAt.Add(-30 * time.Minute),
+	})
+	entries = append(entries, database.MediaItem{
+		LibraryID:     showLibrary.ID,
+		Type:          "episode",
+		Title:         "Episode Two",
+		SeriesTitle:   "Newest Show",
+		SeasonNumber:  intPtr(1),
+		EpisodeNumber: intPtr(2),
+		SourcePath:    filepath.Join(showsDir, "newest-show-s01e02.mkv"),
+		MatchStatus:   "matched",
+		Status:        "ready",
+		CreatedAt:     createdAt.Add(-29 * time.Minute),
+		UpdatedAt:     createdAt.Add(-29 * time.Minute),
+	})
 	for idx := range entries {
 		if err := db.WithContext(ctx).Create(&entries[idx]).Error; err != nil {
 			t.Fatalf("create latest-by-library media item: %v", err)
@@ -1997,11 +2313,14 @@ func TestLatestByLibraryEndpoint(t *testing.T) {
 	if body.Data[0].LibraryID != movieLibrary.ID || body.Data[0].LibraryName != movieLibrary.Name {
 		t.Fatalf("unexpected first latest-by-library section: %#v", body.Data[0])
 	}
-	if len(body.Data[0].Items) != 2 || body.Data[0].Items[0].Title != "Newest Movie" {
+	if len(body.Data[0].Items) != 12 || body.Data[0].Items[0].Title != "Movie 01" || body.Data[0].Items[11].Title != "Movie 12" {
 		t.Fatalf("unexpected movie library items ordering: %#v", body.Data[0].Items)
 	}
 	if body.Data[1].LibraryID != showLibrary.ID || len(body.Data[1].Items) != 1 {
 		t.Fatalf("unexpected show library section: %#v", body.Data[1])
+	}
+	if body.Data[1].Items[0].Type != "show" || body.Data[1].Items[0].Title != "Newest Show" {
+		t.Fatalf("expected grouped show item in latest-by-library, got %#v", body.Data[1].Items[0])
 	}
 }
 
@@ -2352,6 +2671,7 @@ func TestAdminScanAndJobsEndpointsRequireAuth(t *testing.T) {
 	}
 
 	authHeader := createAuthHeader(t, ctx, authSvc)
+	adminHeader := createAdminAuthHeader(t, ctx, db, authSvc)
 
 	t.Run("authenticated scan and jobs operations still succeed", func(t *testing.T) {
 		queueRecorder := httptest.NewRecorder()
@@ -2364,7 +2684,7 @@ func TestAdminScanAndJobsEndpointsRequireAuth(t *testing.T) {
 
 		listRecorder := httptest.NewRecorder()
 		listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/jobs?status=failed", nil)
-		listRequest.Header.Set("Authorization", authHeader)
+		listRequest.Header.Set("Authorization", adminHeader)
 		router.ServeHTTP(listRecorder, listRequest)
 		if listRecorder.Code != http.StatusOK {
 			t.Fatalf("list jobs status: %d body=%s", listRecorder.Code, listRecorder.Body.String())
@@ -2382,7 +2702,7 @@ func TestAdminScanAndJobsEndpointsRequireAuth(t *testing.T) {
 
 		retryRecorder := httptest.NewRecorder()
 		retryRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/jobs/%d/retry", failedJob.ID), nil)
-		retryRequest.Header.Set("Authorization", authHeader)
+		retryRequest.Header.Set("Authorization", adminHeader)
 		router.ServeHTTP(retryRecorder, retryRequest)
 		if retryRecorder.Code != http.StatusAccepted {
 			t.Fatalf("retry job status: %d body=%s", retryRecorder.Code, retryRecorder.Body.String())
@@ -2989,12 +3309,17 @@ func TestLocalPlaybackStreamEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	_, job, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	if err := librarySvc.RunSyncLibrary(ctx, job); err != nil {
-		t.Fatalf("run local sync job: %v", err)
+	mediaItem := database.MediaItem{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieA", SourcePath: moviePath, MatchStatus: "matched", Status: "ready"}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{LibraryID: createdLibrary.ID, MediaItemID: &mediaItem.ID, StoragePath: moviePath, Container: "mp4", ProbeStatus: probe.StatusReady, VideoCodec: "h264"}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
 	}
 
 	registeredUser, err := authSvc.Register(ctx, "alice", "password123")
@@ -3010,7 +3335,7 @@ func TestLocalPlaybackStreamEndpoint(t *testing.T) {
 	}
 	authHeader := fmt.Sprintf("Bearer %s", loginResult.Token)
 
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/media-items/%d/playback?client_profile=web", server.URL, mediaItem.ID), nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -3031,7 +3356,7 @@ func TestLocalPlaybackStreamEndpoint(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&playbackBody); err != nil {
 		t.Fatalf("decode playback source: %v", err)
 	}
-	if !strings.HasPrefix(playbackBody.Data.URL, server.URL+"/api/v1/media-files/1/stream?") {
+	if !strings.HasPrefix(playbackBody.Data.URL, fmt.Sprintf("%s/api/v1/media-files/%d/stream?", server.URL, mediaFile.ID)) {
 		t.Fatalf("unexpected playback url: %s", playbackBody.Data.URL)
 	}
 	if !strings.Contains(playbackBody.Data.URL, "access_token="+loginResult.Token) {
@@ -3122,12 +3447,17 @@ func TestOpenListPlaybackStreamEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	_, job, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"})
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	if err := librarySvc.RunSyncLibrary(ctx, job); err != nil {
-		t.Fatalf("run openlist sync job: %v", err)
+	mediaItem := database.MediaItem{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieA", SourcePath: "/movies/MovieA.2024.mp4", MatchStatus: "matched", Status: "ready"}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{LibraryID: createdLibrary.ID, MediaItemID: &mediaItem.ID, StoragePath: mediaItem.SourcePath, Container: "mp4", ProbeStatus: probe.StatusReady, VideoCodec: "h264"}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
 	}
 
 	registeredUser, err := authSvc.Register(ctx, "bob", "password123")
@@ -3143,7 +3473,7 @@ func TestOpenListPlaybackStreamEndpoint(t *testing.T) {
 	}
 	authHeader := fmt.Sprintf("Bearer %s", loginResult.Token)
 
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/media-items/%d/playback?client_profile=web", server.URL, mediaItem.ID), nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -3164,7 +3494,7 @@ func TestOpenListPlaybackStreamEndpoint(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&playbackBody); err != nil {
 		t.Fatalf("decode playback source: %v", err)
 	}
-	if !strings.HasPrefix(playbackBody.Data.URL, server.URL+"/api/v1/media-files/1/stream?") {
+	if !strings.HasPrefix(playbackBody.Data.URL, fmt.Sprintf("%s/api/v1/media-files/%d/stream?", server.URL, mediaFile.ID)) {
 		t.Fatalf("unexpected playback url: %s", playbackBody.Data.URL)
 	}
 
@@ -3228,16 +3558,21 @@ func TestLocalPlaybackReturnsHLSPlaylist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	_, job, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: movieDir})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	if err := librarySvc.RunSyncLibrary(ctx, job); err != nil {
-		t.Fatalf("run local sync job: %v", err)
+	mediaItem := database.MediaItem{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieA", SourcePath: moviePath, MatchStatus: "matched", Status: "ready"}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{LibraryID: createdLibrary.ID, MediaItemID: &mediaItem.ID, StoragePath: moviePath, Container: "mkv", ProbeStatus: probe.StatusReady, VideoCodec: "h264"}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
 	}
 
 	loginResult := registerAndLoginRouterUser(t, ctx, authSvc, "hls-local")
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/media-items/%d/playback?client_profile=web", server.URL, mediaItem.ID), nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -3257,7 +3592,7 @@ func TestLocalPlaybackReturnsHLSPlaylist(t *testing.T) {
 	if playbackBody.Data.Container != "m3u8" {
 		t.Fatalf("expected hls container, got %s", playbackBody.Data.Container)
 	}
-	if !strings.HasPrefix(playbackBody.Data.URL, server.URL+"/api/v1/media-files/1/hls/index.m3u8?") {
+	if !strings.HasPrefix(playbackBody.Data.URL, fmt.Sprintf("%s/api/v1/media-files/%d/hls/index.m3u8?", server.URL, mediaFile.ID)) {
 		t.Fatalf("unexpected hls playback url: %s", playbackBody.Data.URL)
 	}
 
@@ -3281,7 +3616,7 @@ func TestLocalPlaybackReturnsHLSPlaylist(t *testing.T) {
 		t.Fatalf("unexpected playlist body: %s", string(playlistBody))
 	}
 
-	segmentResponse, err := http.Get(server.URL + "/api/v1/media-files/1/hls/segment_000.ts?access_token=" + loginResult.Token)
+	segmentResponse, err := http.Get(fmt.Sprintf("%s/api/v1/media-files/%d/hls/segment_000.ts?access_token=%s", server.URL, mediaFile.ID, loginResult.Token))
 	if err != nil {
 		t.Fatalf("request hls segment: %v", err)
 	}
@@ -3366,16 +3701,21 @@ func TestOpenListPlaybackReturnsHLSPlaylist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	_, job, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"})
+	createdLibrary, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/movies"})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	if err := librarySvc.RunSyncLibrary(ctx, job); err != nil {
-		t.Fatalf("run openlist sync job: %v", err)
+	mediaItem := database.MediaItem{LibraryID: createdLibrary.ID, Type: "movie", Title: "MovieA", SourcePath: "/movies/MovieA.2024.mkv", MatchStatus: "matched", Status: "ready"}
+	if err := db.WithContext(ctx).Create(&mediaItem).Error; err != nil {
+		t.Fatalf("create media item: %v", err)
+	}
+	mediaFile := database.MediaFile{LibraryID: createdLibrary.ID, MediaItemID: &mediaItem.ID, StoragePath: mediaItem.SourcePath, Container: "mkv", ProbeStatus: probe.StatusReady, VideoCodec: "h264"}
+	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
+		t.Fatalf("create media file: %v", err)
 	}
 
 	loginResult := registerAndLoginRouterUser(t, ctx, authSvc, "hls-openlist")
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/media-items/1/playback?client_profile=web", nil)
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/media-items/%d/playback?client_profile=web", server.URL, mediaItem.ID), nil)
 	if err != nil {
 		t.Fatalf("build playback request: %v", err)
 	}
@@ -3392,7 +3732,7 @@ func TestOpenListPlaybackReturnsHLSPlaylist(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&playbackBody); err != nil {
 		t.Fatalf("decode playback source: %v", err)
 	}
-	if !strings.HasPrefix(playbackBody.Data.URL, server.URL+"/api/v1/media-files/1/hls/index.m3u8?") {
+	if !strings.HasPrefix(playbackBody.Data.URL, fmt.Sprintf("%s/api/v1/media-files/%d/hls/index.m3u8?", server.URL, mediaFile.ID)) {
 		t.Fatalf("unexpected openlist hls playback url: %s", playbackBody.Data.URL)
 	}
 
@@ -3587,6 +3927,24 @@ func createAuthHeader(t *testing.T, ctx context.Context, authSvc *auth.Service) 
 	return fmt.Sprintf("Bearer %s", loginResult.Token)
 }
 
+func createAdminAuthHeader(t *testing.T, ctx context.Context, db *gorm.DB, authSvc *auth.Service) string {
+	t.Helper()
+
+	username := fmt.Sprintf("admin-%d", time.Now().UnixNano())
+	user, err := authSvc.Register(ctx, username, "password123")
+	if err != nil {
+		t.Fatalf("register admin auth user: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.User{}).Where("id = ?", user.ID).Update("role", "admin").Error; err != nil {
+		t.Fatalf("promote admin auth user: %v", err)
+	}
+	loginResult, err := authSvc.Login(ctx, username, "password123")
+	if err != nil {
+		t.Fatalf("login admin auth user: %v", err)
+	}
+	return fmt.Sprintf("Bearer %s", loginResult.Token)
+}
+
 func newStorageEventTestRouter(t *testing.T) (http.Handler, *gorm.DB, *auth.Service, *library.Service, uint, string) {
 	t.Helper()
 
@@ -3650,6 +4008,10 @@ func newScheduleTestRouter(t *testing.T) (http.Handler, *auth.Service, *gorm.DB,
 }
 
 func intPtr(value int) *int {
+	return &value
+}
+
+func float64Ptr(value float64) *float64 {
 	return &value
 }
 
@@ -3770,7 +4132,7 @@ func TestTVMetadataEndpoints(t *testing.T) {
 		t.Fatalf("create library: %v", err)
 	}
 	episodeOne := 1
-	if err := db.WithContext(context.Background()).Create(&database.MediaItem{
+	tvMatchedItem := database.MediaItem{
 		LibraryID:     showLibrary.ID,
 		Type:          "episode",
 		Title:         "Pilot",
@@ -3781,8 +4143,40 @@ func TestTVMetadataEndpoints(t *testing.T) {
 		SourcePath:    filepath.Join(storageRoot, "shows", "show-a-s01e01.mkv"),
 		MatchStatus:   "matched",
 		Status:        "ready",
-	}).Error; err != nil {
+	}
+	if err := db.WithContext(context.Background()).Create(&tvMatchedItem).Error; err != nil {
 		t.Fatalf("create media item: %v", err)
+	}
+	localSeasonTwo := 2
+	localEpisodeOne := 1
+	localEpisodeTwo := 2
+	localEpisodeA := database.MediaItem{
+		LibraryID:     showLibrary.ID,
+		Type:          "episode",
+		Title:         "坠落",
+		SeriesTitle:   "本地剧 第一季",
+		SeasonNumber:  &episodeOne,
+		EpisodeNumber: &localEpisodeOne,
+		BackdropURL:   "/local-s1e1.jpg",
+		SourcePath:    filepath.Join(storageRoot, "shows", "local-show-s01e01.mkv"),
+		Status:        "ready",
+	}
+	localEpisodeB := database.MediaItem{
+		LibraryID:     showLibrary.ID,
+		Type:          "episode",
+		Title:         "觉醒",
+		SeriesTitle:   "本地剧 第二季",
+		SeasonNumber:  &localSeasonTwo,
+		EpisodeNumber: &localEpisodeTwo,
+		PosterURL:     "/local-s2.jpg",
+		SourcePath:    filepath.Join(storageRoot, "shows", "local-show-s02e02.mkv"),
+		Status:        "ready",
+	}
+	if err := db.WithContext(context.Background()).Create(&localEpisodeA).Error; err != nil {
+		t.Fatalf("create local episode a: %v", err)
+	}
+	if err := db.WithContext(context.Background()).Create(&localEpisodeB).Error; err != nil {
+		t.Fatalf("create local episode b: %v", err)
 	}
 	if _, err := settingsSvc.UpdateMetadataSettings(context.Background(), settings.UpdateMetadataSettingsInput{
 		TMDB: settings.MetadataProviderInput{
@@ -3862,6 +4256,41 @@ func TestTVMetadataEndpoints(t *testing.T) {
 		}
 		if body.Data[0].PayloadJSON != "" {
 			t.Fatalf("expected sanitized payload without raw tmdb json, got %#v", body.Data[0])
+		}
+	})
+
+	t.Run("list local series episodes", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/series-episodes", localEpisodeA.ID), nil)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("local series episodes status: %d body=%s", recorder.Code, recorder.Body.String())
+		}
+
+		var body struct {
+			Data []struct {
+				SeasonNumber int    `json:"season_number"`
+				Name         string `json:"name"`
+				PosterURL    string `json:"poster_url"`
+				Episodes     []struct {
+					MediaItemID   uint   `json:"media_item_id"`
+					EpisodeNumber int    `json:"episode_number"`
+					Name          string `json:"name"`
+					StillURL      string `json:"still_url"`
+				} `json:"episodes"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode local series response: %v", err)
+		}
+		if len(body.Data) != 1 || body.Data[0].SeasonNumber != 1 {
+			t.Fatalf("unexpected local seasons payload: %#v", body.Data)
+		}
+		if body.Data[0].Episodes[0].StillURL != requestBaseURL(request)+"/local-s1e1.jpg" {
+			t.Fatalf("unexpected local still url: %#v", body.Data[0].Episodes[0])
+		}
+		if body.Data[0].PosterURL != "" {
+			t.Fatalf("unexpected local poster url: %#v", body.Data[0])
 		}
 	})
 }

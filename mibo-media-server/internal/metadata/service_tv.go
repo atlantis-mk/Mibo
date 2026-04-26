@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -102,11 +103,20 @@ func (s *Service) ListSeasonEpisodes(ctx context.Context, seriesTMDBID int, seas
 
 	episodes := make([]TVEpisodeMetadata, 0, len(episodeRows))
 	for _, row := range episodeRows {
+		var airDate string
+		if strings.TrimSpace(row.PayloadJSON) != "" {
+			var payload seasonEpisodeResponse
+			if err := json.Unmarshal([]byte(row.PayloadJSON), &payload); err != nil {
+				return nil, err
+			}
+			airDate = strings.TrimSpace(payload.AirDate)
+		}
 		episodes = append(episodes, TVEpisodeMetadata{
 			MediaItemID:    episodeMediaItemIDs[row.EpisodeNumber],
 			SeasonNumber:   row.SeasonNumber,
 			EpisodeNumber:  row.EpisodeNumber,
 			Name:           row.Name,
+			AirDate:        airDate,
 			Overview:       row.Overview,
 			StillURL:       imageURL(tmdbCfg, row.StillPath),
 			RuntimeSeconds: row.RuntimeSeconds,

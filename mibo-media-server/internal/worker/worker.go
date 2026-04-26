@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
@@ -245,9 +246,10 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			completedAt = &now
 		}
 		_, err = r.settings.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{
-			CatalogBackfillCompletedAt: completedAt,
-			CatalogReadEnabled:         state.CatalogReadEnabled,
-			LegacyCleanupCompletedAt:   state.LegacyCleanupCompletedAt,
+			CatalogBackfillCompletedAt:   completedAt,
+			CatalogReadEnabled:           state.CatalogReadEnabled,
+			CatalogValidationCompletedAt: state.CatalogValidationCompletedAt,
+			LegacyCleanupCompletedAt:     state.LegacyCleanupCompletedAt,
 		})
 		return err
 	case "probe_media_file":
@@ -329,6 +331,9 @@ func (r *Runner) markScheduleRunRunning(ctx context.Context, job database.Job) {
 	if r.schedule == nil {
 		return
 	}
+	if !strings.HasPrefix(job.Kind, "schedule_") {
+		return
+	}
 	if _, err := schedule.ParseSchedulePayload(job.PayloadJSON); err != nil {
 		return
 	}
@@ -339,6 +344,9 @@ func (r *Runner) markScheduleRunRunning(ctx context.Context, job database.Job) {
 
 func (r *Runner) markScheduleRunFinished(ctx context.Context, job database.Job, status string, message string) {
 	if r.schedule == nil {
+		return
+	}
+	if !strings.HasPrefix(job.Kind, "schedule_") {
 		return
 	}
 	if _, err := schedule.ParseSchedulePayload(job.PayloadJSON); err != nil {

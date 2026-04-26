@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 
 import { LoginForm } from '#/components/login-form'
+import { requireCanEnterApp } from '#/lib/setup-gate'
 
 export const Route = createFileRoute('/login')({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -11,6 +12,9 @@ export const Route = createFileRoute('/login')({
         ? search.redirect
         : undefined,
   }),
+  beforeLoad: async () => {
+    await requireCanEnterApp()
+  },
   component: LoginPage,
 })
 

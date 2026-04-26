@@ -58,6 +58,21 @@ type SearchCandidate struct {
 	ReleaseDate   string  `json:"release_date"`
 	Year          *int    `json:"year,omitempty"`
 	Confidence    float64 `json:"confidence"`
+	MatchedQuery  string  `json:"matched_query,omitempty"`
+	ReasonSummary string  `json:"reason_summary,omitempty"`
+}
+
+type tmdbRequestFailure struct {
+	statusCode int
+	message    string
+}
+
+func (e tmdbRequestFailure) Error() string {
+	return e.message
+}
+
+func (e tmdbRequestFailure) StatusCode() int {
+	return e.statusCode
 }
 
 type tmdbErrorResponse struct {
@@ -71,16 +86,23 @@ type searchResponse struct {
 }
 
 type searchResult struct {
-	ID            int    `json:"id"`
-	Title         string `json:"title"`
-	Name          string `json:"name"`
-	OriginalTitle string `json:"original_title"`
-	OriginalName  string `json:"original_name"`
-	ReleaseDate   string `json:"release_date"`
-	FirstAirDate  string `json:"first_air_date"`
-	Overview      string `json:"overview"`
-	PosterPath    string `json:"poster_path"`
-	BackdropPath  string `json:"backdrop_path"`
+	ID            int     `json:"id"`
+	Title         string  `json:"title"`
+	Name          string  `json:"name"`
+	OriginalTitle string  `json:"original_title"`
+	OriginalName  string  `json:"original_name"`
+	ReleaseDate   string  `json:"release_date"`
+	FirstAirDate  string  `json:"first_air_date"`
+	Overview      string  `json:"overview"`
+	PosterPath    string  `json:"poster_path"`
+	BackdropPath  string  `json:"backdrop_path"`
+	Popularity    float64 `json:"popularity"`
+	VoteCount     int     `json:"vote_count"`
+}
+
+type findResponse struct {
+	MovieResults []searchResult `json:"movie_results"`
+	TVResults    []searchResult `json:"tv_results"`
 }
 
 type detailResponse struct {
@@ -142,6 +164,7 @@ type seasonEpisodeResponse struct {
 	SeasonNumber  int    `json:"season_number"`
 	EpisodeNumber int    `json:"episode_number"`
 	Name          string `json:"name"`
+	AirDate       string `json:"air_date"`
 	Overview      string `json:"overview"`
 	StillPath     string `json:"still_path"`
 	Runtime       *int   `json:"runtime"`
@@ -160,6 +183,7 @@ type TVEpisodeMetadata struct {
 	SeasonNumber   int    `json:"season_number"`
 	EpisodeNumber  int    `json:"episode_number"`
 	Name           string `json:"name"`
+	AirDate        string `json:"air_date,omitempty"`
 	Overview       string `json:"overview"`
 	StillURL       string `json:"still_url"`
 	RuntimeSeconds *int   `json:"runtime_seconds,omitempty"`

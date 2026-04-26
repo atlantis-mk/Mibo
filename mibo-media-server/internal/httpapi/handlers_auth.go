@@ -120,11 +120,22 @@ func (r *Router) handleRecentlyPlayed(w http.ResponseWriter, req *http.Request) 
 
 func (r *Router) handleRecentlyAdded(w http.ResponseWriter, req *http.Request) {
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	if r.shouldServeCatalogLibraryItems(req.Context()) && r.catalog != nil {
+		items, err := r.catalog.ListRecentlyAdded(req.Context(), limit)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		normalizeCatalogListItemsArtworkURLs(req, items)
+		writeJSON(req.Context(), w, http.StatusOK, items)
+		return
+	}
 	items, err := r.library.ListRecentlyAdded(req.Context(), limit)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeMediaItemSliceArtworkURLs(req, items)
 	writeJSON(req.Context(), w, http.StatusOK, items)
 }
 
@@ -133,12 +144,25 @@ func (r *Router) handleLatestByLibrary(w http.ResponseWriter, req *http.Request)
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
+	if r.shouldServeCatalogLibraryItems(req.Context()) && r.catalog != nil {
+		sections, err := r.catalog.ListLatestByLibrary(req.Context(), 12)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		for idx := range sections {
+			normalizeCatalogListItemsArtworkURLs(req, sections[idx].Items)
+		}
+		writeJSON(req.Context(), w, http.StatusOK, sections)
+		return
+	}
 
-	sections, err := r.library.ListAllLatestMediaByLibrary(req.Context())
+	sections, err := r.library.ListAllLatestMediaByLibrary(req.Context(), 12)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeLatestByLibraryArtworkURLs(req, sections)
 
 	writeJSON(req.Context(), w, http.StatusOK, sections)
 }
@@ -167,6 +191,9 @@ func (r *Router) handleHomeDiscovery(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeProgressEntriesArtworkURLs(req, continueWatching)
+	normalizeProgressEntriesArtworkURLs(req, recentlyPlayed)
+	normalizeLatestByLibraryArtworkURLs(req, latestByLibrary)
 
 	writeJSON(req.Context(), w, http.StatusOK, homeDiscoveryResponse{
 		ContinueWatching: continueWatching,

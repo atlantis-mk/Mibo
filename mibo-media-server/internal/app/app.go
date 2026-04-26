@@ -34,7 +34,11 @@ type App struct {
 	worker *worker.Runner
 }
 
-func New(_ context.Context, cfg config.Config) (*App, error) {
+func New(ctx context.Context, cfg config.Config) (*App, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	db, err := database.Open(cfg.Database)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -47,7 +51,7 @@ func New(_ context.Context, cfg config.Config) (*App, error) {
 	catalogSvc := catalog.NewService(db)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
 	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
-	probeSvc := probe.NewService(db, registry, cfg.FFprobe)
+	probeSvc := probe.NewService(db, registry, cfg.FFprobe, cfg.FFmpeg)
 	playbackSvc := playback.NewService(db, registry)
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)

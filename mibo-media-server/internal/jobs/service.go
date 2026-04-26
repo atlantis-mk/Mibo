@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const jobKindLegacyBackfill = "catalog_backfill_legacy"
+
 const (
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -89,6 +91,14 @@ func (s *Service) List(ctx context.Context, limit int, status string, kind strin
 }
 
 func (s *Service) Retry(ctx context.Context, jobID uint) (database.Job, error) {
+	var existing database.Job
+	if err := s.db.WithContext(ctx).First(&existing, jobID).Error; err != nil {
+		return database.Job{}, err
+	}
+	if existing.Kind == jobKindLegacyBackfill {
+		return database.Job{}, errors.New("legacy backfill jobs must be re-queued via the catalog migration API")
+	}
+
 	now := time.Now().UTC()
 	if err := s.db.WithContext(ctx).
 		Model(&database.Job{}).
@@ -103,11 +113,10 @@ func (s *Service) Retry(ctx context.Context, jobID uint) (database.Job, error) {
 		return database.Job{}, err
 	}
 
-	var job database.Job
-	if err := s.db.WithContext(ctx).First(&job, jobID).Error; err != nil {
+	if err := s.db.WithContext(ctx).First(&existing, jobID).Error; err != nil {
 		return database.Job{}, err
 	}
-	return job, nil
+	return existing, nil
 }
 
 func (s *Service) ClaimNext(ctx context.Context) (database.Job, error) {

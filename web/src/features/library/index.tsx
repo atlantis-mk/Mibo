@@ -10,6 +10,12 @@ import {
 } from '#/features/discovery/controls'
 import { Badge } from '#/components/ui/badge'
 import { SidebarTrigger } from '#/components/ui/sidebar'
+import {
+  getMediaCardAvailabilityStatus,
+  formatMediaCardTitle,
+  getMediaCardPosterUrl,
+  getMediaCardType,
+} from '#/lib/media-presentation'
 import { createAuthedMiboApi } from '#/lib/mibo-query'
 import { useAuthStore } from '#/stores/auth-store'
 
@@ -46,7 +52,10 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
         }),
       ])
 
-      return { library, items: items.items }
+      return {
+        library,
+        items: items.items,
+      }
     },
   })
 
@@ -102,10 +111,10 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
   }
 
   const movieCount = libraryQuery.data.items.filter(
-    (entry) => entry.item.type === 'movie',
+    (entry) => ('item' in entry ? entry.item.type : entry.type) === 'movie',
   ).length
   const showCount = libraryQuery.data.items.filter(
-    (entry) => entry.item.type !== 'movie',
+    (entry) => ('item' in entry ? entry.item.type : entry.type) !== 'movie',
   ).length
 
   return (
@@ -155,28 +164,34 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
           {libraryQuery.data.items.length > 0 ? (
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
               {libraryQuery.data.items.map((entry) => {
-                const item = entry.item
+                const item = 'item' in entry ? entry.item : entry
+                const watchedState =
+                  'watched_state' in entry ? entry.watched_state : 'unwatched'
                 return (
                   <article key={item.id} className="min-w-0">
                     <Link
                       to="/media/$id"
                       params={{ id: String(item.id) }}
+                      search={{
+                        view:
+                          getMediaCardType(item) === 'show'
+                            ? 'series'
+                            : undefined,
+                      }}
                       className="group block overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1"
                     >
                       <div
                         className="aspect-[3/4] bg-cover bg-center bg-muted"
                         style={{
-                          backgroundImage: item.poster_url
-                            ? `url(${item.poster_url})`
+                          backgroundImage: getMediaCardPosterUrl(item)
+                            ? `url(${getMediaCardPosterUrl(item)})`
                             : 'linear-gradient(180deg, rgba(80,92,255,0.35), rgba(15,118,110,0.35))',
                         }}
                       />
                       <div className="space-y-4 px-4 pb-4 pt-4">
                         <div>
                           <div className="line-clamp-1 text-xl font-semibold tracking-tight text-foreground">
-                            {item.series_title
-                              ? `${item.series_title} · ${item.title}`
-                              : item.title}
+                            {formatMediaCardTitle(item)}
                           </div>
                           <div className="mt-1 text-sm text-muted-foreground">
                             {item.year || '未知年份'}
@@ -187,15 +202,19 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
                             className="rounded-full border-border/50 bg-background/80 px-3 py-1"
                             variant="outline"
                           >
-                            {formatMediaType(item.type)}
+                            {formatMediaType(getMediaCardType(item))}
                           </Badge>
                           <Badge
                             className="rounded-full border-border/50 bg-background/80 px-3 py-1"
                             variant="outline"
                           >
-                            {formatWatchedState(entry.watched_state)}
+                            {formatWatchedState(watchedState)}
                           </Badge>
-                          <span>{formatCreatedAt(item.created_at)}</span>
+                          <span>
+                            {formatAvailability(
+                              getMediaCardAvailabilityStatus(item),
+                            )}
+                          </span>
                           <ArrowUpRightIcon className="size-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                         </div>
                       </div>
@@ -255,16 +274,17 @@ function formatMediaType(type: string) {
   return '媒体'
 }
 
-function formatCreatedAt(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '最近入库'
+function formatAvailability(status: string) {
+  switch (status) {
+    case 'available':
+      return '可播放'
+    case 'missing':
+      return '缺失'
+    case 'unaired':
+      return '未播出'
+    default:
+      return '待整理'
   }
-
-  return date.toLocaleDateString('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-  })
 }
 
 function formatWatchedState(value: string) {

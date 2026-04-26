@@ -20,6 +20,12 @@
 - The local storage adapter only accepts absolute paths and rejects anything outside `MIBO_LOCAL_ROOT_PATH`.
 - For local manual testing in this workspace, use app login `admin` / `admin123`.
 - Frontend API base defaults to `http://127.0.0.1:8080` via `VITE_API_BASE_URL`, then is overridden from localStorage key `mibo-web-api-base-url`.
+- Catalog reads no longer treat mere catalog presence as a successful cutover gate. Without an explicit `catalog_read_enabled=true`, they default to enabled only after `catalog_validation_completed_at` or legacy cleanup has been recorded; legacy-only databases still stay disabled.
+- When catalog reads are enabled, legacy `/api/v1/media-items/*` and `/api/v1/media-files/*` paths are retired compatibility routes; use `/api/v1/items/*`, `/api/v1/assets/*`, and `/api/v1/inventory-files/*` instead.
+- Admin maintenance endpoints exist for rollout verification: `GET /api/v1/catalog-migration/consistency` and `POST /api/v1/catalog-migration/rebuild-projections`.
+- Recommended rollout check: run `GET /api/v1/catalog-migration/consistency`, confirm zero drift or an understood sample set, then run `POST /api/v1/catalog-migration/rebuild-projections` before rechecking if drift is reported.
+- Governance repair endpoints now include item-scoped asset correction paths: `POST /api/v1/items/{id}/governance/assets/{asset_id}/links` and `DELETE /api/v1/items/{id}/governance/assets/{asset_id}/links/{target_item_id}`. They are intentionally bounded to the current workspace item and its descendants.
+- Legacy fallback expectation: once `catalog_read_enabled` is on, old media read routes should be treated as bounded retirement shims that can return `410 Gone`; do not build new product flows on top of `/api/v1/media-items/*` or `/api/v1/media-files/*`.
 - The router redirects to `/setup` until `/api/v1/setup/status` reports `can_enter_app=true`; if you change setup/auth flow, keep `web/src/router.tsx`, `web/src/components/setup-wizard.tsx`, and `web/src/lib/client-config.ts` aligned.
 - Setup and source forms intentionally seed absolute demo paths under `demo-media/`; those defaults appear in both `web/src/App.tsx` and `web/src/components/setup-wizard.tsx`.
 

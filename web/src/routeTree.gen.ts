@@ -9,18 +9,30 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
+import { Route as SettingsSecurityRouteImport } from './routes/settings.security'
+import { Route as SettingsSchedulesRouteImport } from './routes/settings.schedules'
+import { Route as SettingsPlaybackRouteImport } from './routes/settings.playback'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
+import { Route as SettingsMetadataSourcesRouteImport } from './routes/settings.metadata-sources'
+import { Route as SettingsLibraryRouteImport } from './routes/settings.library'
 import { Route as PlayIdRouteImport } from './routes/play.$id'
 import { Route as AppSearchRouteImport } from './routes/_app.search'
-import { Route as AppSchedulesIndexRouteImport } from './routes/_app.schedules.index'
-import { Route as AppMetadataIndexRouteImport } from './routes/_app.metadata.index'
-import { Route as AppMetadataIdRouteImport } from './routes/_app.metadata.$id'
+import { Route as SettingsMetadataIndexRouteImport } from './routes/settings.metadata.index'
+import { Route as SettingsMetadataIdRouteImport } from './routes/settings.metadata.$id'
 import { Route as AppMediaIdRouteImport } from './routes/_app.media.$id'
 import { Route as AppLibraryIdRouteImport } from './routes/_app.library.$id'
 
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -35,10 +47,45 @@ const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppRoute,
+} as any)
+const SettingsSecurityRoute = SettingsSecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsSchedulesRoute = SettingsSchedulesRouteImport.update({
+  id: '/schedules',
+  path: '/schedules',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsPlaybackRoute = SettingsPlaybackRouteImport.update({
+  id: '/playback',
+  path: '/playback',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsMetadataSourcesRoute = SettingsMetadataSourcesRouteImport.update({
+  id: '/metadata-sources',
+  path: '/metadata-sources',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsLibraryRoute = SettingsLibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
+  getParentRoute: () => SettingsRoute,
 } as any)
 const PlayIdRoute = PlayIdRouteImport.update({
   id: '/play/$id',
@@ -50,20 +97,15 @@ const AppSearchRoute = AppSearchRouteImport.update({
   path: '/search',
   getParentRoute: () => AppRoute,
 } as any)
-const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
-  id: '/schedules/',
-  path: '/schedules/',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppMetadataIndexRoute = AppMetadataIndexRouteImport.update({
+const SettingsMetadataIndexRoute = SettingsMetadataIndexRouteImport.update({
   id: '/metadata/',
   path: '/metadata/',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => SettingsRoute,
 } as any)
-const AppMetadataIdRoute = AppMetadataIdRouteImport.update({
+const SettingsMetadataIdRoute = SettingsMetadataIdRouteImport.update({
   id: '/metadata/$id',
   path: '/metadata/$id',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => SettingsRoute,
 } as any)
 const AppMediaIdRoute = AppMediaIdRouteImport.update({
   id: '/media/$id',
@@ -79,40 +121,60 @@ const AppLibraryIdRoute = AppLibraryIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
-  '/settings': typeof SettingsRoute
+  '/settings': typeof SettingsRouteWithChildren
+  '/setup': typeof SetupRoute
   '/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
+  '/settings/library': typeof SettingsLibraryRoute
+  '/settings/metadata-sources': typeof SettingsMetadataSourcesRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/playback': typeof SettingsPlaybackRoute
+  '/settings/schedules': typeof SettingsSchedulesRoute
+  '/settings/security': typeof SettingsSecurityRoute
+  '/settings/': typeof SettingsIndexRoute
   '/library/$id': typeof AppLibraryIdRoute
   '/media/$id': typeof AppMediaIdRoute
-  '/metadata/$id': typeof AppMetadataIdRoute
-  '/metadata/': typeof AppMetadataIndexRoute
-  '/schedules/': typeof AppSchedulesIndexRoute
+  '/settings/metadata/$id': typeof SettingsMetadataIdRoute
+  '/settings/metadata/': typeof SettingsMetadataIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
-  '/settings': typeof SettingsRoute
+  '/setup': typeof SetupRoute
   '/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
+  '/settings/library': typeof SettingsLibraryRoute
+  '/settings/metadata-sources': typeof SettingsMetadataSourcesRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/playback': typeof SettingsPlaybackRoute
+  '/settings/schedules': typeof SettingsSchedulesRoute
+  '/settings/security': typeof SettingsSecurityRoute
   '/': typeof AppIndexRoute
+  '/settings': typeof SettingsIndexRoute
   '/library/$id': typeof AppLibraryIdRoute
   '/media/$id': typeof AppMediaIdRoute
-  '/metadata/$id': typeof AppMetadataIdRoute
-  '/metadata': typeof AppMetadataIndexRoute
-  '/schedules': typeof AppSchedulesIndexRoute
+  '/settings/metadata/$id': typeof SettingsMetadataIdRoute
+  '/settings/metadata': typeof SettingsMetadataIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
-  '/settings': typeof SettingsRoute
+  '/settings': typeof SettingsRouteWithChildren
+  '/setup': typeof SetupRoute
   '/_app/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
+  '/settings/library': typeof SettingsLibraryRoute
+  '/settings/metadata-sources': typeof SettingsMetadataSourcesRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/playback': typeof SettingsPlaybackRoute
+  '/settings/schedules': typeof SettingsSchedulesRoute
+  '/settings/security': typeof SettingsSecurityRoute
   '/_app/': typeof AppIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/_app/library/$id': typeof AppLibraryIdRoute
   '/_app/media/$id': typeof AppMediaIdRoute
-  '/_app/metadata/$id': typeof AppMetadataIdRoute
-  '/_app/metadata/': typeof AppMetadataIndexRoute
-  '/_app/schedules/': typeof AppSchedulesIndexRoute
+  '/settings/metadata/$id': typeof SettingsMetadataIdRoute
+  '/settings/metadata/': typeof SettingsMetadataIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -120,49 +182,77 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/settings'
+    | '/setup'
     | '/search'
     | '/play/$id'
+    | '/settings/library'
+    | '/settings/metadata-sources'
+    | '/settings/notifications'
+    | '/settings/playback'
+    | '/settings/schedules'
+    | '/settings/security'
+    | '/settings/'
     | '/library/$id'
     | '/media/$id'
-    | '/metadata/$id'
-    | '/metadata/'
-    | '/schedules/'
+    | '/settings/metadata/$id'
+    | '/settings/metadata/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
-    | '/settings'
+    | '/setup'
     | '/search'
     | '/play/$id'
+    | '/settings/library'
+    | '/settings/metadata-sources'
+    | '/settings/notifications'
+    | '/settings/playback'
+    | '/settings/schedules'
+    | '/settings/security'
     | '/'
+    | '/settings'
     | '/library/$id'
     | '/media/$id'
-    | '/metadata/$id'
-    | '/metadata'
-    | '/schedules'
+    | '/settings/metadata/$id'
+    | '/settings/metadata'
   id:
     | '__root__'
     | '/_app'
     | '/login'
     | '/settings'
+    | '/setup'
     | '/_app/search'
     | '/play/$id'
+    | '/settings/library'
+    | '/settings/metadata-sources'
+    | '/settings/notifications'
+    | '/settings/playback'
+    | '/settings/schedules'
+    | '/settings/security'
     | '/_app/'
+    | '/settings/'
     | '/_app/library/$id'
     | '/_app/media/$id'
-    | '/_app/metadata/$id'
-    | '/_app/metadata/'
-    | '/_app/schedules/'
+    | '/settings/metadata/$id'
+    | '/settings/metadata/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
-  SettingsRoute: typeof SettingsRoute
+  SettingsRoute: typeof SettingsRouteWithChildren
+  SetupRoute: typeof SetupRoute
   PlayIdRoute: typeof PlayIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -184,12 +274,61 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/': {
+      id: '/settings/'
+      path: '/'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/_app/': {
       id: '/_app/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/settings/security': {
+      id: '/settings/security'
+      path: '/security'
+      fullPath: '/settings/security'
+      preLoaderRoute: typeof SettingsSecurityRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/schedules': {
+      id: '/settings/schedules'
+      path: '/schedules'
+      fullPath: '/settings/schedules'
+      preLoaderRoute: typeof SettingsSchedulesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/playback': {
+      id: '/settings/playback'
+      path: '/playback'
+      fullPath: '/settings/playback'
+      preLoaderRoute: typeof SettingsPlaybackRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/metadata-sources': {
+      id: '/settings/metadata-sources'
+      path: '/metadata-sources'
+      fullPath: '/settings/metadata-sources'
+      preLoaderRoute: typeof SettingsMetadataSourcesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/library': {
+      id: '/settings/library'
+      path: '/library'
+      fullPath: '/settings/library'
+      preLoaderRoute: typeof SettingsLibraryRouteImport
+      parentRoute: typeof SettingsRoute
     }
     '/play/$id': {
       id: '/play/$id'
@@ -205,26 +344,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSearchRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/schedules/': {
-      id: '/_app/schedules/'
-      path: '/schedules'
-      fullPath: '/schedules/'
-      preLoaderRoute: typeof AppSchedulesIndexRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/metadata/': {
-      id: '/_app/metadata/'
+    '/settings/metadata/': {
+      id: '/settings/metadata/'
       path: '/metadata'
-      fullPath: '/metadata/'
-      preLoaderRoute: typeof AppMetadataIndexRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/settings/metadata/'
+      preLoaderRoute: typeof SettingsMetadataIndexRouteImport
+      parentRoute: typeof SettingsRoute
     }
-    '/_app/metadata/$id': {
-      id: '/_app/metadata/$id'
+    '/settings/metadata/$id': {
+      id: '/settings/metadata/$id'
       path: '/metadata/$id'
-      fullPath: '/metadata/$id'
-      preLoaderRoute: typeof AppMetadataIdRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/settings/metadata/$id'
+      preLoaderRoute: typeof SettingsMetadataIdRouteImport
+      parentRoute: typeof SettingsRoute
     }
     '/_app/media/$id': {
       id: '/_app/media/$id'
@@ -248,9 +380,6 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppLibraryIdRoute: typeof AppLibraryIdRoute
   AppMediaIdRoute: typeof AppMediaIdRoute
-  AppMetadataIdRoute: typeof AppMetadataIdRoute
-  AppMetadataIndexRoute: typeof AppMetadataIndexRoute
-  AppSchedulesIndexRoute: typeof AppSchedulesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -258,17 +387,43 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppLibraryIdRoute: AppLibraryIdRoute,
   AppMediaIdRoute: AppMediaIdRoute,
-  AppMetadataIdRoute: AppMetadataIdRoute,
-  AppMetadataIndexRoute: AppMetadataIndexRoute,
-  AppSchedulesIndexRoute: AppSchedulesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
+interface SettingsRouteChildren {
+  SettingsLibraryRoute: typeof SettingsLibraryRoute
+  SettingsMetadataSourcesRoute: typeof SettingsMetadataSourcesRoute
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
+  SettingsPlaybackRoute: typeof SettingsPlaybackRoute
+  SettingsSchedulesRoute: typeof SettingsSchedulesRoute
+  SettingsSecurityRoute: typeof SettingsSecurityRoute
+  SettingsIndexRoute: typeof SettingsIndexRoute
+  SettingsMetadataIdRoute: typeof SettingsMetadataIdRoute
+  SettingsMetadataIndexRoute: typeof SettingsMetadataIndexRoute
+}
+
+const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsLibraryRoute: SettingsLibraryRoute,
+  SettingsMetadataSourcesRoute: SettingsMetadataSourcesRoute,
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
+  SettingsPlaybackRoute: SettingsPlaybackRoute,
+  SettingsSchedulesRoute: SettingsSchedulesRoute,
+  SettingsSecurityRoute: SettingsSecurityRoute,
+  SettingsIndexRoute: SettingsIndexRoute,
+  SettingsMetadataIdRoute: SettingsMetadataIdRoute,
+  SettingsMetadataIndexRoute: SettingsMetadataIndexRoute,
+}
+
+const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
+  SettingsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
-  SettingsRoute: SettingsRoute,
+  SettingsRoute: SettingsRouteWithChildren,
+  SetupRoute: SetupRoute,
   PlayIdRoute: PlayIdRoute,
 }
 export const routeTree = rootRouteImport

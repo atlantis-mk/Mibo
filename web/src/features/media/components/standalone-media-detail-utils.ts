@@ -1,4 +1,51 @@
-import type { MediaFile, Track } from '#/lib/mibo-api'
+import type {
+  CatalogAssetDetail,
+  CatalogSourceEvidence,
+  MediaFile,
+  Track,
+} from '#/lib/mibo-api'
+
+export function getPrimaryCatalogAsset(
+  item: Pick<{ assets: CatalogAssetDetail[] }, 'assets'>,
+) {
+  return item.assets[0]
+}
+
+export function getDisplayDatabaseLinks(
+  item: Pick<
+    { metadata_provider: string; external_id: string },
+    'metadata_provider' | 'external_id'
+  >,
+) {
+  return [
+    item.metadata_provider?.toUpperCase() || null,
+    item.external_id || null,
+  ]
+    .filter(Boolean)
+    .join('，')
+}
+
+export function getDisplayMatchStatus(
+  item: Pick<{ governance_status: string }, 'governance_status'>,
+) {
+  return item.governance_status || 'pending'
+}
+
+export function getDisplaySourcePath(
+  item: Pick<{ source_evidence: CatalogSourceEvidence[] }, 'source_evidence'>,
+) {
+  for (const evidence of item.source_evidence ?? []) {
+    if (!evidence.summary || typeof evidence.summary !== 'object') {
+      continue
+    }
+    const storagePath = (evidence.summary as { storage_path?: unknown })
+      .storage_path
+    if (typeof storagePath === 'string' && storagePath.trim()) {
+      return storagePath.trim()
+    }
+  }
+  return 'catalog item'
+}
 
 export function formatVideoTrackLabel(file?: MediaFile) {
   if (!file) return '未知'
@@ -92,16 +139,21 @@ export function formatDate(value: string) {
 
 export function formatMediaType(type: string) {
   if (type === 'movie') return '电影'
-  if (type === 'show') return '剧集'
+  if (type === 'show' || type === 'series' || type === 'episode') return '剧集'
+  if (type === 'season') return '季度'
   return '媒体'
 }
 
 export function formatProbeStatus(status: string) {
   switch (status) {
+    case 'ready':
+    case 'complete':
     case 'done':
-      return '已分析'
+      return '已就绪'
     case 'failed':
       return '分析失败'
+    case 'processing':
+    case 'probing':
     case 'processing':
       return '分析中'
     default:
@@ -111,6 +163,14 @@ export function formatProbeStatus(status: string) {
 
 export function describeMatchStatus(status: string) {
   switch (status) {
+    case 'matched':
+      return ''
+    case 'needs_review':
+      return '该条目的元数据需要人工复核后再确认。'
+    case 'manual':
+      return '该条目当前使用人工治理结果。'
+    case 'locked':
+      return '该条目的关键字段已锁定，刷新不会直接覆盖。'
     case 'pending':
       return '该条目还未完成元数据匹配。'
     case 'searching':
@@ -122,6 +182,32 @@ export function describeMatchStatus(status: string) {
     default:
       return ''
   }
+}
+
+export function formatAvailabilityStatus(status: string) {
+  switch (status) {
+    case 'available':
+      return '可播放'
+    case 'missing':
+      return '缺失'
+    case 'unaired':
+      return '未播出'
+    case 'no_local_media':
+      return '无本地资源'
+    default:
+      return status || '未知状态'
+  }
+}
+
+export function formatAssetLabel(asset?: CatalogAssetDetail) {
+  if (!asset) return '暂无已链接资源'
+  return (
+    [asset.display_name, asset.edition, asset.quality_label]
+      .filter(Boolean)
+      .join(' · ') ||
+    asset.asset_type ||
+    `资源 ${asset.id}`
+  )
 }
 
 export function formatRuntime(value?: number) {

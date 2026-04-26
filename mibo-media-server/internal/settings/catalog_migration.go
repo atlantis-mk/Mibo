@@ -7,27 +7,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atlan/mibo-media-server/internal/database"
 	"gorm.io/gorm"
 )
 
 const catalogMigrationCategory = "catalog_migration"
 
 const (
-	catalogBackfillCompletedAtKey = "catalog_backfill_completed_at"
-	catalogReadEnabledKey         = "catalog_read_enabled"
-	legacyCleanupCompletedAtKey   = "legacy_cleanup_completed_at"
+	catalogBackfillCompletedAtKey   = "catalog_backfill_completed_at"
+	catalogReadEnabledKey           = "catalog_read_enabled"
+	catalogValidationCompletedAtKey = "catalog_validation_completed_at"
+	legacyCleanupCompletedAtKey     = "legacy_cleanup_completed_at"
 )
 
 type CatalogMigrationState struct {
-	CatalogBackfillCompletedAt *time.Time `json:"catalog_backfill_completed_at"`
-	CatalogReadEnabled         bool       `json:"catalog_read_enabled"`
-	LegacyCleanupCompletedAt   *time.Time `json:"legacy_cleanup_completed_at"`
+	CatalogBackfillCompletedAt   *time.Time `json:"catalog_backfill_completed_at"`
+	CatalogReadEnabled           bool       `json:"catalog_read_enabled"`
+	CatalogValidationCompletedAt *time.Time `json:"catalog_validation_completed_at"`
+	LegacyCleanupCompletedAt     *time.Time `json:"legacy_cleanup_completed_at"`
 }
 
 type UpdateCatalogMigrationStateInput struct {
-	CatalogBackfillCompletedAt *time.Time `json:"catalog_backfill_completed_at"`
-	CatalogReadEnabled         bool       `json:"catalog_read_enabled"`
-	LegacyCleanupCompletedAt   *time.Time `json:"legacy_cleanup_completed_at"`
+	CatalogBackfillCompletedAt   *time.Time `json:"catalog_backfill_completed_at"`
+	CatalogReadEnabled           bool       `json:"catalog_read_enabled"`
+	CatalogValidationCompletedAt *time.Time `json:"catalog_validation_completed_at"`
+	LegacyCleanupCompletedAt     *time.Time `json:"legacy_cleanup_completed_at"`
 }
 
 func (s *Service) GetCatalogMigrationState(ctx context.Context) (CatalogMigrationState, error) {
@@ -40,7 +44,11 @@ func (s *Service) GetCatalogMigrationState(ctx context.Context) (CatalogMigratio
 	if err != nil {
 		return CatalogMigrationState{}, err
 	}
-	readEnabled, err := parseCatalogMigrationBool(values[catalogReadEnabledKey], catalogReadEnabledKey)
+	readEnabled, hasExplicitReadEnabled, err := parseCatalogMigrationBool(values[catalogReadEnabledKey], catalogReadEnabledKey)
+	if err != nil {
+		return CatalogMigrationState{}, err
+	}
+	validationCompletedAt, err := parseCatalogMigrationOptionalTimestamp(values[catalogValidationCompletedAtKey], catalogValidationCompletedAtKey)
 	if err != nil {
 		return CatalogMigrationState{}, err
 	}
@@ -48,17 +56,27 @@ func (s *Service) GetCatalogMigrationState(ctx context.Context) (CatalogMigratio
 	if err != nil {
 		return CatalogMigrationState{}, err
 	}
+	if !hasExplicitReadEnabled {
+		readEnabled, err = s.defaultCatalogReadEnabled(ctx, validationCompletedAt, cleanupCompletedAt)
+		if err != nil {
+			return CatalogMigrationState{}, err
+		}
+	}
 
 	return CatalogMigrationState{
-		CatalogBackfillCompletedAt: backfillCompletedAt,
-		CatalogReadEnabled:         readEnabled,
-		LegacyCleanupCompletedAt:   cleanupCompletedAt,
+		CatalogBackfillCompletedAt:   backfillCompletedAt,
+		CatalogReadEnabled:           readEnabled,
+		CatalogValidationCompletedAt: validationCompletedAt,
+		LegacyCleanupCompletedAt:     cleanupCompletedAt,
 	}, nil
 }
 
 func (s *Service) UpdateCatalogMigrationState(ctx context.Context, input UpdateCatalogMigrationStateInput) (CatalogMigrationState, error) {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := upsertOrDeleteCatalogMigrationTimestamp(ctx, tx, catalogBackfillCompletedAtKey, input.CatalogBackfillCompletedAt); err != nil {
+			return err
+		}
+		if err := upsertOrDeleteCatalogMigrationTimestamp(ctx, tx, catalogValidationCompletedAtKey, input.CatalogValidationCompletedAt); err != nil {
 			return err
 		}
 		if err := upsertOrDeleteCatalogMigrationTimestamp(ctx, tx, legacyCleanupCompletedAtKey, input.LegacyCleanupCompletedAt); err != nil {
@@ -93,14 +111,30 @@ func parseCatalogMigrationOptionalTimestamp(value, key string) (*time.Time, erro
 	return &parsed, nil
 }
 
-func parseCatalogMigrationBool(value, key string) (bool, error) {
+func parseCatalogMigrationBool(value, key string) (bool, bool, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
-		return false, nil
+		return false, false, nil
 	}
 	parsed, err := strconv.ParseBool(trimmed)
 	if err != nil {
-		return false, fmt.Errorf("parse %s: %w", key, err)
+		return false, true, fmt.Errorf("parse %s: %w", key, err)
 	}
-	return parsed, nil
+	return parsed, true, nil
+}
+
+func (s *Service) defaultCatalogReadEnabled(ctx context.Context, validationCompletedAt, cleanupCompletedAt *time.Time) (bool, error) {
+	if validationCompletedAt != nil || cleanupCompletedAt != nil {
+		return true, nil
+	}
+
+	var legacyCount int64
+	if err := s.db.WithContext(ctx).Model(&database.MediaItem{}).Where("deleted_at IS NULL").Count(&legacyCount).Error; err != nil {
+		return false, err
+	}
+	if legacyCount > 0 {
+		return false, nil
+	}
+
+	return false, nil
 }

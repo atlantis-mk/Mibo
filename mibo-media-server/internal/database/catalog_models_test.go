@@ -32,8 +32,17 @@ func TestDatabaseOpenMigratesCatalogIndexes(t *testing.T) {
 		{&CatalogExternalID{}, "idx_catalog_external_identity"},
 		{&MetadataFieldState{}, "idx_metadata_field_state_item_field"},
 		{&AssetItem{}, "idx_asset_items_asset_item_role_segment"},
+		{&AssetItem{}, "idx_asset_items_item_role"},
 		{&InventoryFile{}, "idx_inventory_file_storage_path"},
+		{&InventoryFile{}, "idx_inventory_files_library_status_path"},
 		{&AssetFile{}, "idx_asset_files_asset_file_role_part"},
+		{&AssetFile{}, "idx_asset_files_asset_part"},
+		{&MediaStream{}, "idx_media_stream_file_index"},
+		{&UserItemData{}, "idx_user_item_data_user_item_asset"},
+		{&TVSeasonMetadataCache{}, "idx_tv_season_cache_lookup"},
+		{&TVEpisodeMetadataCache{}, "idx_tv_episode_cache_lookup"},
+		{&PlaybackProgress{}, "idx_user_media_item"},
+		{&SystemSetting{}, "idx_system_setting_category_key"},
 	}
 
 	for _, index := range requiredIndexes {
