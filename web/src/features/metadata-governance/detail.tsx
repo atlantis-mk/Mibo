@@ -531,9 +531,15 @@ export function MetadataGovernanceDetail({
   }
 
   const workspace = workspaceQuery.data
+  const workspaceAssets = workspace.assets ?? []
+  const workspaceFieldStates = workspace.field_states ?? []
+  const workspaceSourceEvidence = workspace.source_evidence ?? []
+  const workspaceSelectedImages = workspace.selected_images ?? []
+  const workspaceImageCandidates = workspace.image_candidates ?? []
+  const workspaceRecommendedChildren = workspace.recommended_children ?? []
   const item = buildPreviewItem(workspace)
   const activeCandidates = searchMutation.data ?? []
-  const firstInventoryFileId = workspace.assets.find(
+  const firstInventoryFileId = workspaceAssets.find(
     (asset) => asset.file_ids.length > 0,
   )?.file_ids[0]
 
@@ -695,18 +701,18 @@ export function MetadataGovernanceDetail({
             />
 
             <FieldLocksCard
-              fieldStates={workspace.field_states}
+              fieldStates={workspaceFieldStates}
               isPending={lockMutation.isPending}
               onToggleLock={(fieldKey, nextLocked) => {
                 void lockMutation.mutateAsync({ fieldKey, nextLocked })
               }}
             />
 
-            <SourceEvidenceCard sourceEvidence={workspace.source_evidence} />
+            <SourceEvidenceCard sourceEvidence={workspaceSourceEvidence} />
 
             <ImageCandidatesCard
-              selectedImages={workspace.selected_images}
-              imageCandidates={workspace.image_candidates}
+              selectedImages={workspaceSelectedImages}
+              imageCandidates={workspaceImageCandidates}
               isPending={imageMutation.isPending}
               onSelect={(imageType, url) => {
                 void imageMutation.mutateAsync({ imageType, url })
@@ -740,8 +746,8 @@ export function MetadataGovernanceDetail({
                 availability_status: workspace.availability_status,
                 governance_status: workspace.governance_status,
               }}
-              relatedChildren={workspace.recommended_children}
-              assets={workspace.assets}
+              relatedChildren={workspaceRecommendedChildren}
+              assets={workspaceAssets}
               reprobePendingFileId={
                 typeof reprobeMutation.variables === 'number'
                   ? reprobeMutation.variables
@@ -768,7 +774,7 @@ export function MetadataGovernanceDetail({
             />
             <RelatedChildrenCard
               workspace={workspace}
-              assets={workspace.assets}
+              assets={workspaceAssets}
             />
           </div>
         </div>
@@ -869,7 +875,7 @@ function buildPreviewItem(
     cast: [],
     directors: [],
     trailer: undefined,
-    files: workspace.assets.map((asset) => ({
+    files: (workspace.assets ?? []).map((asset) => ({
       id: asset.file_ids?.[0] ?? asset.id,
       library_id: asset.library_id,
       media_item_id: workspace.item_id,
@@ -918,8 +924,9 @@ function fieldStateValue(
   workspace: CatalogGovernanceWorkspace | undefined,
   fieldKey: string,
 ) {
-  return workspace?.field_states.find((field) => field.field_key === fieldKey)
-    ?.value
+  return (workspace?.field_states ?? []).find(
+    (field) => field.field_key === fieldKey,
+  )?.value
 }
 
 function parseOptionalNumber(value: string) {

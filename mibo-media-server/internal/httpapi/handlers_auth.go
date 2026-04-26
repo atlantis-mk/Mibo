@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/progress"
 )
 
@@ -135,6 +136,16 @@ func (r *Router) handleRecentlyAdded(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	if len(items) == 0 && r.catalog != nil {
+		catalogItems, err := r.catalog.ListRecentlyAdded(req.Context(), limit)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		normalizeCatalogListItemsArtworkURLs(req, catalogItems)
+		writeJSON(req.Context(), w, http.StatusOK, catalogItems)
+		return
+	}
 	normalizeMediaItemSliceArtworkURLs(req, items)
 	writeJSON(req.Context(), w, http.StatusOK, items)
 }
@@ -162,9 +173,30 @@ func (r *Router) handleLatestByLibrary(w http.ResponseWriter, req *http.Request)
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	if !hasLatestByLibraryItems(sections) && r.catalog != nil {
+		catalogSections, err := r.catalog.ListLatestByLibrary(req.Context(), 12)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		for idx := range catalogSections {
+			normalizeCatalogListItemsArtworkURLs(req, catalogSections[idx].Items)
+		}
+		writeJSON(req.Context(), w, http.StatusOK, catalogSections)
+		return
+	}
 	normalizeLatestByLibraryArtworkURLs(req, sections)
 
 	writeJSON(req.Context(), w, http.StatusOK, sections)
+}
+
+func hasLatestByLibraryItems(sections []library.LatestByLibrarySection) bool {
+	for _, section := range sections {
+		if len(section.Items) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Router) handleHomeDiscovery(w http.ResponseWriter, req *http.Request) {

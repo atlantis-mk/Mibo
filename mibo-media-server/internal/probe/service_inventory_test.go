@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,84 @@ func TestProbeInventoryFileAllowsSameStreamIndexesAcrossDifferentFiles(t *testin
 	}
 }
 
+func TestProbeInventoryFileGeneratesCatalogFallbackArtworkWithoutRemoteImages(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeFixture(t)
+	artworkRoot := filepath.Join(t.TempDir(), "artwork")
+	fixture.cfg.FFmpeg = config.FFmpegConfig{Enabled: true, Path: writeInventoryFakeFFmpeg(t), Timeout: time.Second, ArtworkRootPath: artworkRoot}
+
+	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe, fixture.cfg.FFmpeg)
+	if err := service.ProbeInventoryFile(ctx, fixture.file.ID); err != nil {
+		t.Fatalf("probe inventory file: %v", err)
+	}
+
+	var images []database.ItemImage
+	if err := fixture.db.WithContext(ctx).Where("item_id = ?", fixture.item.ID).Order("image_type asc").Find(&images).Error; err != nil {
+		t.Fatalf("load generated catalog images: %v", err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("expected generated poster and backdrop, got %#v", images)
+	}
+	for _, image := range images {
+		if !image.IsSelected {
+			t.Fatalf("expected generated image to be selected, got %#v", image)
+		}
+		if !strings.HasPrefix(image.URL, "/api/v1/items/") {
+			t.Fatalf("expected catalog artwork url, got %#v", image)
+		}
+	}
+	itemID := strings.TrimSpace(strconv.FormatUint(uint64(fixture.item.ID), 10))
+	posterPath := filepath.Join(artworkRoot, "catalog", itemID, "poster.jpg")
+	backdropPath := filepath.Join(artworkRoot, "catalog", itemID, "backdrop.jpg")
+	posterBytes, err := os.ReadFile(posterPath)
+	if err != nil {
+		t.Fatalf("read generated poster: %v", err)
+	}
+	if string(posterBytes) != "fake-artwork" {
+		t.Fatalf("unexpected poster bytes: %q", string(posterBytes))
+	}
+	if _, err := os.Stat(backdropPath); err != nil {
+		t.Fatalf("expected generated backdrop file: %v", err)
+	}
+}
+
+func TestProbeInventoryFileSkipsCatalogFallbackArtworkWhenRemoteImagesExist(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeFixture(t)
+	artworkRoot := filepath.Join(t.TempDir(), "artwork")
+	fixture.cfg.FFmpeg = config.FFmpegConfig{Enabled: true, Path: writeInventoryFakeFFmpeg(t), Timeout: time.Second, ArtworkRootPath: artworkRoot}
+
+	if err := fixture.db.WithContext(ctx).Create(&database.ItemImage{
+		ItemID:     fixture.item.ID,
+		ImageType:  "poster",
+		URL:        "https://image.tmdb.org/t/p/original/poster.jpg",
+		IsSelected: true,
+	}).Error; err != nil {
+		t.Fatalf("seed remote artwork: %v", err)
+	}
+
+	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe, fixture.cfg.FFmpeg)
+	if err := service.ProbeInventoryFile(ctx, fixture.file.ID); err != nil {
+		t.Fatalf("probe inventory file: %v", err)
+	}
+
+	var images []database.ItemImage
+	if err := fixture.db.WithContext(ctx).Where("item_id = ?", fixture.item.ID).Order("id asc").Find(&images).Error; err != nil {
+		t.Fatalf("load artwork rows: %v", err)
+	}
+	if len(images) != 1 || images[0].URL != "https://image.tmdb.org/t/p/original/poster.jpg" {
+		t.Fatalf("expected remote artwork to remain untouched, got %#v", images)
+	}
+	itemID := strings.TrimSpace(strconv.FormatUint(uint64(fixture.item.ID), 10))
+	if _, err := os.Stat(filepath.Join(artworkRoot, "catalog", itemID, "poster.jpg")); !os.IsNotExist(err) {
+		t.Fatalf("expected no generated poster file, got err=%v", err)
+	}
+}
+
 type inventoryProbeFixture struct {
 	cfg      config.Config
 	db       *gorm.DB
@@ -261,6 +340,16 @@ func writeInventoryFakeFFprobe(t *testing.T) string {
 	content := "#!/bin/sh\ncat <<'EOF'\n{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080},{\"codec_type\":\"audio\",\"codec_name\":\"aac\",\"channels\":2,\"tags\":{\"language\":\"eng\",\"title\":\"Stereo\"}},{\"codec_type\":\"subtitle\",\"codec_name\":\"subrip\",\"tags\":{\"language\":\"eng\",\"title\":\"English\"}}],\"format\":{\"duration\":\"7260.25\",\"bit_rate\":\"5000000\"}}\nEOF\n"
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	return path
+}
+
+func writeInventoryFakeFFmpeg(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	content := "#!/bin/sh\nout=\"\"\nfor arg in \"$@\"; do\n  out=\"$arg\"\ndone\nmkdir -p \"$(dirname \"$out\")\"\nprintf 'fake-artwork' > \"$out\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
 	}
 	return path
 }

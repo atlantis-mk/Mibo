@@ -56,6 +56,69 @@ func TestRunSyncLibraryWritesCatalogRowsWithoutLegacyMediaTables(t *testing.T) {
 	if projectionJobs != 2 {
 		t.Fatalf("expected one catalog projection refresh per scan, got %d", projectionJobs)
 	}
+
+	var matchJobs []database.Job
+	if err := db.WithContext(ctx).
+		Where("kind = ?", JobKindMatchCatalogItem).
+		Order("id asc").
+		Find(&matchJobs).Error; err != nil {
+		t.Fatalf("list catalog match jobs: %v", err)
+	}
+	if len(matchJobs) != 2 {
+		t.Fatalf("expected one catalog match job per canonical movie/series target, got %#v", matchJobs)
+	}
+}
+
+func TestQueueCatalogItemMatchDeduplicatesEpisodeHierarchyToSeriesRoot(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	catalogSvc := catalog.NewService(db)
+
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeSeries, Title: "Show A", Path: "/library/Show A", SortKey: "Show A", AvailabilityStatus: catalog.AvailabilityAvailable, GovernanceStatus: catalog.GovernancePending})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonNumber := 1
+	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", Path: "/library/Show A/season-01", SortKey: "Show A S01", IndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable, GovernanceStatus: catalog.GovernancePending})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episodeNumber := 2
+	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 2", Path: "/library/Show A/season-01/episode-02", SortKey: "Show A S01E02", IndexNumber: &episodeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable, GovernanceStatus: catalog.GovernancePending})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+
+	jobFromSeason, err := svc.QueueCatalogItemMatch(ctx, season.ID)
+	if err != nil {
+		t.Fatalf("queue season catalog match: %v", err)
+	}
+	jobFromEpisode, err := svc.QueueCatalogItemMatch(ctx, episode.ID)
+	if err != nil {
+		t.Fatalf("queue episode catalog match: %v", err)
+	}
+	if jobFromSeason.ID == 0 || jobFromEpisode.ID == 0 || jobFromSeason.ID != jobFromEpisode.ID {
+		t.Fatalf("expected season and episode queue to dedupe to the same job, got season=%#v episode=%#v", jobFromSeason, jobFromEpisode)
+	}
+
+	var queued []database.Job
+	if err := db.WithContext(ctx).Where("kind = ?", JobKindMatchCatalogItem).Find(&queued).Error; err != nil {
+		t.Fatalf("list catalog match jobs: %v", err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("expected one queued catalog match job, got %#v", queued)
+	}
+
+	var payload struct {
+		ItemID uint `json:"item_id"`
+	}
+	if err := json.Unmarshal([]byte(queued[0].PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode job payload: %v", err)
+	}
+	if payload.ItemID != series.ID {
+		t.Fatalf("expected queued catalog match to target series root %d, got %d", series.ID, payload.ItemID)
+	}
 }
 
 func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) {

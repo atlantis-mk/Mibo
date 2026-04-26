@@ -62,6 +62,31 @@ func TestCatalogLibraryItemsRouteUsesCatalogWhenReadEnabled(t *testing.T) {
 	}
 }
 
+func TestCatalogLibraryItemsRouteFallsBackToCatalogWhenLegacyEmpty(t *testing.T) {
+	router, _, _, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	if _, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: "Movie A", Path: "/library/MovieA.2024.mkv", SortKey: "Movie A", AvailabilityStatus: catalog.AvailabilityAvailable}); err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/libraries/%d/items?type=movie", libraryID), nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data []catalog.CatalogListItem `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].Type != catalog.ItemTypeMovie {
+		t.Fatalf("expected catalog fallback item, got %#v", response.Data)
+	}
+}
+
 func TestCatalogDiscoveryRouteUsesCatalogSearchDocumentsWhenReadEnabled(t *testing.T) {
 	router, db, authSvc, _, settingsSvc, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
 	ctx := context.Background()
@@ -97,6 +122,96 @@ func TestCatalogDiscoveryRouteUsesCatalogSearchDocumentsWhenReadEnabled(t *testi
 	}
 	if len(response.Data.Items) != 1 || response.Data.Items[0].ID != item.ID {
 		t.Fatalf("unexpected discovery items: %#v", response.Data.Items)
+	}
+}
+
+func TestCatalogDiscoveryRouteFallsBackToCatalogWhenLegacySearchEmpty(t *testing.T) {
+	router, _, authSvc, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	authHeader := createAuthHeader(t, ctx, authSvc)
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: "Movie A", Path: "/library/MovieA.2024.mkv", SortKey: "Movie A", AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if err := catalogSvc.RefreshItemProjection(ctx, item.ID); err != nil {
+		t.Fatalf("refresh item projection: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/discovery?scope=library&library_id=%d&q=Movie", libraryID), nil)
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data struct {
+			Items []catalog.CatalogListItem `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data.Items) != 1 || response.Data.Items[0].ID != item.ID {
+		t.Fatalf("expected catalog search fallback item, got %#v", response.Data.Items)
+	}
+}
+
+func TestCatalogRecentlyAddedRouteFallsBackWhenLegacyEmpty(t *testing.T) {
+	router, _, _, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: "Movie A", Path: "/library/MovieA.2024.mkv", SortKey: "Movie A", AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/home/recently-added?limit=6", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data []catalog.CatalogListItem `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != item.ID {
+		t.Fatalf("expected catalog recently-added fallback, got %#v", response.Data)
+	}
+}
+
+func TestCatalogLatestByLibraryRouteFallsBackWhenLegacyEmpty(t *testing.T) {
+	router, db, authSvc, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	authHeader := createAuthHeader(t, ctx, authSvc)
+	if err := db.WithContext(ctx).Model(&database.Library{}).Where("id = ?", libraryID).Update("status", "active").Error; err != nil {
+		t.Fatalf("activate library: %v", err)
+	}
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: "Movie A", Path: "/library/MovieA.2024.mkv", SortKey: "Movie A", AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/home/latest-by-library", nil)
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data []catalog.CatalogLatestByLibrarySection `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].LibraryID != libraryID || len(response.Data[0].Items) != 1 || response.Data[0].Items[0].ID != item.ID {
+		t.Fatalf("expected catalog latest-by-library fallback, got %#v", response.Data)
 	}
 }
 

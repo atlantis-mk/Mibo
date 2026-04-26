@@ -129,6 +129,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/storage-events", router.handleStorageEvent)
 	mux.HandleFunc("GET /api/v1/libraries/{id}/items", router.handleListLibraryItems)
 	mux.HandleFunc("GET /api/v1/items/{id}", router.handleGetCatalogItem)
+	mux.HandleFunc("GET /api/v1/items/{id}/artwork/{kind}", router.handleGetCatalogItemArtwork)
 	mux.HandleFunc("GET /api/v1/items/{id}/children", router.handleListCatalogItemChildren)
 	mux.HandleFunc("GET /api/v1/items/{id}/progress", router.handleGetCatalogItemProgress)
 	mux.HandleFunc("GET /api/v1/items/{id}/playback", router.handleGetCatalogPlaybackSource)

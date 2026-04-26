@@ -150,6 +150,13 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 		}
 		if writeResult.File.ID != 0 {
 			result.MediaFilesUpserted++
+		}
+		if writeResult.Item.ID != 0 {
+			if _, err := s.QueueCatalogItemMatch(ctx, writeResult.Item.ID); err != nil {
+				return err
+			}
+		}
+		if writeResult.File.ID != 0 {
 			if _, err := s.QueueInventoryFileProbe(ctx, writeResult.File.ID, false); err != nil {
 				return err
 			}

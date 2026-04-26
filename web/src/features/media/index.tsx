@@ -45,6 +45,7 @@ export default function MediaDetail({
     enabled: hasHydrated && !!token && hasValidMediaItemId,
   })
   const detailItem = itemQuery.data
+  const detailAssets = itemQuery.data?.assets ?? []
   const presentationItem = itemQuery.data
     ? catalogItemDetailToPresentation(itemQuery.data)
     : null
@@ -87,7 +88,7 @@ export default function MediaDetail({
         throw new Error('当前未登录，无法重新探测媒体文件。')
       }
 
-      const primaryFileId = itemQuery.data?.assets.find(
+      const primaryFileId = detailAssets.find(
         (asset) => asset.file_ids.length > 0,
       )?.file_ids[0]
       if (!primaryFileId) {
@@ -129,7 +130,7 @@ export default function MediaDetail({
 
       return createAuthedMiboApi(token).updateProgress({
         item_id: mediaItemId,
-        asset_id: item.assets[0]?.id,
+        asset_id: item.assets?.[0]?.id,
         position_seconds: durationSeconds,
         duration_seconds: durationSeconds,
         completed: true,
@@ -262,7 +263,7 @@ export default function MediaDetail({
             search: { fromStart: false, assetId },
           })
         }}
-        assetChoices={itemQuery.data.assets}
+        assetChoices={detailAssets}
         onRematchItem={() => {
           void rematchMutation.mutateAsync()
         }}

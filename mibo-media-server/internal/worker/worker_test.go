@@ -148,6 +148,22 @@ func TestRunOnceProcessesSyncLibraryJob(t *testing.T) {
 		t.Fatalf("expected 4 catalog items (movie + series/season/episode), got %d", catalogCount)
 	}
 
+	var externalIDCount int64
+	if err := db.WithContext(ctx).Model(&database.CatalogExternalID{}).Count(&externalIDCount).Error; err != nil {
+		t.Fatalf("count catalog external ids: %v", err)
+	}
+	if externalIDCount == 0 {
+		t.Fatalf("expected auto catalog match to persist external ids after scan")
+	}
+
+	var selectedImageCount int64
+	if err := db.WithContext(ctx).Model(&database.ItemImage{}).Where("is_selected = ?", true).Count(&selectedImageCount).Error; err != nil {
+		t.Fatalf("count selected catalog images: %v", err)
+	}
+	if selectedImageCount == 0 {
+		t.Fatalf("expected auto catalog match to persist selected artwork after scan")
+	}
+
 	var legacyItemCount int64
 	if err := db.WithContext(ctx).Model(&database.MediaItem{}).Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).Count(&legacyItemCount).Error; err != nil {
 		t.Fatalf("count legacy media items: %v", err)

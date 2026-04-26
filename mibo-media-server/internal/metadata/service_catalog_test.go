@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -98,6 +99,62 @@ func TestMatchCatalogItemMatchesMovieItem(t *testing.T) {
 	}
 	if selectedByType["logo"].URL != tmdb.URL+"/images/matched-movie-logo-en.png" {
 		t.Fatalf("unexpected logo image: %#v", selectedByType["logo"])
+	}
+}
+
+func TestMatchCatalogItemPrefersRemoteImagesOverGeneratedCatalogFallback(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/movie":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 101, "title": "Matched Movie", "original_title": "Matched Movie Original", "release_date": "2024-02-02"}}})
+		case "/movie/101":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "title": "Matched Movie", "original_title": "Matched Movie Original", "overview": "Catalog movie overview", "poster_path": "/matched-movie-poster.jpg", "backdrop_path": "/matched-movie-backdrop.jpg", "release_date": "2024-02-02", "runtime": 121, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if err := db.WithContext(ctx).Create([]database.ItemImage{{ItemID: item.ID, ImageType: "poster", URL: fmt.Sprintf("/api/v1/items/%d/artwork/poster", item.ID), IsSelected: true}, {ItemID: item.ID, ImageType: "backdrop", URL: fmt.Sprintf("/api/v1/items/%d/artwork/backdrop", item.ID), IsSelected: true}}).Error; err != nil {
+		t.Fatalf("seed generated fallback images: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if err := svc.MatchCatalogItem(ctx, item.ID); err != nil {
+		t.Fatalf("match catalog item: %v", err)
+	}
+
+	var images []database.ItemImage
+	if err := db.WithContext(ctx).Where("item_id = ?", item.ID).Order("image_type asc, id asc").Find(&images).Error; err != nil {
+		t.Fatalf("load catalog images: %v", err)
+	}
+	selectedByType := make(map[string]database.ItemImage, len(images))
+	for _, image := range images {
+		if image.IsSelected {
+			selectedByType[image.ImageType] = image
+		}
+	}
+	if selectedByType["poster"].URL != tmdb.URL+"/images/matched-movie-poster.jpg" {
+		t.Fatalf("expected remote poster to replace generated fallback, got %#v", selectedByType["poster"])
+	}
+	if selectedByType["backdrop"].URL != tmdb.URL+"/images/matched-movie-backdrop.jpg" {
+		t.Fatalf("expected remote backdrop to replace generated fallback, got %#v", selectedByType["backdrop"])
 	}
 }
 

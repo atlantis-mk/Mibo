@@ -64,7 +64,8 @@ export function parseMediaDetailView(value: unknown): MediaDetailView {
 export function catalogItemDetailToPresentation(
   item: CatalogItemDetail,
 ): CatalogDetailPresentation {
-  const primaryIdentity = item.external_identities[0]
+  const primaryIdentity = item.external_identities?.[0]
+  const seasons = item.seasons ?? []
 
   return {
     id: item.id,
@@ -86,9 +87,9 @@ export function catalogItemDetailToPresentation(
     availability_status: item.availability_status,
     governance_status: item.governance_status,
     series_title_display: item.title,
-    default_season_number: item.seasons[0]?.index_number,
-    source_evidence: item.source_evidence,
-    assets: item.assets,
+    default_season_number: seasons[0]?.index_number,
+    source_evidence: item.source_evidence ?? [],
+    assets: item.assets ?? [],
   }
 }
 
@@ -101,7 +102,7 @@ export function catalogSeasonsToRails(
     overview: season.overview ?? '',
     poster_url: selectedCatalogImageUrl(season.selected_images, 'poster'),
     runtime_seconds: season.runtime_seconds,
-    episodes: season.episodes.map((episode) => ({
+    episodes: (season.episodes ?? []).map((episode) => ({
       item_id: episode.id,
       season_number: episode.parent_index_number ?? season.index_number ?? 0,
       episode_number: episode.index_number ?? 0,
@@ -187,7 +188,7 @@ export function getMediaCardBackdropUrl(item: MediaCardItem) {
 
 export function getMediaCardMetadataProvider(item: MediaCardItem) {
   return isCatalogListItem(item)
-    ? (item.external_identities[0]?.provider ?? '')
+    ? (item.external_identities?.[0]?.provider ?? '')
     : item.metadata_provider
 }
 
@@ -228,7 +229,7 @@ function titleFromSourcePath(sourcePath: string) {
 }
 
 function selectedCatalogImageUrl(
-  images: { image_type: string; url: string }[],
+  images: { image_type: string; url: string }[] | undefined,
   imageType: string,
 ) {
   return (

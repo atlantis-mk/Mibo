@@ -669,6 +669,7 @@ export function RelatedChildrenCard({
   workspace: CatalogGovernanceWorkspace
   assets: CatalogAssetDetail[]
 }) {
+  const relatedChildren = workspace.recommended_children ?? []
   const linkedCounts = new Map<number, number>()
   for (const asset of assets) {
     for (const link of asset.links) {
@@ -684,8 +685,8 @@ export function RelatedChildrenCard({
       </CardHeader>
       <Separator className="bg-border" />
       <CardContent className="space-y-3 px-5 py-5">
-        {workspace.recommended_children.length ? (
-          workspace.recommended_children.map((child) => (
+        {relatedChildren.length ? (
+          relatedChildren.map((child) => (
             <div
               key={child.id}
               className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3"

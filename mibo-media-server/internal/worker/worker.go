@@ -169,6 +169,24 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.metadata.MatchItem(ctx, payload.MediaItemID)
+	case library.JobKindMatchCatalogItem:
+		if r.metadata == nil {
+			return nil
+		}
+		configured, err := r.metadata.CatalogMatchingConfigured(ctx)
+		if err != nil {
+			return err
+		}
+		if !configured {
+			return nil
+		}
+		var payload struct {
+			ItemID uint `json:"item_id"`
+		}
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		return r.metadata.MatchCatalogItem(ctx, payload.ItemID)
 	case library.JobKindRefetchMediaItem:
 		var payload struct {
 			MediaItemID uint `json:"media_item_id"`

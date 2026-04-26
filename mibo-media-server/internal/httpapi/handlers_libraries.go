@@ -150,6 +150,16 @@ func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	if len(items) == 0 && r.catalog != nil {
+		catalogItems, err := r.catalog.ListLibraryItems(req.Context(), libraryID, strings.TrimSpace(req.URL.Query().Get("q")), strings.TrimSpace(req.URL.Query().Get("type")), limit)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		normalizeCatalogListItemsArtworkURLs(req, catalogItems)
+		writeJSON(req.Context(), w, http.StatusOK, catalogItems)
+		return
+	}
 
 	out := make([]library.DiscoveryItem, 0, len(items))
 	for _, item := range items {

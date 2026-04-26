@@ -312,8 +312,8 @@ export type CatalogListItem = {
   first_air_date?: string
   last_air_date?: string
   child_summary?: CatalogChildSummary
-  selected_images: CatalogSelectedImage[]
-  external_identities: CatalogExternalIdentity[]
+  selected_images?: CatalogSelectedImage[]
+  external_identities?: CatalogExternalIdentity[]
 }
 
 export type CatalogAssetDetail = {
@@ -346,11 +346,11 @@ export type CatalogEpisodeDetail = {
   governance_status: string
   release_date?: string
   first_air_date?: string
-  selected_images: CatalogSelectedImage[]
-  external_identities: CatalogExternalIdentity[]
-  source_evidence: CatalogSourceEvidence[]
-  field_states: CatalogFieldState[]
-  assets: CatalogAssetDetail[]
+  selected_images?: CatalogSelectedImage[]
+  external_identities?: CatalogExternalIdentity[]
+  source_evidence?: CatalogSourceEvidence[]
+  field_states?: CatalogFieldState[]
+  assets?: CatalogAssetDetail[]
 }
 
 export type CatalogSeasonDetail = {
@@ -365,11 +365,11 @@ export type CatalogSeasonDetail = {
   availability_status: string
   governance_status: string
   child_summary?: CatalogChildSummary
-  selected_images: CatalogSelectedImage[]
-  external_identities: CatalogExternalIdentity[]
-  source_evidence: CatalogSourceEvidence[]
-  field_states: CatalogFieldState[]
-  episodes: CatalogEpisodeDetail[]
+  selected_images?: CatalogSelectedImage[]
+  external_identities?: CatalogExternalIdentity[]
+  source_evidence?: CatalogSourceEvidence[]
+  field_states?: CatalogFieldState[]
+  episodes?: CatalogEpisodeDetail[]
 }
 
 export type CatalogItemDetail = {
@@ -392,13 +392,13 @@ export type CatalogItemDetail = {
   first_air_date?: string
   last_air_date?: string
   child_summary?: CatalogChildSummary
-  selected_images: CatalogSelectedImage[]
-  external_identities: CatalogExternalIdentity[]
-  source_evidence: CatalogSourceEvidence[]
-  field_states: CatalogFieldState[]
-  seasons: CatalogSeasonDetail[]
-  episodes: CatalogEpisodeDetail[]
-  assets: CatalogAssetDetail[]
+  selected_images?: CatalogSelectedImage[]
+  external_identities?: CatalogExternalIdentity[]
+  source_evidence?: CatalogSourceEvidence[]
+  field_states?: CatalogFieldState[]
+  seasons?: CatalogSeasonDetail[]
+  episodes?: CatalogEpisodeDetail[]
+  assets?: CatalogAssetDetail[]
 }
 
 export type CatalogGovernanceWorkspace = {
@@ -408,13 +408,13 @@ export type CatalogGovernanceWorkspace = {
   title: string
   availability_status: string
   governance_status: string
-  selected_images: CatalogSelectedImage[]
-  image_candidates: CatalogSelectedImage[]
-  external_identities: CatalogExternalIdentity[]
-  source_evidence: CatalogSourceEvidence[]
-  field_states: CatalogFieldState[]
-  assets: CatalogAssetDetail[]
-  recommended_children: CatalogListItem[]
+  selected_images?: CatalogSelectedImage[]
+  image_candidates?: CatalogSelectedImage[]
+  external_identities?: CatalogExternalIdentity[]
+  source_evidence?: CatalogSourceEvidence[]
+  field_states?: CatalogFieldState[]
+  assets?: CatalogAssetDetail[]
+  recommended_children?: CatalogListItem[]
 }
 
 export type ProgressState = {
@@ -673,7 +673,7 @@ export function getApiBaseUrl() {
     (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
       /\/$/,
       '',
-    ) ?? 'http://127.0.0.1:8080'
+    ) ?? 'http://10.0.0.33:8080'
   )
 }
 

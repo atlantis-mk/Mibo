@@ -6,9 +6,9 @@ import type {
 } from '#/lib/mibo-api'
 
 export function getPrimaryCatalogAsset(
-  item: Pick<{ assets: CatalogAssetDetail[] }, 'assets'>,
+  item: Pick<{ assets?: CatalogAssetDetail[] }, 'assets'>,
 ) {
-  return item.assets[0]
+  return item.assets?.[0]
 }
 
 export function getDisplayDatabaseLinks(

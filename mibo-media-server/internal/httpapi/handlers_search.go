@@ -42,6 +42,16 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 			writeError(req.Context(), w, http.StatusInternalServerError, err)
 			return
 		}
+		if len(items) == 0 && r.catalog != nil {
+			catalogItems, err := r.listCatalogDiscoveryItems(req.Context(), input)
+			if err != nil {
+				writeError(req.Context(), w, http.StatusInternalServerError, err)
+				return
+			}
+			normalizeCatalogListItemsArtworkURLs(req, catalogItems)
+			writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": catalogItems})
+			return
+		}
 		normalizeDiscoveryItemsArtworkURLs(req, items)
 		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
 		return
@@ -49,6 +59,16 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 	results, err := r.search.Search(req.Context(), user.ID, input)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(results) == 0 && r.catalog != nil {
+		catalogItems, err := r.listCatalogDiscoveryItems(req.Context(), input)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+			return
+		}
+		normalizeCatalogListItemsArtworkURLs(req, catalogItems)
+		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": catalogItems})
 		return
 	}
 	normalizeSearchResultsArtworkURLs(req, results)

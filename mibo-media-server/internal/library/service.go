@@ -58,6 +58,7 @@ const (
 	JobKindSyncLibrary                     = "sync_library"
 	JobKindTargetedRefresh                 = "targeted_refresh"
 	JobKindMatchMediaItem                  = "match_media_item"
+	JobKindMatchCatalogItem                = "match_catalog_item"
 	JobKindRefetchMediaItem                = "refetch_media_item"
 	JobKindProbeInventoryFile              = "probe_inventory_file"
 	JobKindReindexSearchDocument           = "reindex_search_document"

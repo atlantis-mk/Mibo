@@ -47,6 +47,14 @@ func (s *Service) MatchCatalogItem(ctx context.Context, itemID uint) error {
 	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, searchMatch.confidence)
 }
 
+func (s *Service) CatalogMatchingConfigured(ctx context.Context) (bool, error) {
+	tmdbCfg, err := s.tmdbConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(tmdbCfg.APIKey) != "", nil
+}
+
 func (s *Service) SearchCatalogCandidates(ctx context.Context, itemID uint, input ManualSearchInput) ([]SearchCandidate, error) {
 	tmdbCfg, err := s.tmdbConfig(ctx)
 	if err != nil {
@@ -620,6 +628,16 @@ func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, 
 		return nil
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var sameTypeImages []database.ItemImage
+		if preferSelected {
+			if err := tx.WithContext(ctx).
+				Where("item_id = ? AND image_type = ?", itemID, trimmedType).
+				Order("id asc").
+				Find(&sameTypeImages).Error; err != nil {
+				return err
+			}
+		}
+
 		var image database.ItemImage
 		err := tx.WithContext(ctx).
 			Where("item_id = ? AND image_type = ? AND url = ?", itemID, trimmedType, trimmedURL).
@@ -630,18 +648,19 @@ func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, 
 
 		selectByDefault := false
 		if preferSelected {
-			var selectedCount int64
-			if err := tx.WithContext(ctx).
-				Model(&database.ItemImage{}).
-				Where("item_id = ? AND image_type = ? AND is_selected = ?", itemID, trimmedType, true).
-				Count(&selectedCount).Error; err != nil {
-				return err
-			}
-			selectByDefault = selectedCount == 0
+			selectByDefault = shouldPreferCatalogSelectedImage(itemID, sameTypeImages)
 		}
 
 		now := time.Now().UTC()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if selectByDefault {
+				if err := tx.WithContext(ctx).
+					Model(&database.ItemImage{}).
+					Where("item_id = ? AND image_type = ?", itemID, trimmedType).
+					Update("is_selected", false).Error; err != nil {
+					return err
+				}
+			}
 			return tx.WithContext(ctx).Create(&database.ItemImage{
 				ItemID:     itemID,
 				ImageType:  trimmedType,
@@ -660,10 +679,33 @@ func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, 
 			"updated_at": now,
 		}
 		if selectByDefault && !image.IsSelected {
+			if err := tx.WithContext(ctx).
+				Model(&database.ItemImage{}).
+				Where("item_id = ? AND image_type = ?", itemID, trimmedType).
+				Update("is_selected", false).Error; err != nil {
+				return err
+			}
 			updates["is_selected"] = true
 		}
 		return tx.WithContext(ctx).Model(&database.ItemImage{}).Where("id = ?", image.ID).Updates(updates).Error
 	})
+}
+
+func shouldPreferCatalogSelectedImage(itemID uint, images []database.ItemImage) bool {
+	for _, image := range images {
+		if !image.IsSelected {
+			continue
+		}
+		if !isGeneratedCatalogArtworkURL(itemID, image.URL) {
+			return false
+		}
+	}
+	return true
+}
+
+func isGeneratedCatalogArtworkURL(itemID uint, rawURL string) bool {
+	prefix := fmt.Sprintf("/api/v1/items/%d/artwork/", itemID)
+	return strings.HasPrefix(strings.TrimSpace(rawURL), prefix)
 }
 
 func tmdbExternalID(id int) string {

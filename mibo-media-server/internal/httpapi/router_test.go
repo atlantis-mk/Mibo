@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/auth"
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
@@ -662,14 +663,14 @@ func TestLibraryItemEndpoints(t *testing.T) {
 		t.Fatalf("create media item: %v", err)
 	}
 	mediaFile := database.MediaFile{
-		LibraryID:        createdLibrary.ID,
-		MediaItemID:      &mediaItem.ID,
-		StoragePath:      mediaItem.SourcePath,
-		Container:        "mp4",
-		ProbeStatus:      probe.StatusReady,
-		VideoCodec:       "h264",
-		DurationSeconds:  float64Ptr(7260.25),
-		AudioTracksJSON:  `[{"codec":"aac","language":"eng","title":"Stereo","channels":2}]`,
+		LibraryID:          createdLibrary.ID,
+		MediaItemID:        &mediaItem.ID,
+		StoragePath:        mediaItem.SourcePath,
+		Container:          "mp4",
+		ProbeStatus:        probe.StatusReady,
+		VideoCodec:         "h264",
+		DurationSeconds:    float64Ptr(7260.25),
+		AudioTracksJSON:    `[{"codec":"aac","language":"eng","title":"Stereo","channels":2}]`,
 		SubtitleTracksJSON: `[{"codec":"subrip","language":"eng","title":"English"}]`,
 	}
 	if err := db.WithContext(ctx).Create(&mediaFile).Error; err != nil {
@@ -1107,6 +1108,87 @@ func TestGeneratedArtworkURLsAreAbsoluteAndServed(t *testing.T) {
 	}
 	if string(artworkRecorder.Body.Bytes()) != string(posterBytes) {
 		t.Fatalf("unexpected artwork body: %q", artworkRecorder.Body.String())
+	}
+}
+
+func TestGeneratedCatalogArtworkURLsAreAbsoluteAndServed(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	artworkRoot := filepath.Join(t.TempDir(), "artwork")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Driver: "sqlite"},
+		Storage:  config.StorageConfig{Provider: "local"},
+		Local:    config.LocalStorageConfig{RootPath: t.TempDir()},
+		FFmpeg:   config.FFmpegConfig{ArtworkRootPath: artworkRoot},
+	}
+	registry := providers.NewRegistry(cfg)
+	authSvc := auth.NewService(db)
+	jobsSvc := jobs.NewService(db)
+	settingsSvc := settings.NewService(db, cfg.Metadata)
+	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	catalogSvc := catalog.NewService(db)
+	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db), search.NewService(), metadata.NewService(db, cfg.Metadata, settingsSvc), settingsSvc, catalogSvc)
+
+	ctx := context.Background()
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Movie D", Path: "/movies/MovieD.2024.mkv", SortKey: "Movie D", AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	posterURL := fmt.Sprintf("/api/v1/items/%d/artwork/poster", item.ID)
+	backdropURL := fmt.Sprintf("/api/v1/items/%d/artwork/backdrop", item.ID)
+	if err := db.WithContext(ctx).Create([]database.ItemImage{{ItemID: item.ID, ImageType: "poster", URL: posterURL, IsSelected: true}, {ItemID: item.ID, ImageType: "backdrop", URL: backdropURL, IsSelected: true}}).Error; err != nil {
+		t.Fatalf("seed catalog images: %v", err)
+	}
+	artworkDir := filepath.Join(artworkRoot, "catalog", fmt.Sprintf("%d", item.ID))
+	if err := os.MkdirAll(artworkDir, 0o755); err != nil {
+		t.Fatalf("create catalog artwork dir: %v", err)
+	}
+	posterBytes := []byte("catalog-poster-image")
+	if err := os.WriteFile(filepath.Join(artworkDir, "poster.jpg"), posterBytes, 0o644); err != nil {
+		t.Fatalf("write catalog poster art: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/items/%d", item.ID), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get catalog item status: %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var body struct {
+		Data catalog.CatalogItemDetail `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode catalog item response: %v", err)
+	}
+	if len(body.Data.SelectedImages) != 2 {
+		t.Fatalf("expected selected images, got %#v", body.Data.SelectedImages)
+	}
+	selectedByType := map[string]string{}
+	for _, image := range body.Data.SelectedImages {
+		selectedByType[image.ImageType] = image.URL
+	}
+	if selectedByType["poster"] != "http://example.com"+posterURL {
+		t.Fatalf("expected absolute catalog poster url, got %q", selectedByType["poster"])
+	}
+	if selectedByType["backdrop"] != "http://example.com"+backdropURL {
+		t.Fatalf("expected absolute catalog backdrop url, got %q", selectedByType["backdrop"])
+	}
+
+	artworkRequest := httptest.NewRequest(http.MethodGet, posterURL, nil)
+	artworkRecorder := httptest.NewRecorder()
+	router.ServeHTTP(artworkRecorder, artworkRequest)
+	if artworkRecorder.Code != http.StatusOK {
+		t.Fatalf("catalog artwork status: %d body=%s", artworkRecorder.Code, artworkRecorder.Body.String())
+	}
+	if contentType := artworkRecorder.Header().Get("Content-Type"); !strings.Contains(contentType, "image/jpeg") {
+		t.Fatalf("expected image/jpeg, got %q", contentType)
+	}
+	if string(artworkRecorder.Body.Bytes()) != string(posterBytes) {
+		t.Fatalf("unexpected catalog artwork body: %q", artworkRecorder.Body.String())
 	}
 }
 

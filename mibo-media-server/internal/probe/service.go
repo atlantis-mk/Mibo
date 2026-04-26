@@ -163,6 +163,7 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 	}
 
 	if !s.cfg.Enabled {
+		s.tryGenerateCatalogFallbackArtwork(ctx, file, target, nil)
 		return s.markInventoryUnavailable(ctx, file.ID, "ffprobe disabled")
 	}
 
@@ -171,6 +172,7 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 
 	output, err := exec.CommandContext(probeCtx, s.cfg.Path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", target).Output()
 	if err != nil {
+		s.tryGenerateCatalogFallbackArtwork(ctx, file, target, nil)
 		var execErr *exec.Error
 		if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
 			return s.markInventoryUnavailable(ctx, file.ID, "ffprobe not found")
@@ -180,11 +182,13 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 
 	var parsed ffprobeOutput
 	if err := json.Unmarshal(output, &parsed); err != nil {
+		s.tryGenerateCatalogFallbackArtwork(ctx, file, target, nil)
 		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 
 	updates, runtimeSeconds, err := buildProbeUpdates(parsed)
 	if err != nil {
+		s.tryGenerateCatalogFallbackArtwork(ctx, file, target, runtimeSeconds)
 		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 	streams := buildInventoryMediaStreams(file.ID, parsed, updates)
@@ -230,6 +234,7 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 	}); err != nil {
 		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
+	s.tryGenerateCatalogFallbackArtwork(ctx, file, target, runtimeSeconds)
 
 	return nil
 }
@@ -237,6 +242,12 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 func (s *Service) tryGenerateFallbackArtwork(ctx context.Context, file database.MediaFile, target string, runtimeSeconds *int) {
 	if err := s.generateFallbackArtwork(ctx, file, target, runtimeSeconds); err != nil {
 		log.Printf("probe: fallback artwork generation failed for media_file=%d: %v", file.ID, err)
+	}
+}
+
+func (s *Service) tryGenerateCatalogFallbackArtwork(ctx context.Context, file database.InventoryFile, target string, runtimeSeconds *int) {
+	if err := s.generateCatalogFallbackArtwork(ctx, file, target, runtimeSeconds); err != nil {
+		log.Printf("probe: catalog fallback artwork generation failed for inventory_file=%d: %v", file.ID, err)
 	}
 }
 

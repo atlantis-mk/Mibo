@@ -29,6 +29,25 @@ func (r *Router) handleGetMediaItemArtwork(w http.ResponseWriter, req *http.Requ
 		return
 	}
 	artworkPath := filepath.Join(r.generatedArtworkRootPath(), strconvFormatUint(mediaItemID), kind+".jpg")
+	r.serveGeneratedArtwork(w, req, artworkPath)
+}
+
+func (r *Router) handleGetCatalogItemArtwork(w http.ResponseWriter, req *http.Request) {
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	kind := normalizeArtworkKind(req.PathValue("kind"))
+	if kind == "" {
+		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("artwork kind must be poster or backdrop"))
+		return
+	}
+	artworkPath := filepath.Join(r.generatedArtworkRootPath(), "catalog", strconvFormatUint(itemID), kind+".jpg")
+	r.serveGeneratedArtwork(w, req, artworkPath)
+}
+
+func (r *Router) serveGeneratedArtwork(w http.ResponseWriter, req *http.Request, artworkPath string) {
 	if _, err := os.Stat(artworkPath); err != nil {
 		writeError(req.Context(), w, http.StatusNotFound, err)
 		return
