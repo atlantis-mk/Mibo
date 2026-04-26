@@ -112,76 +112,11 @@ export type OpenListTestResult = {
   root_path: string
 }
 
-export type MediaItem = {
-  id: number
-  library_id: number
-  type: string
-  title: string
-  original_title: string
-  series_title: string
-  overview: string
-  poster_url: string
-  logo_url?: string
-  backdrop_url: string
-  year?: number
-  vote_average?: number
-  release_date: string
-  runtime_seconds?: number
-  season_number?: number
-  episode_number?: number
-  source_path: string
-  match_status: string
-  metadata_provider: string
-  external_id: string
-  metadata_confidence?: number
-  status: string
-  created_at: string
-  updated_at: string
-}
-
 export type Track = {
   codec: string
   language: string
   title: string
   channels?: number
-}
-
-export type MediaFile = {
-  id: number
-  library_id: number
-  media_item_id?: number
-  storage_path: string
-  container: string
-  size_bytes: number
-  fingerprint: string
-  probe_status: string
-  probe_error: string
-  duration_seconds?: number
-  bit_rate?: number
-  width?: number
-  height?: number
-  video_codec: string
-  audio_tracks: Track[]
-  subtitle_tracks: Track[]
-}
-
-export type Person = {
-  name: string
-  role: string
-  avatar_url: string
-}
-
-export type Trailer = {
-  provider: string
-  site: string
-  key: string
-  name: string
-  type: string
-  official: boolean
-  language: string
-  watch_url: string
-  embed_url: string
-  thumbnail: string
 }
 
 export type MetadataSearchCandidate = {
@@ -198,40 +133,6 @@ export type MetadataSearchCandidate = {
   confidence: number
   matched_query?: string
   reason_summary?: string
-}
-
-export type MediaItemDetail = MediaItem & {
-  series_tmdb_id?: number
-  series_title_display: string
-  default_season_number?: number
-  genres: string[]
-  cast: Person[]
-  directors: Person[]
-  trailer?: Trailer
-  files: MediaFile[]
-}
-
-export type TVSeasonMetadata = {
-  season_number: number
-  name: string
-  overview: string
-  poster_url: string
-  runtime_seconds?: number
-}
-
-export type TVEpisodeMetadata = {
-  media_item_id?: number
-  season_number: number
-  episode_number: number
-  name: string
-  overview: string
-  still_url: string
-  air_date?: string
-  runtime_seconds?: number
-}
-
-export type TVSeasonWithEpisodes = TVSeasonMetadata & {
-  episodes: TVEpisodeMetadata[]
 }
 
 export type CatalogSelectedImage = {
@@ -421,8 +322,6 @@ export type ProgressState = {
   user_id: number
   item_id?: number
   asset_id?: number
-  media_item_id: number
-  media_file_id?: number
   position_seconds: number
   duration_seconds?: number
   played_percentage?: number
@@ -430,16 +329,6 @@ export type ProgressState = {
   watched: boolean
   completed_at?: string
   last_played_at?: string
-}
-
-export type ProgressEntry = ProgressState & {
-  media_item: MediaItem
-}
-
-export type LatestByLibrarySection = {
-  library_id: number
-  library_name: string
-  items: MediaItem[]
 }
 
 export type CatalogLatestByLibrarySection = {
@@ -492,21 +381,7 @@ export type DiscoveryQuery = {
   limit?: number
 }
 
-export type DiscoveryItem = {
-  item: MediaItem
-  watched_state: string
-}
-
-export type SearchResult = {
-  item: MediaItem
-  watched_state: string
-  highlight: string
-}
-
-export type CatalogDiscoveryResult =
-  | CatalogListItem
-  | DiscoveryItem
-  | SearchResult
+export type CatalogDiscoveryResult = CatalogListItem
 
 export type SearchHistoryEntry = {
   id: number
@@ -519,12 +394,6 @@ export type SearchHistoryEntry = {
   watched_state: string
   sort: 'recent' | 'title' | 'year' | 'watch_status'
   last_used_at: string
-}
-
-export type HomeDiscovery = {
-  continue_watching: ProgressEntry[]
-  recently_played: ProgressEntry[]
-  latest_by_library: LatestByLibrarySection[]
 }
 
 export type ClientProfile = 'web' | 'mobile' | 'tv'
@@ -553,8 +422,6 @@ export type PlaybackSource = {
   item_id?: number
   asset_id?: number
   file_id?: number
-  media_item_id: number
-  media_file_id: number
   title: string
   type: string
   container: string
@@ -913,7 +780,7 @@ export function createMiboApi(options: ApiOptions) {
       }
 
       const queryString = query.toString()
-      return request<DiscoveryItem[]>(
+      return request<CatalogListItem[]>(
         `/api/v1/libraries/${libraryId}/items${queryString ? `?${queryString}` : ''}`,
       )
     },
@@ -943,7 +810,7 @@ export function createMiboApi(options: ApiOptions) {
       }
 
       const queryString = query.toString()
-      return request<{ items: CatalogDiscoveryResult[] }>(
+      return request<{ items: CatalogListItem[] }>(
         `/api/v1/discovery${queryString ? `?${queryString}` : ''}`,
       )
     },
@@ -952,102 +819,11 @@ export function createMiboApi(options: ApiOptions) {
         `/api/v1/search/history?limit=${limit}`,
       )
     },
-    getMediaItem(mediaItemId: number) {
-      return request<MediaItemDetail>(`/api/v1/media-items/${mediaItemId}`)
-    },
     getCatalogItem(itemId: number) {
       return request<CatalogItemDetail>(`/api/v1/items/${itemId}`)
     },
-    listLocalSeriesEpisodes(mediaItemId: number) {
-      return request<TVSeasonWithEpisodes[]>(
-        `/api/v1/media-items/${mediaItemId}/series-episodes`,
-      )
-    },
     listCatalogSeriesSeasons(itemId: number) {
       return request<CatalogSeasonDetail[]>(`/api/v1/series/${itemId}/seasons`)
-    },
-    listTVSeasons(tmdbId: number) {
-      return request<TVSeasonMetadata[]>(`/api/v1/tv/${tmdbId}/seasons`)
-    },
-    listTVSeasonEpisodes(
-      tmdbId: number,
-      seasonNumber: number,
-      options?: { libraryId?: number },
-    ) {
-      const query = new URLSearchParams()
-
-      if (typeof options?.libraryId === 'number' && options.libraryId > 0) {
-        query.set('library_id', String(options.libraryId))
-      }
-
-      const queryString = query.toString()
-      return request<TVEpisodeMetadata[]>(
-        `/api/v1/tv/${tmdbId}/seasons/${seasonNumber}/episodes${queryString ? `?${queryString}` : ''}`,
-      )
-    },
-    updateMediaItemMetadata(
-      mediaItemId: number,
-      input: {
-        title: string
-        original_title?: string
-        year?: number
-        overview?: string
-        poster_url?: string
-        backdrop_url?: string
-      },
-    ) {
-      return request<MediaItemDetail>(
-        `/api/v1/media-items/${mediaItemId}/metadata`,
-        {
-          method: 'PUT',
-          body: JSON.stringify(input),
-        },
-      )
-    },
-    searchMediaItemMetadata(
-      mediaItemId: number,
-      input: {
-        title?: string
-        year?: number
-        imdb_id?: string
-        tmdb_id?: string
-        tvdb_id?: string
-      },
-    ) {
-      return request<MetadataSearchCandidate[]>(
-        `/api/v1/media-items/${mediaItemId}/metadata/search`,
-        {
-          method: 'POST',
-          body: JSON.stringify(input),
-        },
-      )
-    },
-    applyMediaItemMetadataCandidate(
-      mediaItemId: number,
-      input: {
-        external_id: string
-      },
-    ) {
-      return request<MediaItemDetail>(
-        `/api/v1/media-items/${mediaItemId}/metadata/apply`,
-        {
-          method: 'POST',
-          body: JSON.stringify(input),
-        },
-      )
-    },
-    rematchMediaItem(mediaItemId: number) {
-      return request<Job>(`/api/v1/media-items/${mediaItemId}/match`, {
-        method: 'POST',
-      })
-    },
-    refetchMediaItemMetadata(mediaItemId: number) {
-      return request<Job>(
-        `/api/v1/media-items/${mediaItemId}/metadata/refetch`,
-        {
-          method: 'POST',
-        },
-      )
     },
     getCatalogGovernanceWorkspace(itemId: number) {
       return request<CatalogGovernanceWorkspace>(
@@ -1162,11 +938,6 @@ export function createMiboApi(options: ApiOptions) {
         },
       )
     },
-    reprobeMediaFile(mediaFileId: number) {
-      return request<Job>(`/api/v1/media-files/${mediaFileId}/probe`, {
-        method: 'POST',
-      })
-    },
     reprobeInventoryFile(fileId: number) {
       return request<Job>(`/api/v1/inventory-files/${fileId}/probe`, {
         method: 'POST',
@@ -1225,25 +996,6 @@ export function createMiboApi(options: ApiOptions) {
     listScheduleHistory(scheduleId: number) {
       return request<ScheduleRun[]>(`/api/v1/schedules/${scheduleId}/history`)
     },
-    getPlayback(
-      mediaItemId: number,
-      playbackOptions: {
-        mediaFileId?: number
-        clientProfile: ClientProfile
-      },
-    ) {
-      const query = new URLSearchParams({
-        client_profile: playbackOptions.clientProfile,
-      })
-
-      if (typeof playbackOptions.mediaFileId === 'number') {
-        query.set('file_id', String(playbackOptions.mediaFileId))
-      }
-
-      return request<PlaybackSource>(
-        `/api/v1/media-items/${mediaItemId}/playback?${query.toString()}`,
-      )
-    },
     getCatalogPlayback(
       itemId: number,
       playbackOptions: {
@@ -1263,17 +1015,10 @@ export function createMiboApi(options: ApiOptions) {
         `/api/v1/items/${itemId}/playback?${query.toString()}`,
       )
     },
-    getMediaItemProgress(mediaItemId: number) {
-      return request<ProgressState>(
-        `/api/v1/media-items/${mediaItemId}/progress`,
-      )
-    },
     getCatalogItemProgress(itemId: number) {
       return request<ProgressState>(`/api/v1/items/${itemId}/progress`)
     },
     updateProgress(input: {
-      media_item_id?: number
-      media_file_id?: number
       item_id?: number
       asset_id?: number
       position_seconds: number
@@ -1286,18 +1031,15 @@ export function createMiboApi(options: ApiOptions) {
       })
     },
     continueWatching() {
-      return request<ProgressEntry[]>('/api/v1/me/continue-watching')
+      return request<unknown[]>('/api/v1/me/continue-watching')
     },
     latestByLibrary() {
-      return request<
-        (LatestByLibrarySection | CatalogLatestByLibrarySection)[]
-      >('/api/v1/home/latest-by-library')
-    },
-    homeDiscovery() {
-      return request<HomeDiscovery>('/api/v1/home/discovery')
+      return request<CatalogLatestByLibrarySection[]>(
+        '/api/v1/home/latest-by-library',
+      )
     },
     recentlyAdded(limit = 5) {
-      return request<(MediaItem | CatalogListItem)[]>(
+      return request<CatalogListItem[]>(
         `/api/v1/home/recently-added?limit=${limit}`,
       )
     },

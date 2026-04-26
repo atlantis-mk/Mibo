@@ -15,9 +15,6 @@ function MediaDetailPage() {
   const { view } = Route.useSearch()
 
   return (
-    <MediaDetail
-      mediaItemId={Number(id)}
-      detailView={parseMediaDetailView(view)}
-    />
+    <MediaDetail itemId={Number(id)} detailView={parseMediaDetailView(view)} />
   )
 }

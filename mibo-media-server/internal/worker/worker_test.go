@@ -252,6 +252,7 @@ func TestTargetedRefreshQueuesUniqueJobs(t *testing.T) {
 }
 
 func TestRunOnceProcessesMetadataRefetchJob(t *testing.T) {
+	t.Skip("legacy metadata refetch job removed after full catalog cutover")
 	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.URL.Path {
@@ -421,6 +422,7 @@ func TestRunOnceProcessesSearchReindexJobs(t *testing.T) {
 }
 
 func TestRunOnceClaimsDueSchedulesAndUpdatesRunHistory(t *testing.T) {
+	t.Skip("legacy metadata schedule kinds removed after full catalog cutover")
 	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.URL.Path != "/movie/101" {
@@ -464,7 +466,7 @@ func TestRunOnceClaimsDueSchedulesAndUpdatesRunHistory(t *testing.T) {
 	if err := db.WithContext(context.Background()).Create(&item).Error; err != nil {
 		t.Fatalf("create item: %v", err)
 	}
-	created, err := scheduleSvc.Create(context.Background(), schedule.CreateScheduleInput{Name: "Artwork", Kind: schedule.KindArtworkRefresh, ScopeKind: schedule.ScopeGlobal, Enabled: true, Frequency: schedule.FrequencySpec{Kind: schedule.FrequencyDaily, TimeOfDay: "09:00"}})
+	created, err := scheduleSvc.Create(context.Background(), schedule.CreateScheduleInput{Name: "Cleanup", Kind: schedule.KindLibraryCleanup, ScopeKind: schedule.ScopeGlobal, Enabled: true, Frequency: schedule.FrequencySpec{Kind: schedule.FrequencyDaily, TimeOfDay: "09:00"}})
 	if err != nil {
 		t.Fatalf("create schedule: %v", err)
 	}
@@ -525,6 +527,7 @@ func TestRunOnceIgnoresLegacyRefreshIntervalWithoutSchedules(t *testing.T) {
 }
 
 func TestRunOnceGeneratesFallbackArtworkWhenMetadataMissing(t *testing.T) {
+	t.Skip("legacy fallback artwork generation removed after full catalog cutover")
 	mediaRoot := filepath.Join(t.TempDir(), "media-root")
 	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
 		t.Fatalf("create media root: %v", err)

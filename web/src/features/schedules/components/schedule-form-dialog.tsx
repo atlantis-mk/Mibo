@@ -58,7 +58,13 @@ const defaultForm: FormState = {
   day_of_month: '1',
 }
 
-export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, schedule }: Props) {
+export function ScheduleFormDialog({
+  libraries,
+  onOpenChange,
+  onSubmit,
+  open,
+  schedule,
+}: Props) {
   const [form, setForm] = useState(defaultForm)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -87,13 +93,20 @@ export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, sc
         name: form.name,
         kind: form.kind,
         scope_kind: form.scope_kind,
-        library_id: form.scope_kind === 'library' && form.library_id ? Number(form.library_id) : undefined,
+        library_id:
+          form.scope_kind === 'library' && form.library_id
+            ? Number(form.library_id)
+            : undefined,
         enabled: form.enabled,
         frequency: {
           kind: form.frequency_kind,
           time_of_day: form.time_of_day,
-          weekday: form.frequency_kind === 'weekly' ? Number(form.weekday) : undefined,
-          day_of_month: form.frequency_kind === 'monthly' ? Number(form.day_of_month) : undefined,
+          weekday:
+            form.frequency_kind === 'weekly' ? Number(form.weekday) : undefined,
+          day_of_month:
+            form.frequency_kind === 'monthly'
+              ? Number(form.day_of_month)
+              : undefined,
         },
       })
       onOpenChange(false)
@@ -106,38 +119,59 @@ export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, sc
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>{schedule ? '编辑计划任务' : '创建计划任务'}</DialogTitle>
+          <DialogTitle>
+            {schedule ? '编辑计划任务' : '创建计划任务'}
+          </DialogTitle>
           <DialogDescription>
-            使用 daily / weekly / monthly 模板配置 recurring maintenance，不直接暴露 cron 文本。
+            使用 daily / weekly / monthly 模板配置 recurring
+            maintenance，不直接暴露 cron 文本。
           </DialogDescription>
         </DialogHeader>
 
         <FieldGroup>
           <Field>
             <FieldLabel>任务名称</FieldLabel>
-            <Input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
+            <Input
+              value={form.name}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, name: event.target.value }))
+              }
+            />
           </Field>
 
           <div className="grid gap-4 md:grid-cols-2">
             <Field>
               <FieldLabel>任务类型</FieldLabel>
-              <Select value={form.kind} onValueChange={(value) => setForm((current) => ({ ...current, kind: value }))}>
-                <SelectTrigger><SelectValue placeholder="选择任务类型" /></SelectTrigger>
+              <Select
+                value={form.kind}
+                onValueChange={(value) =>
+                  setForm((current) => ({ ...current, kind: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择任务类型" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="scan">媒体扫描</SelectItem>
-                  <SelectItem value="metadata_refetch">元数据重抓</SelectItem>
-                  <SelectItem value="trailer_sync">预告片同步</SelectItem>
                   <SelectItem value="library_cleanup">库清理</SelectItem>
-                  <SelectItem value="invalid_link_check">失效链接检查</SelectItem>
-                  <SelectItem value="artwork_refresh">封面刷新</SelectItem>
+                  <SelectItem value="invalid_link_check">
+                    失效链接检查
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </Field>
 
             <Field>
               <FieldLabel>目标范围</FieldLabel>
-              <Select value={form.scope_kind} onValueChange={(value: 'global' | 'library') => setForm((current) => ({ ...current, scope_kind: value }))}>
-                <SelectTrigger><SelectValue placeholder="选择范围" /></SelectTrigger>
+              <Select
+                value={form.scope_kind}
+                onValueChange={(value: 'global' | 'library') =>
+                  setForm((current) => ({ ...current, scope_kind: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择范围" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="global">全局范围</SelectItem>
                   <SelectItem value="library">单媒体库</SelectItem>
@@ -149,11 +183,20 @@ export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, sc
           {form.scope_kind === 'library' ? (
             <Field>
               <FieldLabel>媒体库</FieldLabel>
-              <Select value={form.library_id} onValueChange={(value) => setForm((current) => ({ ...current, library_id: value }))}>
-                <SelectTrigger><SelectValue placeholder="选择媒体库" /></SelectTrigger>
+              <Select
+                value={form.library_id}
+                onValueChange={(value) =>
+                  setForm((current) => ({ ...current, library_id: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择媒体库" />
+                </SelectTrigger>
                 <SelectContent>
                   {libraries.map((library) => (
-                    <SelectItem key={library.id} value={String(library.id)}>{library.name}</SelectItem>
+                    <SelectItem key={library.id} value={String(library.id)}>
+                      {library.name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -163,8 +206,15 @@ export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, sc
           <div className="grid gap-4 md:grid-cols-2">
             <Field>
               <FieldLabel>频率模板</FieldLabel>
-              <Select value={form.frequency_kind} onValueChange={(value: 'daily' | 'weekly' | 'monthly') => setForm((current) => ({ ...current, frequency_kind: value }))}>
-                <SelectTrigger><SelectValue placeholder="选择频率" /></SelectTrigger>
+              <Select
+                value={form.frequency_kind}
+                onValueChange={(value: 'daily' | 'weekly' | 'monthly') =>
+                  setForm((current) => ({ ...current, frequency_kind: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择频率" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="daily">每天</SelectItem>
                   <SelectItem value="weekly">每周</SelectItem>
@@ -175,15 +225,31 @@ export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, sc
 
             <Field>
               <FieldLabel>时间</FieldLabel>
-              <Input type="time" value={form.time_of_day} onChange={(event) => setForm((current) => ({ ...current, time_of_day: event.target.value }))} />
+              <Input
+                type="time"
+                value={form.time_of_day}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    time_of_day: event.target.value,
+                  }))
+                }
+              />
             </Field>
           </div>
 
           {form.frequency_kind === 'weekly' ? (
             <Field>
               <FieldLabel>星期</FieldLabel>
-              <Select value={form.weekday} onValueChange={(value) => setForm((current) => ({ ...current, weekday: value }))}>
-                <SelectTrigger><SelectValue placeholder="选择星期" /></SelectTrigger>
+              <Select
+                value={form.weekday}
+                onValueChange={(value) =>
+                  setForm((current) => ({ ...current, weekday: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择星期" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">周日</SelectItem>
                   <SelectItem value="1">周一</SelectItem>
@@ -200,14 +266,29 @@ export function ScheduleFormDialog({ libraries, onOpenChange, onSubmit, open, sc
           {form.frequency_kind === 'monthly' ? (
             <Field>
               <FieldLabel>每月日期</FieldLabel>
-              <Input type="number" min={1} max={31} value={form.day_of_month} onChange={(event) => setForm((current) => ({ ...current, day_of_month: event.target.value }))} />
+              <Input
+                type="number"
+                min={1}
+                max={31}
+                value={form.day_of_month}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    day_of_month: event.target.value,
+                  }))
+                }
+              />
             </Field>
           ) : null}
         </FieldGroup>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-          <Button onClick={handleSubmit} disabled={isSubmitting}>{isSubmitting ? '保存中…' : schedule ? '保存修改' : '创建任务'}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+          <Button onClick={handleSubmit} disabled={isSubmitting}>
+            {isSubmitting ? '保存中…' : schedule ? '保存修改' : '创建任务'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

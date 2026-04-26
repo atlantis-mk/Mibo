@@ -4,11 +4,10 @@ import type {
   CatalogListItem,
   CatalogSeasonDetail,
   CatalogSourceEvidence,
-  MediaItem,
 } from '#/lib/mibo-api'
 
 export type MediaDetailView = 'episode' | 'series'
-export type MediaCardItem = CatalogListItem | MediaItem
+export type MediaCardItem = CatalogListItem
 export type CatalogSeasonRail = {
   season_number: number
   name: string
@@ -175,29 +174,23 @@ export function getMediaCardType(item: MediaCardItem) {
 }
 
 export function getMediaCardPosterUrl(item: MediaCardItem) {
-  return isCatalogListItem(item)
-    ? selectedCatalogImageUrl(item.selected_images, 'poster')
-    : item.poster_url
+  return selectedCatalogImageUrl(item.selected_images, 'poster')
 }
 
 export function getMediaCardBackdropUrl(item: MediaCardItem) {
-  return isCatalogListItem(item)
-    ? selectedCatalogImageUrl(item.selected_images, 'backdrop')
-    : item.backdrop_url
+  return selectedCatalogImageUrl(item.selected_images, 'backdrop')
 }
 
 export function getMediaCardMetadataProvider(item: MediaCardItem) {
-  return isCatalogListItem(item)
-    ? (item.external_identities?.[0]?.provider ?? '')
-    : item.metadata_provider
+  return item.external_identities?.[0]?.provider ?? ''
 }
 
 export function getMediaCardMatchStatus(item: MediaCardItem) {
-  return isCatalogListItem(item) ? item.governance_status : item.match_status
+  return item.governance_status
 }
 
 export function getMediaCardAvailabilityStatus(item: MediaCardItem) {
-  return isCatalogListItem(item) ? item.availability_status : item.status
+  return item.availability_status
 }
 
 function stripEpisodeSuffix(input: string) {
@@ -235,8 +228,4 @@ function selectedCatalogImageUrl(
   return (
     (images || []).find((image) => image.image_type === imageType)?.url ?? ''
   )
-}
-
-function isCatalogListItem(item: MediaCardItem): item is CatalogListItem {
-  return 'selected_images' in item
 }

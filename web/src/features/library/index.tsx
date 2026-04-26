@@ -111,10 +111,10 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
   }
 
   const movieCount = libraryQuery.data.items.filter(
-    (entry) => ('item' in entry ? entry.item.type : entry.type) === 'movie',
+    (item) => item.type === 'movie',
   ).length
   const showCount = libraryQuery.data.items.filter(
-    (entry) => ('item' in entry ? entry.item.type : entry.type) !== 'movie',
+    (item) => item.type !== 'movie',
   ).length
 
   return (
@@ -163,10 +163,8 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
           </div>
           {libraryQuery.data.items.length > 0 ? (
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
-              {libraryQuery.data.items.map((entry) => {
-                const item = 'item' in entry ? entry.item : entry
-                const watchedState =
-                  'watched_state' in entry ? entry.watched_state : 'unwatched'
+              {libraryQuery.data.items.map((item) => {
+                const watchedState = 'unwatched'
                 return (
                   <article key={item.id} className="min-w-0">
                     <Link

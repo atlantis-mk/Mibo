@@ -9,5 +9,5 @@ export const Route = createFileRoute('/settings/metadata/$id')({
 function SettingsMetadataDetailRoute() {
   const { id } = Route.useParams()
 
-  return <MetadataGovernancePage mediaItemId={Number(id)} />
+  return <MetadataGovernancePage itemId={Number(id)} />
 }

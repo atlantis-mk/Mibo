@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,7 +12,7 @@ import (
 )
 
 func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
-	user, err := r.requireUser(req)
+	_, err := r.requireUser(req)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -21,58 +22,22 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	if r.shouldServeCatalogLibraryItems(req.Context()) && r.catalog != nil {
-		var items []catalog.CatalogListItem
-		if strings.TrimSpace(input.Query) == "" {
-			items, err = r.catalog.ListItems(req.Context(), input.LibraryID, "", string(input.TypeFilter), input.Limit)
-		} else {
-			items, err = r.catalog.SearchItems(req.Context(), input.LibraryID, input.Query, string(input.TypeFilter), input.Limit)
-		}
-		if err != nil {
-			writeError(req.Context(), w, http.StatusInternalServerError, err)
-			return
-		}
-		normalizeCatalogListItemsArtworkURLs(req, items)
-		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
 		return
 	}
+	var items []catalog.CatalogListItem
 	if strings.TrimSpace(input.Query) == "" {
-		items, err := r.library.DiscoverMediaItems(req.Context(), &user.ID, input)
-		if err != nil {
-			writeError(req.Context(), w, http.StatusInternalServerError, err)
-			return
-		}
-		if len(items) == 0 && r.catalog != nil {
-			catalogItems, err := r.listCatalogDiscoveryItems(req.Context(), input)
-			if err != nil {
-				writeError(req.Context(), w, http.StatusInternalServerError, err)
-				return
-			}
-			normalizeCatalogListItemsArtworkURLs(req, catalogItems)
-			writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": catalogItems})
-			return
-		}
-		normalizeDiscoveryItemsArtworkURLs(req, items)
-		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
-		return
+		items, err = r.catalog.ListItems(req.Context(), input.LibraryID, "", string(input.TypeFilter), input.Limit)
+	} else {
+		items, err = r.catalog.SearchItems(req.Context(), input.LibraryID, input.Query, string(input.TypeFilter), input.Limit)
 	}
-	results, err := r.search.Search(req.Context(), user.ID, input)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	if len(results) == 0 && r.catalog != nil {
-		catalogItems, err := r.listCatalogDiscoveryItems(req.Context(), input)
-		if err != nil {
-			writeError(req.Context(), w, http.StatusInternalServerError, err)
-			return
-		}
-		normalizeCatalogListItemsArtworkURLs(req, catalogItems)
-		writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": catalogItems})
-		return
-	}
-	normalizeSearchResultsArtworkURLs(req, results)
-	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": results})
+	normalizeCatalogListItemsArtworkURLs(req, items)
+	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (r *Router) handleListSearchHistory(w http.ResponseWriter, req *http.Request) {

@@ -15,24 +15,6 @@ export const miboQueryKeys = {
     ['catalog', 'playback', token, itemId, assetId ?? 'default'] as const,
   catalogGovernanceWorkspace: (token: string, itemId: number) =>
     ['catalog', 'governance', token, itemId] as const,
-  mediaItemDetail: (token: string, mediaItemId: number) =>
-    ['media', 'detail', token, mediaItemId] as const,
-  mediaItemProgress: (token: string, mediaItemId: number) =>
-    ['media', 'progress', token, mediaItemId] as const,
-  tvSeriesEpisodes: (
-    token: string,
-    mediaItemId: number,
-    tmdbId: number,
-    libraryId: number,
-  ) =>
-    [
-      'media',
-      'tv-series-episodes',
-      token,
-      mediaItemId,
-      tmdbId,
-      libraryId,
-    ] as const,
   metadataWorkspace: (token: string) =>
     ['metadata', 'workspace', token] as const,
   metadataSettings: (token: string) => ['settings', 'metadata', token] as const,
@@ -83,38 +65,10 @@ export function homeDataQueryOptions(token: string) {
   })
 }
 
-export function mediaItemDetailQueryOptions(
-  token: string,
-  mediaItemId: number,
-) {
-  return queryOptions({
-    queryKey: miboQueryKeys.mediaItemDetail(token, mediaItemId),
-    queryFn: () => createAuthedMiboApi(token).getMediaItem(mediaItemId),
-  })
-}
-
 export function catalogItemDetailQueryOptions(token: string, itemId: number) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
     queryFn: () => createAuthedMiboApi(token).getCatalogItem(itemId),
-  })
-}
-
-export function mediaItemProgressQueryOptions(
-  token: string,
-  mediaItemId: number,
-) {
-  return queryOptions({
-    queryKey: miboQueryKeys.mediaItemProgress(token, mediaItemId),
-    queryFn: async () => {
-      try {
-        return await createAuthedMiboApi(token).getMediaItemProgress(
-          mediaItemId,
-        )
-      } catch {
-        return null
-      }
-    },
   })
 }
 
@@ -128,53 +82,6 @@ export function catalogItemProgressQueryOptions(token: string, itemId: number) {
         return null
       }
     },
-  })
-}
-
-export function tvSeriesEpisodesQueryOptions(
-  token: string,
-  mediaItemId: number,
-  tmdbId: number,
-  libraryId: number,
-) {
-  return queryOptions({
-    queryKey: miboQueryKeys.tvSeriesEpisodes(
-      token,
-      mediaItemId,
-      tmdbId,
-      libraryId,
-    ),
-    queryFn: async () => {
-      const api = createAuthedMiboApi(token)
-      if (tmdbId > 0 && libraryId > 0) {
-        try {
-          const seasons = await api.listTVSeasons(tmdbId)
-          const seasonDetails = await Promise.all(
-            seasons.map(async (season) => ({
-              ...season,
-              episodes: await api.listTVSeasonEpisodes(
-                tmdbId,
-                season.season_number,
-                {
-                  libraryId,
-                },
-              ),
-            })),
-          )
-          const matchedSeasons = seasonDetails.filter(
-            (season) => season.episodes.length > 0,
-          )
-          if (matchedSeasons.length > 0) {
-            return matchedSeasons
-          }
-        } catch {
-          // Fall back to local scan data when TMDB data is unavailable.
-        }
-      }
-
-      return api.listLocalSeriesEpisodes(mediaItemId)
-    },
-    enabled: mediaItemId > 0,
   })
 }
 

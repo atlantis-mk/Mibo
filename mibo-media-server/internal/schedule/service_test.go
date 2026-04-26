@@ -88,8 +88,8 @@ func TestListGetAndHistoryProjection(t *testing.T) {
 	svc, ctx, _ := newTestService(t, now)
 
 	schedule, err := svc.Create(ctx, CreateScheduleInput{
-		Name:      "Trailer sync",
-		Kind:      KindTrailerSync,
+		Name:      "Library cleanup",
+		Kind:      KindLibraryCleanup,
 		ScopeKind: ScopeLibrary,
 		LibraryID: uintPtr(42),
 		Enabled:   true,
@@ -170,8 +170,8 @@ func TestSetEnabledRecomputesDueEligibility(t *testing.T) {
 	svc, ctx, _ := newTestService(t, now)
 
 	schedule, err := svc.Create(ctx, CreateScheduleInput{
-		Name:      "Metadata refresh",
-		Kind:      KindMetadataRefetch,
+		Name:      "Invalid links",
+		Kind:      KindInvalidLinkCheck,
 		ScopeKind: ScopeGlobal,
 		Enabled:   true,
 		Frequency: FrequencySpec{Kind: FrequencyDaily, TimeOfDay: "13:00"},
@@ -206,8 +206,8 @@ func TestListHistoryReturnsRecentRunsNewestFirst(t *testing.T) {
 	svc, ctx, _ := newTestService(t, now)
 
 	schedule, err := svc.Create(ctx, CreateScheduleInput{
-		Name:      "Artwork refresh",
-		Kind:      KindArtworkRefresh,
+		Name:      "Library cleanup",
+		Kind:      KindLibraryCleanup,
 		ScopeKind: ScopeGlobal,
 		Enabled:   true,
 		Frequency: FrequencySpec{Kind: FrequencyMonthly, TimeOfDay: "09:00", DayOfMonth: intPtr(20)},

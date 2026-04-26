@@ -20,7 +20,6 @@ import {
 } from '#/components/ui/dialog'
 import type {
   CatalogGovernanceWorkspace,
-  MediaItemDetail,
   MetadataSearchCandidate,
 } from '#/lib/mibo-api'
 import {
@@ -68,10 +67,10 @@ const EMPTY_DRAFT: MetadataDraft = {
 
 export function MetadataGovernanceDetail({
   token,
-  mediaItemId: itemId,
+  itemId,
 }: {
   token: string
-  mediaItemId: number
+  itemId: number
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -840,56 +839,21 @@ function buildDraftFromWorkspace(
   }
 }
 
-function buildPreviewItem(
-  workspace: CatalogGovernanceWorkspace,
-): MediaItemDetail {
+function buildPreviewItem(workspace: CatalogGovernanceWorkspace) {
   return {
     id: workspace.item_id,
     library_id: workspace.library_id,
-    type: workspace.type === 'series' ? 'show' : workspace.type,
+    type: workspace.type,
     title: workspace.title,
     original_title: fieldStateString(workspace, 'original_title'),
-    series_title: workspace.type === 'series' ? workspace.title : '',
     overview: fieldStateString(workspace, 'overview'),
     poster_url: selectedImageUrl(workspace, 'poster'),
-    logo_url: selectedImageUrl(workspace, 'logo') || undefined,
     backdrop_url: selectedImageUrl(workspace, 'backdrop'),
     year: fieldStateNumber(workspace, 'year'),
-    vote_average: undefined,
-    release_date: '',
-    runtime_seconds: fieldStateNumber(workspace, 'runtime_seconds'),
-    season_number: undefined,
-    episode_number: undefined,
-    source_path: '',
-    match_status: workspace.governance_status,
+    governance_status: workspace.governance_status,
+    availability_status: workspace.availability_status,
     metadata_provider: workspace.external_identities?.[0]?.provider ?? '',
     external_id: workspace.external_identities?.[0]?.external_id ?? '',
-    metadata_confidence: workspace.external_identities?.[0]?.confidence,
-    status: workspace.availability_status,
-    created_at: '',
-    updated_at: '',
-    series_tmdb_id: undefined,
-    series_title_display: workspace.title,
-    default_season_number: undefined,
-    genres: [],
-    cast: [],
-    directors: [],
-    trailer: undefined,
-    files: (workspace.assets ?? []).map((asset) => ({
-      id: asset.file_ids?.[0] ?? asset.id,
-      library_id: asset.library_id,
-      media_item_id: workspace.item_id,
-      storage_path: '',
-      container: '',
-      size_bytes: 0,
-      fingerprint: '',
-      probe_status: asset.probe_status,
-      probe_error: '',
-      duration_seconds: asset.duration_seconds,
-      video_codec: '',
-      audio_tracks: [],
-      subtitle_tracks: [],
-    })),
   }
 }
 

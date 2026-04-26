@@ -23,58 +23,7 @@ const (
 )
 
 func (s *Service) generateFallbackArtwork(ctx context.Context, file database.MediaFile, target string, runtimeSeconds *int) error {
-	if file.MediaItemID == nil || *file.MediaItemID == 0 {
-		return nil
-	}
-	if !s.ffmpeg.Enabled || strings.TrimSpace(s.ffmpeg.Path) == "" || strings.TrimSpace(target) == "" {
-		return nil
-	}
-
-	var item database.MediaItem
-	if err := s.db.WithContext(ctx).
-		Select("id", "poster_url", "backdrop_url").
-		Where("id = ? AND deleted_at IS NULL", *file.MediaItemID).
-		First(&item).Error; err != nil {
-		return err
-	}
-
-	posterURL := generatedArtworkURL(item.ID, posterArtworkKind)
-	backdropURL := generatedArtworkURL(item.ID, backdropArtworkKind)
-	needsPoster := shouldGenerateArtwork(item.PosterURL, posterURL)
-	needsBackdrop := shouldGenerateArtwork(item.BackdropURL, backdropURL)
-	if !needsPoster && !needsBackdrop {
-		return nil
-	}
-
-	if err := os.MkdirAll(s.artworkDir(item.ID), 0o755); err != nil {
-		return err
-	}
-
-	updates := make(map[string]any)
-	var resultErr error
-	if needsPoster {
-		posterPath := s.artworkPath(item.ID, posterArtworkKind)
-		if err := s.extractArtwork(ctx, target, runtimeSeconds, posterArtworkFilter, posterPath); err != nil {
-			resultErr = errors.Join(resultErr, err)
-		} else {
-			updates["poster_url"] = posterURL
-		}
-	}
-	if needsBackdrop {
-		backdropPath := s.artworkPath(item.ID, backdropArtworkKind)
-		if err := s.extractArtwork(ctx, target, runtimeSeconds, backdropArtworkFilter, backdropPath); err != nil {
-			resultErr = errors.Join(resultErr, err)
-		} else {
-			updates["backdrop_url"] = backdropURL
-		}
-	}
-	if len(updates) == 0 {
-		return resultErr
-	}
-	if err := s.db.WithContext(ctx).Model(&database.MediaItem{}).Where("id = ?", item.ID).Updates(updates).Error; err != nil {
-		return errors.Join(resultErr, err)
-	}
-	return resultErr
+	return nil
 }
 
 func (s *Service) generateCatalogFallbackArtwork(ctx context.Context, file database.InventoryFile, target string, runtimeSeconds *int) error {
@@ -204,25 +153,8 @@ func (s *Service) extractArtwork(ctx context.Context, target string, runtimeSeco
 	return nil
 }
 
-func generatedArtworkURL(mediaItemID uint, kind string) string {
-	return fmt.Sprintf("/api/v1/media-items/%d/artwork/%s", mediaItemID, kind)
-}
-
 func generatedCatalogArtworkURL(itemID uint, kind string) string {
 	return fmt.Sprintf("/api/v1/items/%d/artwork/%s", itemID, kind)
-}
-
-func shouldGenerateArtwork(current, generated string) bool {
-	trimmed := strings.TrimSpace(current)
-	return trimmed == "" || trimmed == generated
-}
-
-func (s *Service) artworkDir(mediaItemID uint) string {
-	return filepath.Join(s.artworkRootPath(), fmt.Sprintf("%d", mediaItemID))
-}
-
-func (s *Service) artworkPath(mediaItemID uint, kind string) string {
-	return filepath.Join(s.artworkDir(mediaItemID), kind+".jpg")
 }
 
 func (s *Service) catalogArtworkDir(itemID uint) string {

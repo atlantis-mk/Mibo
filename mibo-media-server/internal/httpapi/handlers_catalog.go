@@ -1,11 +1,9 @@
 package httpapi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
@@ -564,17 +562,6 @@ func (r *Router) handleQueueInventoryFileProbe(w http.ResponseWriter, req *http.
 	writeJSON(req.Context(), w, http.StatusAccepted, job)
 }
 
-func (r *Router) shouldServeCatalogLibraryItems(ctx context.Context) bool {
-	if r.catalog == nil || r.settings == nil {
-		return false
-	}
-	state, err := r.settings.GetCatalogMigrationState(ctx)
-	if err != nil {
-		return false
-	}
-	return state.CatalogReadEnabled
-}
-
 func normalizeCatalogListItemsArtworkURLs(req *http.Request, items []catalog.CatalogListItem) {
 	for idx := range items {
 		normalizeCatalogListItemArtworkURLs(req, &items[idx])
@@ -629,33 +616,4 @@ func normalizeCatalogGovernanceWorkspaceArtworkURLs(req *http.Request, workspace
 		workspace.ImageCandidates[idx].URL = buildAssetURL(req, workspace.ImageCandidates[idx].URL)
 	}
 	normalizeCatalogListItemsArtworkURLs(req, workspace.RecommendedChildren)
-}
-
-func (r *Router) markLegacyMediaEndpointDeprecated(req *http.Request, w http.ResponseWriter, successor string) {
-	if !r.shouldServeCatalogLibraryItems(req.Context()) {
-		return
-	}
-	w.Header().Set("Deprecation", "true")
-	if strings.TrimSpace(successor) != "" {
-		w.Header().Add("Link", "<"+requestBaseURL(req)+successor+">; rel=\"successor-version\"")
-	}
-	w.Header().Set("Sunset", "Wed, 31 Dec 2026 23:59:59 GMT")
-	w.Header().Set("X-Mibo-Legacy-Endpoint", "media-items")
-	if strings.TrimSpace(req.PathValue("id")) != "" {
-		w.Header().Set("X-Mibo-Catalog-Item-ID", req.PathValue("id"))
-	}
-	if rawLibraryID := strings.TrimSpace(req.PathValue("id")); rawLibraryID != "" {
-		if _, err := strconv.ParseUint(rawLibraryID, 10, 64); err == nil && strings.Contains(req.URL.Path, "/libraries/") {
-			w.Header().Set("X-Mibo-Catalog-Read-Enabled", "true")
-		}
-	}
-}
-
-func (r *Router) rejectLegacyMediaEndpoint(req *http.Request, w http.ResponseWriter, successor string) bool {
-	if !r.shouldServeCatalogLibraryItems(req.Context()) {
-		return false
-	}
-	r.markLegacyMediaEndpointDeprecated(req, w, successor)
-	writeError(req.Context(), w, http.StatusGone, fmt.Errorf("legacy media endpoint retired; use %s", successor))
-	return true
 }

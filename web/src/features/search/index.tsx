@@ -140,14 +140,9 @@ export default function SearchPage({
           ) : null}
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {data.items.map((result) => {
-              const item = 'item' in result ? result.item : result
-              const watchedState =
-                'watched_state' in result ? result.watched_state : ''
-              const highlight =
-                'highlight' in result && typeof result.highlight === 'string'
-                  ? result.highlight
-                  : ''
+            {data.items.map((item) => {
+              const watchedState = ''
+              const highlight = ''
               return (
                 <Link
                   key={item.id}

@@ -9,9 +9,9 @@ import { MetadataGovernanceDetail } from './detail'
 import { MetadataGovernanceWorkspace } from './workspace'
 
 export default function MetadataGovernancePage({
-  mediaItemId,
+  itemId,
 }: {
-  mediaItemId?: number
+  itemId?: number
 }) {
   const token = useAuthStore((state) => state.token)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
@@ -44,8 +44,8 @@ export default function MetadataGovernancePage({
             <Link
               to="/login"
               search={{
-                redirect: mediaItemId
-                  ? `/settings/metadata/${mediaItemId}`
+                redirect: itemId
+                  ? `/settings/metadata/${itemId}`
                   : '/settings/metadata',
               }}
             >
@@ -57,12 +57,8 @@ export default function MetadataGovernancePage({
     )
   }
 
-  if (
-    typeof mediaItemId === 'number' &&
-    Number.isFinite(mediaItemId) &&
-    mediaItemId > 0
-  ) {
-    return <MetadataGovernanceDetail token={token} mediaItemId={mediaItemId} />
+  if (typeof itemId === 'number' && Number.isFinite(itemId) && itemId > 0) {
+    return <MetadataGovernanceDetail token={token} itemId={itemId} />
   }
 
   return <MetadataGovernanceWorkspace token={token} />

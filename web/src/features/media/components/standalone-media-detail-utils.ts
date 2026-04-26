@@ -1,7 +1,6 @@
 import type {
   CatalogAssetDetail,
   CatalogSourceEvidence,
-  MediaFile,
   Track,
 } from '#/lib/mibo-api'
 
@@ -45,15 +44,6 @@ export function getDisplaySourcePath(
     }
   }
   return 'catalog item'
-}
-
-export function formatVideoTrackLabel(file?: MediaFile) {
-  if (!file) return '未知'
-  return (
-    [file.height ? `${file.height}p` : null, file.video_codec || null]
-      .filter(Boolean)
-      .join(' ') || '未知'
-  )
 }
 
 export function formatAudioTrackLabel(track?: Track) {

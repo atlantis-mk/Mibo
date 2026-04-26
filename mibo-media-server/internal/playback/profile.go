@@ -11,8 +11,6 @@ const (
 type PlaybackRequest struct {
 	ItemID           uint
 	AssetID          uint
-	MediaItemID      uint
-	PreferredFileID  uint
 	ClientProfile    ClientProfile
 	AllowHLSFallback bool
 }

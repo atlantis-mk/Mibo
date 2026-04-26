@@ -76,107 +76,7 @@ func (s *Service) Status() string {
 }
 
 func (s *Service) GetPlaybackSource(ctx context.Context, req PlaybackRequest) (PlaybackSource, error) {
-	if req.ItemID != 0 {
-		return s.getCatalogPlaybackSource(ctx, req)
-	}
-	item, files, err := s.loadMediaItemFiles(ctx, req.MediaItemID)
-	if err != nil {
-		return PlaybackSource{}, err
-	}
-
-	selected, selectedBy, err := selectPlaybackFile(files, req.PreferredFileID, req.ClientProfile)
-	if err != nil {
-		return PlaybackSource{}, err
-	}
-
-	fileLink, err := s.GetFileLink(ctx, selected.ID)
-	if err != nil {
-		return PlaybackSource{}, err
-	}
-
-	audioTracks, err := parseTrackList(selected.AudioTracksJSON)
-	if err != nil {
-		return PlaybackSource{}, err
-	}
-	subtitleTracks, err := parseTrackList(selected.SubtitleTracksJSON)
-	if err != nil {
-		return PlaybackSource{}, err
-	}
-
-	checks := append([]PlaybackCheck{}, fileLink.Checks...)
-	checks = append(checks, buildMediaInfoCheck(selected))
-	directDecision := assessDirectPlay(selected, req.ClientProfile)
-	if !fileLink.Playable {
-		directDecision.direct = false
-		directDecision.reasons = append([]DecisionReason{{
-			Code:     "source_unavailable",
-			Category: "availability",
-			Message:  "media source is unavailable",
-		}}, directDecision.reasons...)
-	}
-
-	base := PlaybackSource{
-		MediaItemID:    item.ID,
-		MediaFileID:    selected.ID,
-		Title:          item.Title,
-		Type:           item.Type,
-		Container:      selected.Container,
-		SizeBytes:      selected.SizeBytes,
-		RuntimeSeconds: item.RuntimeSeconds,
-		VideoCodec:     selected.VideoCodec,
-		Width:          selected.Width,
-		Height:         selected.Height,
-		AudioTracks:    audioTracks,
-		SubtitleTracks: subtitleTracks,
-		Checks:         checks,
-	}
-
-	if directDecision.direct {
-		base.URL = fileLink.URL
-		base.Direct = true
-		base.Playable = true
-		base.Decision = PlaybackDecision{
-			Kind:          "direct",
-			ClientProfile: req.ClientProfile,
-			SelectedBy:    selectedBy,
-			Reasons:       directDecision.reasons,
-		}
-		return base, nil
-	}
-
-	if req.AllowHLSFallback && fileLink.Playable {
-		base.Container = "m3u8"
-		base.URL = fmt.Sprintf("/api/v1/media-files/%d/hls/index.m3u8", selected.ID)
-		base.Direct = false
-		base.Playable = true
-		base.Decision = PlaybackDecision{
-			Kind:          "fallback",
-			ClientProfile: req.ClientProfile,
-			SelectedBy:    selectedBy,
-			FallbackKind:  "hls",
-			Reasons: append(append([]DecisionReason{}, directDecision.reasons...), DecisionReason{
-				Code:     "hls_fallback_selected",
-				Category: "fallback",
-				Message:  "switched to HLS fallback for this client profile",
-			}),
-		}
-		return base, nil
-	}
-
-	base.Direct = false
-	base.Playable = false
-	base.URL = ""
-	base.Decision = PlaybackDecision{
-		Kind:          "unplayable",
-		ClientProfile: req.ClientProfile,
-		SelectedBy:    selectedBy,
-		Reasons: append(append([]DecisionReason{}, directDecision.reasons...), DecisionReason{
-			Code:     "no_supported_playback_path",
-			Category: "fallback",
-			Message:  "no supported playback path is available for this client profile",
-		}),
-	}
-	return base, nil
+	return s.getCatalogPlaybackSource(ctx, req)
 }
 
 type catalogPlaybackCandidate struct {
@@ -267,41 +167,6 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 	return base, nil
 }
 
-func (s *Service) GetFileLink(ctx context.Context, mediaFileID uint) (FileLink, error) {
-	var file database.MediaFile
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", mediaFileID).
-		First(&file).Error; err != nil {
-		return FileLink{}, err
-	}
-
-	provider, err := s.providerForMediaFile(ctx, file.ID)
-	if err != nil {
-		return FileLink{}, err
-	}
-
-	checks := []PlaybackCheck{}
-	object, err := provider.Get(ctx, storage.GetRequest{Path: file.StoragePath})
-	if err != nil {
-		checks = append(checks, PlaybackCheck{Code: "file_exists", Status: "fail", Message: err.Error()})
-		return FileLink{MediaFileID: file.ID, StoragePath: file.StoragePath, Checks: checks, Playable: false}, nil
-	}
-	if object.IsDir {
-		checks = append(checks, PlaybackCheck{Code: "file_exists", Status: "fail", Message: "selected media file is a directory"})
-		return FileLink{MediaFileID: file.ID, StoragePath: file.StoragePath, Checks: checks, Playable: false}, nil
-	}
-	checks = append(checks, PlaybackCheck{Code: "file_exists", Status: "pass", Message: "media file resolved"})
-	checks = append(checks, PlaybackCheck{Code: "file_access", Status: "pass", Message: "media stream endpoint available"})
-
-	return FileLink{
-		MediaFileID: file.ID,
-		StoragePath: file.StoragePath,
-		URL:         fmt.Sprintf("/api/v1/media-files/%d/stream", file.ID),
-		Checks:      checks,
-		Playable:    isPlayable(checks),
-	}, nil
-}
-
 func (s *Service) GetAssetLink(ctx context.Context, assetID uint) (FileLink, error) {
 	var link database.AssetFile
 	if err := s.db.WithContext(ctx).
@@ -344,27 +209,6 @@ func (s *Service) GetInventoryFileLink(ctx context.Context, fileID uint) (FileLi
 	checks = append(checks, PlaybackCheck{Code: "file_exists", Status: "pass", Message: "inventory file resolved"})
 	checks = append(checks, PlaybackCheck{Code: "file_access", Status: "pass", Message: "inventory stream endpoint available"})
 	return FileLink{FileID: file.ID, StoragePath: file.StoragePath, URL: fmt.Sprintf("/api/v1/inventory-files/%d/stream", file.ID), Checks: checks, Playable: isPlayable(checks)}, nil
-}
-
-func (s *Service) providerForMediaFile(ctx context.Context, mediaFileID uint) (storage.Provider, error) {
-	var file database.MediaFile
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", mediaFileID).
-		First(&file).Error; err != nil {
-		return nil, err
-	}
-
-	var libraryRecord database.Library
-	if err := s.db.WithContext(ctx).First(&libraryRecord, file.LibraryID).Error; err != nil {
-		return nil, err
-	}
-
-	var source database.MediaSource
-	if err := s.db.WithContext(ctx).First(&source, libraryRecord.MediaSourceID).Error; err != nil {
-		return nil, err
-	}
-
-	return s.storage.BuildForSource(source)
 }
 
 func (s *Service) providerForInventoryFile(ctx context.Context, fileID uint) (storage.Provider, error) {
@@ -535,85 +379,6 @@ func intValue(value *int) int {
 		return 0
 	}
 	return *value
-}
-
-func (s *Service) loadMediaItemFiles(ctx context.Context, mediaItemID uint) (database.MediaItem, []database.MediaFile, error) {
-	var item database.MediaItem
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", mediaItemID).
-		First(&item).Error; err != nil {
-		return database.MediaItem{}, nil, err
-	}
-
-	var files []database.MediaFile
-	if err := s.db.WithContext(ctx).
-		Where("media_item_id = ? AND deleted_at IS NULL", mediaItemID).
-		Find(&files).Error; err != nil {
-		return database.MediaItem{}, nil, err
-	}
-	if len(files) == 0 {
-		return database.MediaItem{}, nil, fmt.Errorf("no playable files found for media item %d", mediaItemID)
-	}
-
-	return item, files, nil
-}
-
-func selectPlaybackFile(files []database.MediaFile, preferredFileID uint, clientProfile ClientProfile) (database.MediaFile, string, error) {
-	if preferredFileID != 0 {
-		for _, file := range files {
-			if file.ID == preferredFileID {
-				return file, "preferred_file", nil
-			}
-		}
-		return database.MediaFile{}, "", fmt.Errorf("preferred media file %d is not available", preferredFileID)
-	}
-
-	sorted := append([]database.MediaFile(nil), files...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		left := scoreFile(sorted[i], clientProfile)
-		right := scoreFile(sorted[j], clientProfile)
-		if left != right {
-			return left > right
-		}
-		leftPixels := resolutionPixels(sorted[i])
-		rightPixels := resolutionPixels(sorted[j])
-		if leftPixels != rightPixels {
-			return leftPixels > rightPixels
-		}
-		leftBitrate := int64Value(sorted[i].BitRate)
-		rightBitrate := int64Value(sorted[j].BitRate)
-		if leftBitrate != rightBitrate {
-			return leftBitrate > rightBitrate
-		}
-		if sorted[i].SizeBytes != sorted[j].SizeBytes {
-			return sorted[i].SizeBytes > sorted[j].SizeBytes
-		}
-		return sorted[i].ID < sorted[j].ID
-	})
-
-	return sorted[0], "profile_filter_then_rank", nil
-}
-
-func scoreFile(file database.MediaFile, clientProfile ClientProfile) int {
-	decision := assessDirectPlay(file, clientProfile)
-	score := 0
-	if decision.direct {
-		score += 100
-		if file.ProbeStatus == probe.StatusReady {
-			score += 20
-		} else {
-			score += 10
-		}
-	} else if file.ProbeStatus == probe.StatusReady {
-		score += 5
-	}
-	if file.VideoCodec != "" {
-		score += 3
-	}
-	if file.Width != nil && file.Height != nil {
-		score += 2
-	}
-	return score
 }
 
 type directPlayAssessment struct {

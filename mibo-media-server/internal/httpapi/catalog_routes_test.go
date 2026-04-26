@@ -651,7 +651,7 @@ func TestCatalogPlaybackRoutesUseAssetAndInventoryFileIdentity(t *testing.T) {
 	}
 }
 
-func TestLegacyMediaItemRouteMarksDeprecationWhenCatalogReadEnabled(t *testing.T) {
+func TestLegacyMediaItemRouteIsRemovedWhenCatalogReadEnabled(t *testing.T) {
 	router, db, _, _, settingsSvc, _, libraryID := newCatalogRouteHarness(t, nil)
 	ctx := context.Background()
 	if _, err := settingsSvc.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{CatalogReadEnabled: true}); err != nil {
@@ -665,15 +665,12 @@ func TestLegacyMediaItemRouteMarksDeprecationWhenCatalogReadEnabled(t *testing.T
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d", item.ID), nil)
 	router.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if recorder.Header().Get("Deprecation") != "true" {
-		t.Fatalf("expected deprecation header, got %#v", recorder.Header())
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestLegacyMediaFileStreamRouteMarksDeprecationWhenCatalogReadEnabled(t *testing.T) {
+func TestLegacyMediaFileStreamRouteIsRemovedWhenCatalogReadEnabled(t *testing.T) {
 	router, _, _, _, settingsSvc, _, _ := newCatalogRouteHarness(t, nil)
 	ctx := context.Background()
 	if _, err := settingsSvc.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{CatalogReadEnabled: true}); err != nil {
@@ -683,15 +680,12 @@ func TestLegacyMediaFileStreamRouteMarksDeprecationWhenCatalogReadEnabled(t *tes
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/media-files/99/stream", nil)
 	router.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if recorder.Header().Get("Deprecation") != "true" {
-		t.Fatalf("expected deprecation header, got %#v", recorder.Header())
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestLegacyMediaWriteAndHierarchyRoutesRetireWhenCatalogReadEnabled(t *testing.T) {
+func TestLegacyMediaWriteAndHierarchyRoutesAreRemovedWhenCatalogReadEnabled(t *testing.T) {
 	router, db, _, _, settingsSvc, _, libraryID := newCatalogRouteHarness(t, nil)
 	ctx := context.Background()
 	if _, err := settingsSvc.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{CatalogReadEnabled: true}); err != nil {
@@ -705,16 +699,16 @@ func TestLegacyMediaWriteAndHierarchyRoutesRetireWhenCatalogReadEnabled(t *testi
 	seriesRecorder := httptest.NewRecorder()
 	seriesRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/media-items/%d/series-episodes", item.ID), nil)
 	router.ServeHTTP(seriesRecorder, seriesRequest)
-	if seriesRecorder.Code != http.StatusGone {
-		t.Fatalf("expected 410 for retired series-episodes route, got %d body=%s", seriesRecorder.Code, seriesRecorder.Body.String())
+	if seriesRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed series-episodes route, got %d body=%s", seriesRecorder.Code, seriesRecorder.Body.String())
 	}
 
 	updateRecorder := httptest.NewRecorder()
 	updateRequest := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/media-items/%d/metadata", item.ID), strings.NewReader(`{"title":"Manual"}`))
 	updateRequest.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(updateRecorder, updateRequest)
-	if updateRecorder.Code != http.StatusGone {
-		t.Fatalf("expected 410 for retired metadata write route, got %d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	if updateRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed metadata write route, got %d body=%s", updateRecorder.Code, updateRecorder.Body.String())
 	}
 }
 

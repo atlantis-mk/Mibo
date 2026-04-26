@@ -24,10 +24,8 @@ import type {
   CatalogListItem,
   CatalogSelectedImage,
   CatalogSourceEvidence,
-  MediaItemDetail,
   MetadataSearchCandidate,
 } from '#/lib/mibo-api'
-import { getPrimarySeriesTitle } from '#/lib/media-presentation'
 
 import { ArtworkPreview, CandidateCard, SummaryRow } from './detail-sections'
 import { formatMediaType } from './formatters'
@@ -274,10 +272,20 @@ export function CandidateSearchCard({
   )
 }
 
-export function MetadataSummaryCard({ item }: { item: MediaItemDetail }) {
-  const genres = item.genres ?? []
-  const cast = item.cast ?? []
-
+export function MetadataSummaryCard({
+  item,
+}: {
+  item: {
+    type: string
+    title: string
+    original_title?: string
+    year?: number
+    availability_status: string
+    governance_status: string
+    metadata_provider?: string
+    external_id?: string
+  }
+}) {
   return (
     <Card className="rounded-[1.5rem] border-border/60 bg-card/80 py-0 shadow-sm">
       <CardHeader className="px-5 py-5">
@@ -292,33 +300,16 @@ export function MetadataSummaryCard({ item }: { item: MediaItemDetail }) {
           value={item.year ? String(item.year) : '未填写'}
         />
         <SummaryRow label="类型" value={formatMediaType(item.type)} />
+        <SummaryRow label="可用性" value={item.availability_status || '未知'} />
         <SummaryRow
-          label="类型标签"
-          value={genres.length ? genres.join('、') : '未识别'}
+          label="治理状态"
+          value={item.governance_status || 'pending'}
         />
         <SummaryRow
-          label="演员"
-          value={
-            cast.length
-              ? cast
-                  .slice(0, 4)
-                  .map((person) => person.name)
-                  .join('、')
-              : '未识别'
-          }
+          label="元数据来源"
+          value={item.metadata_provider?.toUpperCase() || '未匹配'}
         />
-        {item.type === 'episode' ? (
-          <>
-            <SummaryRow
-              label="季 / 集"
-              value={`S${String(item.season_number ?? 0).padStart(2, '0')} · E${String(item.episode_number ?? 0).padStart(2, '0')}`}
-            />
-            <SummaryRow
-              label="剧集归属"
-              value={getPrimarySeriesTitle(item) || '未关联'}
-            />
-          </>
-        ) : null}
+        <SummaryRow label="外部 ID" value={item.external_id || '未关联'} />
       </CardContent>
     </Card>
   )

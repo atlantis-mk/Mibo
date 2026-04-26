@@ -271,6 +271,9 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 		})
 		return err
 	case "probe_media_file":
+		if r.probe == nil {
+			return errors.New("probe service unavailable")
+		}
 		var payload struct {
 			MediaFileID uint `json:"media_file_id"`
 		}
@@ -309,27 +312,6 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		_, err = r.library.RunScheduledInvalidLinkCheck(ctx, due)
-		return err
-	case schedule.JobKindForSchedule(schedule.KindMetadataRefetch):
-		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
-		if err != nil {
-			return err
-		}
-		_, err = r.metadata.RunScheduledMetadataRefetch(ctx, due)
-		return err
-	case schedule.JobKindForSchedule(schedule.KindTrailerSync):
-		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
-		if err != nil {
-			return err
-		}
-		_, err = r.metadata.RunScheduledTrailerSync(ctx, due)
-		return err
-	case schedule.JobKindForSchedule(schedule.KindArtworkRefresh):
-		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
-		if err != nil {
-			return err
-		}
-		_, err = r.metadata.RunScheduledArtworkRefresh(ctx, due)
 		return err
 	default:
 		return errors.New("unsupported job kind: " + job.Kind)

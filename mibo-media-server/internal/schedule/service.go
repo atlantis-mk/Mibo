@@ -21,11 +21,8 @@ const (
 
 const (
 	KindScan             = "scan"
-	KindMetadataRefetch  = "metadata_refetch"
-	KindTrailerSync      = "trailer_sync"
 	KindLibraryCleanup   = "library_cleanup"
 	KindInvalidLinkCheck = "invalid_link_check"
-	KindArtworkRefresh   = "artwork_refresh"
 
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -455,7 +452,7 @@ func validateCreateInput(input CreateScheduleInput) error {
 
 func isValidKind(kind string) bool {
 	switch normalizeKind(kind) {
-	case KindScan, KindMetadataRefetch, KindTrailerSync, KindLibraryCleanup, KindInvalidLinkCheck, KindArtworkRefresh:
+	case KindScan, KindLibraryCleanup, KindInvalidLinkCheck:
 		return true
 	default:
 		return false

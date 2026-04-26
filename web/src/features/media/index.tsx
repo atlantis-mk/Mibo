@@ -22,10 +22,10 @@ import {
 import { useAuthStore } from '#/stores/auth-store'
 
 export default function MediaDetail({
-  mediaItemId,
+  itemId,
   detailView,
 }: {
-  mediaItemId: number
+  itemId: number
   detailView: MediaDetailView
 }) {
   const token = useAuthStore((state) => state.token)
@@ -34,15 +34,15 @@ export default function MediaDetail({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const queryToken = token ?? 'guest'
-  const hasValidMediaItemId = Number.isFinite(mediaItemId) && mediaItemId > 0
+  const hasValidItemId = Number.isFinite(itemId) && itemId > 0
 
   const itemQuery = useQuery({
-    ...catalogItemDetailQueryOptions(queryToken, mediaItemId),
-    enabled: hasHydrated && !!token && hasValidMediaItemId,
+    ...catalogItemDetailQueryOptions(queryToken, itemId),
+    enabled: hasHydrated && !!token && hasValidItemId,
   })
   const progressQuery = useQuery({
-    ...catalogItemProgressQueryOptions(queryToken, mediaItemId),
-    enabled: hasHydrated && !!token && hasValidMediaItemId,
+    ...catalogItemProgressQueryOptions(queryToken, itemId),
+    enabled: hasHydrated && !!token && hasValidItemId,
   })
   const detailItem = itemQuery.data
   const detailAssets = itemQuery.data?.assets ?? []
@@ -67,13 +67,12 @@ export default function MediaDetail({
         throw new Error('当前未登录，无法重新匹配媒体。')
       }
 
-      return createAuthedMiboApi(token).refetchCatalogItemMetadata(mediaItemId)
+      return createAuthedMiboApi(token).refetchCatalogItemMetadata(itemId)
     },
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: catalogItemDetailQueryOptions(queryToken, mediaItemId)
-            .queryKey,
+          queryKey: catalogItemDetailQueryOptions(queryToken, itemId).queryKey,
         }),
         queryClient.invalidateQueries({
           queryKey: homeDataQueryOptions(queryToken).queryKey,
@@ -100,8 +99,7 @@ export default function MediaDetail({
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: catalogItemDetailQueryOptions(queryToken, mediaItemId)
-            .queryKey,
+          queryKey: catalogItemDetailQueryOptions(queryToken, itemId).queryKey,
         }),
         queryClient.invalidateQueries({
           queryKey: homeDataQueryOptions(queryToken).queryKey,
@@ -129,7 +127,7 @@ export default function MediaDetail({
       }
 
       return createAuthedMiboApi(token).updateProgress({
-        item_id: mediaItemId,
+        item_id: itemId,
         asset_id: item.assets?.[0]?.id,
         position_seconds: durationSeconds,
         duration_seconds: durationSeconds,
@@ -139,7 +137,7 @@ export default function MediaDetail({
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: catalogItemProgressQueryOptions(queryToken, mediaItemId)
+          queryKey: catalogItemProgressQueryOptions(queryToken, itemId)
             .queryKey,
         }),
         queryClient.invalidateQueries({
@@ -179,7 +177,7 @@ export default function MediaDetail({
             当前详情页依赖已登录会话访问后端媒体接口。
           </p>
           <Button asChild size="lg" className="min-w-36">
-            <Link to="/login" search={{ redirect: `/media/${mediaItemId}` }}>
+            <Link to="/login" search={{ redirect: `/media/${itemId}` }}>
               前往登录
             </Link>
           </Button>
@@ -188,7 +186,7 @@ export default function MediaDetail({
     )
   }
 
-  if (!hasValidMediaItemId) {
+  if (!hasValidItemId) {
     return <MediaDetailError message="无效的媒体 ID。" />
   }
 
@@ -249,7 +247,7 @@ export default function MediaDetail({
         onOpenPlaybackEntry={(options) => {
           void navigate({
             to: '/play/$id',
-            params: { id: String(mediaItemId) },
+            params: { id: String(itemId) },
             search: {
               fromStart: Boolean(options?.fromStart),
               assetId: undefined,
@@ -259,7 +257,7 @@ export default function MediaDetail({
         onOpenAssetPlaybackEntry={(assetId) => {
           void navigate({
             to: '/play/$id',
-            params: { id: String(mediaItemId) },
+            params: { id: String(itemId) },
             search: { fromStart: false, assetId },
           })
         }}
@@ -274,7 +272,7 @@ export default function MediaDetail({
         onManageMetadata={() => {
           void navigate({
             to: '/settings/metadata/$id',
-            params: { id: String(mediaItemId) },
+            params: { id: String(itemId) },
           })
         }}
         onMarkWatched={() => {
