@@ -158,6 +158,67 @@ func TestMatchCatalogItemPrefersRemoteImagesOverGeneratedCatalogFallback(t *test
 	}
 }
 
+func TestApplyCatalogCandidateReplacesPreviouslySelectedRemoteImages(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/movie/202":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 202, "title": "Updated Match", "original_title": "Updated Match Original", "overview": "Updated overview", "poster_path": "/updated-poster.jpg", "backdrop_path": "/updated-backdrop.jpg", "release_date": "2025-03-02", "runtime": 118, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{{"file_path": "/updated-logo-en.png", "iso_639_1": "en", "vote_average": 9.0}}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if err := db.WithContext(ctx).Create([]database.ItemImage{
+		{ItemID: item.ID, ImageType: "poster", URL: tmdb.URL + "/images/old-poster.jpg", IsSelected: true},
+		{ItemID: item.ID, ImageType: "backdrop", URL: tmdb.URL + "/images/old-backdrop.jpg", IsSelected: true},
+		{ItemID: item.ID, ImageType: "logo", URL: tmdb.URL + "/images/old-logo.png", IsSelected: true},
+	}).Error; err != nil {
+		t.Fatalf("seed existing selected images: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if err := svc.ApplyCatalogCandidate(ctx, item.ID, ApplyCandidateInput{ExternalID: "movie:202"}); err != nil {
+		t.Fatalf("apply catalog candidate: %v", err)
+	}
+
+	var images []database.ItemImage
+	if err := db.WithContext(ctx).Where("item_id = ?", item.ID).Order("image_type asc, sort_order asc, id asc").Find(&images).Error; err != nil {
+		t.Fatalf("load catalog images: %v", err)
+	}
+	selectedByType := make(map[string]database.ItemImage, len(images))
+	for _, image := range images {
+		if image.IsSelected {
+			selectedByType[image.ImageType] = image
+		}
+	}
+	if selectedByType["poster"].URL != tmdb.URL+"/images/updated-poster.jpg" {
+		t.Fatalf("expected selected poster to switch to applied candidate, got %#v", selectedByType["poster"])
+	}
+	if selectedByType["backdrop"].URL != tmdb.URL+"/images/updated-backdrop.jpg" {
+		t.Fatalf("expected selected backdrop to switch to applied candidate, got %#v", selectedByType["backdrop"])
+	}
+	if selectedByType["logo"].URL != tmdb.URL+"/images/updated-logo-en.png" {
+		t.Fatalf("expected selected logo to switch to applied candidate, got %#v", selectedByType["logo"])
+	}
+}
+
 func TestMatchCatalogItemMarksItemUnmatchedWhenSearchReturnsNoResults(t *testing.T) {
 	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

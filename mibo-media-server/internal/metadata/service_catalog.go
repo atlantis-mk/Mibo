@@ -44,7 +44,7 @@ func (s *Service) MatchCatalogItem(ctx context.Context, itemID uint) error {
 		return err
 	}
 
-	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, searchMatch.confidence)
+	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, searchMatch.confidence, false)
 }
 
 func (s *Service) CatalogMatchingConfigured(ctx context.Context) (bool, error) {
@@ -114,7 +114,7 @@ func (s *Service) ApplyCatalogCandidate(ctx context.Context, itemID uint, input 
 	if err != nil {
 		return err
 	}
-	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, 1)
+	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, 1, true)
 }
 
 func (s *Service) RefetchCatalogItem(ctx context.Context, itemID uint) error {
@@ -145,7 +145,7 @@ func (s *Service) RefetchCatalogItem(ctx context.Context, itemID uint) error {
 	if err != nil {
 		return err
 	}
-	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, confidence)
+	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, confidence, false)
 }
 
 func (s *Service) resolveCatalogMatchTarget(ctx context.Context, itemID uint) (database.CatalogItem, error) {
@@ -184,7 +184,7 @@ func (s *Service) loadCatalogTMDBIdentity(ctx context.Context, itemID uint, medi
 	return strings.TrimSpace(identity.ExternalID), confidence, nil
 }
 
-func (s *Service) applyCatalogDetail(ctx context.Context, item database.CatalogItem, tmdbCfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64) error {
+func (s *Service) applyCatalogDetail(ctx context.Context, item database.CatalogItem, tmdbCfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64, forceSelectImages bool) error {
 	status := catalog.GovernanceMatched
 	if confidence < 0.85 {
 		status = catalog.GovernanceNeedsReview
@@ -266,11 +266,11 @@ func (s *Service) applyCatalogDetail(ctx context.Context, item database.CatalogI
 	if err != nil {
 		return err
 	}
-	if err := s.syncCatalogDetailImages(ctx, item.ID, tmdbCfg, detail, &source.ID); err != nil {
+	if err := s.syncCatalogDetailImages(ctx, item.ID, tmdbCfg, detail, forceSelectImages, &source.ID); err != nil {
 		return err
 	}
 	if mediaType == "tv" && item.Type == catalog.ItemTypeSeries {
-		if err := s.syncCatalogSeriesHierarchy(ctx, item, tmdbCfg, detail.ID, status, confidence, detail.Seasons); err != nil {
+		if err := s.syncCatalogSeriesHierarchy(ctx, item, tmdbCfg, detail.ID, status, confidence, detail.Seasons, forceSelectImages); err != nil {
 			return err
 		}
 	}
@@ -319,7 +319,7 @@ func catalogItemToSearchItem(item database.CatalogItem) database.MediaItem {
 	return searchItem
 }
 
-func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem database.CatalogItem, tmdbCfg config.TMDBConfig, seriesTMDBID int, governanceStatus string, confidence float64, seasons []seasonSummary) error {
+func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem database.CatalogItem, tmdbCfg config.TMDBConfig, seriesTMDBID int, governanceStatus string, confidence float64, seasons []seasonSummary, forceSelectImages bool) error {
 	catalogSvc := catalog.NewService(s.db)
 	for _, seasonSummary := range seasons {
 		seasonItem, err := s.findOrCreateCatalogSeasonItem(ctx, catalogSvc, seriesItem, seasonSummary.SeasonNumber, seasonSummary.Name)
@@ -340,7 +340,7 @@ func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem dat
 		if err != nil {
 			return err
 		}
-		if err := s.upsertCatalogImageCandidate(ctx, seasonItem.ID, "poster", imageURL(tmdbCfg, seasonSummary.PosterPath), "", 0, true, &seasonSource.ID); err != nil {
+		if err := s.upsertCatalogImageCandidate(ctx, seasonItem.ID, "poster", imageURL(tmdbCfg, seasonSummary.PosterPath), "", 0, true, forceSelectImages, &seasonSource.ID); err != nil {
 			return err
 		}
 
@@ -371,7 +371,7 @@ func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem dat
 			if err != nil {
 				return err
 			}
-			if err := s.upsertCatalogImageCandidate(ctx, episodeItem.ID, "still", imageURL(tmdbCfg, episode.StillPath), "", 0, true, &episodeSource.ID); err != nil {
+			if err := s.upsertCatalogImageCandidate(ctx, episodeItem.ID, "still", imageURL(tmdbCfg, episode.StillPath), "", 0, true, forceSelectImages, &episodeSource.ID); err != nil {
 				return err
 			}
 			availability, err := s.resolveCatalogLeafAvailability(ctx, episodeItem.ID, releaseDate)
@@ -567,16 +567,16 @@ func firstNonEmptyCatalogValue(values ...string) string {
 	return ""
 }
 
-func (s *Service) syncCatalogDetailImages(ctx context.Context, itemID uint, tmdbCfg config.TMDBConfig, detail detailResponse, sourceID *uint) error {
-	if err := s.upsertCatalogImageCandidate(ctx, itemID, "poster", imageURL(tmdbCfg, detail.PosterPath), "", 0, true, sourceID); err != nil {
+func (s *Service) syncCatalogDetailImages(ctx context.Context, itemID uint, tmdbCfg config.TMDBConfig, detail detailResponse, forceSelectImages bool, sourceID *uint) error {
+	if err := s.upsertCatalogImageCandidate(ctx, itemID, "poster", imageURL(tmdbCfg, detail.PosterPath), "", 0, true, forceSelectImages, sourceID); err != nil {
 		return err
 	}
-	if err := s.upsertCatalogImageCandidate(ctx, itemID, "backdrop", imageURL(tmdbCfg, detail.BackdropPath), "", 0, true, sourceID); err != nil {
+	if err := s.upsertCatalogImageCandidate(ctx, itemID, "backdrop", imageURL(tmdbCfg, detail.BackdropPath), "", 0, true, forceSelectImages, sourceID); err != nil {
 		return err
 	}
 	bestLogoPath := pickLogoPath(tmdbCfg.Language, detail.Images.Logos)
 	for idx, logo := range detail.Images.Logos {
-		if err := s.upsertCatalogImageCandidate(ctx, itemID, "logo", imageURL(tmdbCfg, logo.FilePath), strings.TrimSpace(logo.Language), idx, strings.TrimSpace(logo.FilePath) == strings.TrimSpace(bestLogoPath), sourceID); err != nil {
+		if err := s.upsertCatalogImageCandidate(ctx, itemID, "logo", imageURL(tmdbCfg, logo.FilePath), strings.TrimSpace(logo.Language), idx, strings.TrimSpace(logo.FilePath) == strings.TrimSpace(bestLogoPath), forceSelectImages, sourceID); err != nil {
 			return err
 		}
 	}
@@ -621,7 +621,7 @@ func (s *Service) syncCatalogHierarchyIdentity(ctx context.Context, itemID uint,
 	return source, nil
 }
 
-func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, imageType string, url string, language string, sortOrder int, preferSelected bool, sourceID *uint) error {
+func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, imageType string, url string, language string, sortOrder int, preferSelected bool, forceSelected bool, sourceID *uint) error {
 	trimmedURL := strings.TrimSpace(url)
 	trimmedType := strings.TrimSpace(imageType)
 	if itemID == 0 || trimmedType == "" || trimmedURL == "" {
@@ -648,7 +648,7 @@ func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, 
 
 		selectByDefault := false
 		if preferSelected {
-			selectByDefault = shouldPreferCatalogSelectedImage(itemID, sameTypeImages)
+			selectByDefault = forceSelected || shouldPreferCatalogSelectedImage(itemID, sameTypeImages)
 		}
 
 		now := time.Now().UTC()
