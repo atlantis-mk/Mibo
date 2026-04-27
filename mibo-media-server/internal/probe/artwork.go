@@ -22,10 +22,6 @@ const (
 	maxArtworkSeekOffset     = 300
 )
 
-func (s *Service) generateFallbackArtwork(ctx context.Context, file database.MediaFile, target string, runtimeSeconds *int) error {
-	return nil
-}
-
 func (s *Service) generateCatalogFallbackArtwork(ctx context.Context, file database.InventoryFile, target string, runtimeSeconds *int) error {
 	if !s.ffmpeg.Enabled || strings.TrimSpace(s.ffmpeg.Path) == "" || strings.TrimSpace(target) == "" {
 		return nil

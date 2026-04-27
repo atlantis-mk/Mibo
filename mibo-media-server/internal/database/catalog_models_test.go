@@ -39,9 +39,6 @@ func TestDatabaseOpenMigratesCatalogIndexes(t *testing.T) {
 		{&AssetFile{}, "idx_asset_files_asset_part"},
 		{&MediaStream{}, "idx_media_stream_file_index"},
 		{&UserItemData{}, "idx_user_item_data_user_item_asset"},
-		{&TVSeasonMetadataCache{}, "idx_tv_season_cache_lookup"},
-		{&TVEpisodeMetadataCache{}, "idx_tv_episode_cache_lookup"},
-		{&PlaybackProgress{}, "idx_user_media_item"},
 		{&SystemSetting{}, "idx_system_setting_category_key"},
 	}
 

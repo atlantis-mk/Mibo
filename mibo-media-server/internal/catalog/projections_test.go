@@ -36,7 +36,7 @@ func TestCatalogRefreshLibraryProjectionRebuildsTargetedRows(t *testing.T) {
 
 	series := seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
 		LibraryID:          7,
-		Type:               "show",
+		Type:               ItemTypeSeries,
 		Path:               "/library/Show A",
 		SortKey:            "Show A",
 		DisplayOrder:       DisplayOrderAired,

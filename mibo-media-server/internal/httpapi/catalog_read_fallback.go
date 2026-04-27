@@ -8,7 +8,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/library"
 )
 
-func (r *Router) listCatalogDiscoveryItems(ctx context.Context, input library.BrowseMediaItemsInput) ([]catalog.CatalogListItem, error) {
+func (r *Router) listCatalogDiscoveryItems(ctx context.Context, input library.BrowseItemsInput) ([]catalog.CatalogListItem, error) {
 	if r.catalog == nil {
 		return []catalog.CatalogListItem{}, nil
 	}

@@ -17,7 +17,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/schedule"
-	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 )
 
@@ -30,7 +29,6 @@ type Runner struct {
 	metadata *metadata.Service
 	probe    *probe.Service
 	schedule *schedule.Service
-	search   *search.Service
 	settings *settings.Service
 	interval time.Duration
 }
@@ -53,9 +51,6 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 	for _, arg := range args {
 		if catalogSvc, ok := arg.(*catalog.Service); ok {
 			runner.catalog = catalogSvc
-		}
-		if searchSvc, ok := arg.(*search.Service); ok {
-			runner.search = searchSvc
 		}
 		if scheduleSvc, ok := arg.(*schedule.Service); ok {
 			runner.schedule = scheduleSvc
@@ -161,14 +156,6 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return errors.New("listener service unavailable")
 		}
 		return r.listener.RunReconcile(ctx, job)
-	case library.JobKindMatchMediaItem:
-		var payload struct {
-			MediaItemID uint `json:"media_item_id"`
-		}
-		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
-			return err
-		}
-		return r.metadata.MatchItem(ctx, payload.MediaItemID)
 	case library.JobKindMatchCatalogItem:
 		if r.metadata == nil {
 			return nil
@@ -187,37 +174,6 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.metadata.MatchCatalogItem(ctx, payload.ItemID)
-	case library.JobKindRefetchMediaItem:
-		var payload struct {
-			MediaItemID uint `json:"media_item_id"`
-		}
-		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
-			return err
-		}
-		return r.metadata.RefetchItem(ctx, payload.MediaItemID)
-	case library.JobKindReindexSearchDocument:
-		if r.search == nil {
-			return errors.New("search service unavailable")
-		}
-		var payload struct {
-			MediaItemID uint `json:"media_item_id"`
-		}
-		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
-			return err
-		}
-		return r.search.ReindexMediaItem(ctx, payload.MediaItemID)
-	case library.JobKindReindexLibrarySearch:
-		if r.search == nil {
-			return errors.New("search service unavailable")
-		}
-		var payload struct {
-			LibraryID uint   `json:"library_id"`
-			RootPath  string `json:"root_path"`
-		}
-		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
-			return err
-		}
-		return r.search.ReindexLibrary(ctx, payload.LibraryID, payload.RootPath)
 	case library.JobKindCatalogRefreshItemProjection:
 		if r.catalog == nil {
 			return errors.New("catalog service unavailable")
@@ -236,51 +192,6 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.catalog.RefreshLibraryProjection(ctx, payload.LibraryID, payload.RootPath)
-	case catalog.JobKindLegacyBackfill:
-		if r.catalog == nil {
-			return errors.New("catalog service unavailable")
-		}
-		var payload catalog.LegacyBackfillPayload
-		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
-			return err
-		}
-		if err := r.catalog.RunLegacyBackfill(ctx, payload); err != nil {
-			return err
-		}
-		if r.settings == nil {
-			return nil
-		}
-		run, err := r.catalog.GetLegacyBackfillRun(ctx, payload.RunID)
-		if err != nil {
-			return err
-		}
-		state, err := r.settings.GetCatalogMigrationState(ctx)
-		if err != nil {
-			return err
-		}
-		completedAt := run.FinishedAt
-		if completedAt == nil {
-			now := time.Now().UTC()
-			completedAt = &now
-		}
-		_, err = r.settings.UpdateCatalogMigrationState(ctx, settings.UpdateCatalogMigrationStateInput{
-			CatalogBackfillCompletedAt:   completedAt,
-			CatalogReadEnabled:           state.CatalogReadEnabled,
-			CatalogValidationCompletedAt: state.CatalogValidationCompletedAt,
-			LegacyCleanupCompletedAt:     state.LegacyCleanupCompletedAt,
-		})
-		return err
-	case "probe_media_file":
-		if r.probe == nil {
-			return errors.New("probe service unavailable")
-		}
-		var payload struct {
-			MediaFileID uint `json:"media_file_id"`
-		}
-		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
-			return err
-		}
-		return r.probe.ProbeFile(ctx, payload.MediaFileID)
 	case library.JobKindProbeInventoryFile:
 		if r.probe == nil {
 			return errors.New("probe service unavailable")

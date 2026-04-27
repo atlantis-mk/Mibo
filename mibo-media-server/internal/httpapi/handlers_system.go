@@ -65,14 +65,8 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 
 	tmdbSettings := map[string]any{"configured": r.cfg.Metadata.TMDB.APIKey != "", "source": sourceLabel(r.cfg.Metadata.TMDB.APIKey)}
 	tvdbSettings := map[string]any{"configured": r.cfg.Metadata.TVDB.APIKey != "", "source": sourceLabel(r.cfg.Metadata.TVDB.APIKey)}
-	catalogMigration := settings.CatalogMigrationState{}
 	if r.settings != nil {
 		resolved, err := r.settings.GetMetadataSettings(req.Context())
-		if err != nil {
-			writeError(req.Context(), w, http.StatusInternalServerError, err)
-			return
-		}
-		catalogMigration, err = r.settings.GetCatalogMigrationState(req.Context())
 		if err != nil {
 			writeError(req.Context(), w, http.StatusInternalServerError, err)
 			return
@@ -91,7 +85,6 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 		"service":                     "mibo-media-server",
 		"database":                    r.cfg.Database.Driver,
 		"available_storage_providers": r.storage.Names(),
-		"catalog_migration":           catalogMigration,
 		"storage_provider": map[string]any{
 			"name":         provider.Name(),
 			"root_path":    storageRootPath(r.cfg),
@@ -117,45 +110,6 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 			"search":   r.search.Status(),
 		},
 	})
-}
-
-func (r *Router) handleGetCatalogMigrationSettings(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
-		return
-	}
-	if r.settings == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
-		return
-	}
-	result, err := r.settings.GetCatalogMigrationState(req.Context())
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(req.Context(), w, http.StatusOK, result)
-}
-
-func (r *Router) handleUpdateCatalogMigrationSettings(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
-		return
-	}
-	if r.settings == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
-		return
-	}
-	var input settings.UpdateCatalogMigrationStateInput
-	if err := decodeJSON(req, &input); err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	result, err := r.settings.UpdateCatalogMigrationState(req.Context(), input)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(req.Context(), w, http.StatusOK, result)
 }
 
 func (r *Router) handleGetMetadataSettings(w http.ResponseWriter, req *http.Request) {

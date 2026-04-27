@@ -64,7 +64,7 @@ func (r *Router) handleListSearchHistory(w http.ResponseWriter, req *http.Reques
 	writeJSON(req.Context(), w, http.StatusOK, items)
 }
 
-func discoveryInputFromRequest(req *http.Request) (library.BrowseMediaItemsInput, error) {
+func discoveryInputFromRequest(req *http.Request) (library.BrowseItemsInput, error) {
 	query := req.URL.Query()
 	limit, _ := strconv.Atoi(query.Get("limit"))
 	offset, _ := strconv.Atoi(query.Get("offset"))
@@ -72,11 +72,11 @@ func discoveryInputFromRequest(req *http.Request) (library.BrowseMediaItemsInput
 	if raw := strings.TrimSpace(query.Get("library_id")); raw != "" {
 		parsed, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil || parsed == 0 {
-			return library.BrowseMediaItemsInput{}, fmt.Errorf("library_id must be a positive integer")
+			return library.BrowseItemsInput{}, fmt.Errorf("library_id must be a positive integer")
 		}
 		libraryID = uint(parsed)
 	}
-	input := library.BrowseMediaItemsInput{
+	input := library.BrowseItemsInput{
 		LibraryID:     libraryID,
 		Scope:         library.BrowseScopeAll,
 		Query:         strings.TrimSpace(query.Get("q")),
@@ -94,5 +94,5 @@ func discoveryInputFromRequest(req *http.Request) (library.BrowseMediaItemsInput
 	if query.Get("scope") == "library" {
 		input.Scope = library.BrowseScopeLibrary
 	}
-	return library.NormalizeBrowseMediaItemsInput(input), nil
+	return library.NormalizeBrowseItemsInput(input), nil
 }

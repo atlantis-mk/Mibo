@@ -89,8 +89,8 @@ type catalogScanArtifact struct {
 type SyncResult struct {
 	DirectoriesScanned int `json:"directories_scanned"`
 	FilesSeen          int `json:"files_seen"`
-	MediaItemsUpserted int `json:"media_items_upserted"`
-	MediaFilesUpserted int `json:"media_files_upserted"`
+	CatalogItemsSeen   int `json:"catalog_items_seen"`
+	InventoryFilesSeen int `json:"inventory_files_seen"`
 }
 
 type scanMode struct {

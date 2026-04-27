@@ -46,7 +46,7 @@ func (s *Service) RunScheduledInvalidLinkCheck(ctx context.Context, due schedule
 			result.Failures++
 			continue
 		}
-		var files []database.MediaFile
+		var files []database.InventoryFile
 		if err := s.db.WithContext(ctx).
 			Where("library_id = ? AND deleted_at IS NULL", libraryRecord.ID).
 			Order("id asc").

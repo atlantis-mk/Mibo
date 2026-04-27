@@ -47,7 +47,7 @@ const (
 	WatchedStateFilterWatched    WatchedStateFilter = "watched"
 )
 
-type BrowseMediaItemsInput struct {
+type BrowseItemsInput struct {
 	LibraryID     uint
 	Scope         BrowseScope
 	Query         string
@@ -61,23 +61,6 @@ type BrowseMediaItemsInput struct {
 	SortDirection SortDirection
 	Limit         int
 	Offset        int
-}
-
-type browseCandidate struct {
-	Item      database.MediaItem
-	WatchRank int
-}
-
-type showDiscoveryGroup struct {
-	Anchor         database.MediaItem
-	Display        database.MediaItem
-	WatchRank      int
-	Representative int
-}
-
-type DiscoveryItem struct {
-	Item         database.MediaItem `json:"item"`
-	WatchedState string             `json:"watched_state"`
 }
 
 type PersonDetail struct {
@@ -102,46 +85,8 @@ type TrailerDetail struct {
 
 type LibraryDetail struct {
 	database.Library
-	MediaItemsCount int64 `json:"media_items_count"`
-	MediaFilesCount int64 `json:"media_files_count"`
-}
-
-type MediaItemDetail struct {
-	database.MediaItem
-	SeriesTMDBID        *int              `json:"series_tmdb_id,omitempty"`
-	SeriesTitleDisplay  string            `json:"series_title_display"`
-	DefaultSeasonNumber *int              `json:"default_season_number,omitempty"`
-	Genres              []string          `json:"genres"`
-	Cast                []PersonDetail    `json:"cast"`
-	Directors           []PersonDetail    `json:"directors"`
-	Trailer             *TrailerDetail    `json:"trailer,omitempty"`
-	Files               []MediaFileDetail `json:"files"`
-}
-
-type SeriesSeasonDetail struct {
-	SeasonNumber   int                   `json:"season_number"`
-	Name           string                `json:"name"`
-	Overview       string                `json:"overview"`
-	PosterURL      string                `json:"poster_url"`
-	RuntimeSeconds *int                  `json:"runtime_seconds,omitempty"`
-	Episodes       []SeriesEpisodeDetail `json:"episodes"`
-}
-
-type SeriesEpisodeDetail struct {
-	MediaItemID    uint   `json:"media_item_id"`
-	SeasonNumber   int    `json:"season_number"`
-	EpisodeNumber  int    `json:"episode_number"`
-	Name           string `json:"name"`
-	AirDate        string `json:"air_date,omitempty"`
-	Overview       string `json:"overview"`
-	StillURL       string `json:"still_url"`
-	RuntimeSeconds *int   `json:"runtime_seconds,omitempty"`
-}
-
-type MediaFileDetail struct {
-	database.MediaFile
-	AudioTracks    []TrackDetail `json:"audio_tracks"`
-	SubtitleTracks []TrackDetail `json:"subtitle_tracks"`
+	CatalogItemsCount   int64 `json:"catalog_items_count"`
+	InventoryFilesCount int64 `json:"inventory_files_count"`
 }
 
 type TrackDetail struct {
@@ -151,13 +96,7 @@ type TrackDetail struct {
 	Channels int    `json:"channels,omitempty"`
 }
 
-type LatestByLibrarySection struct {
-	LibraryID   uint                 `json:"library_id"`
-	LibraryName string               `json:"library_name"`
-	Items       []database.MediaItem `json:"items"`
-}
-
-func NormalizeBrowseMediaItemsInput(input BrowseMediaItemsInput) BrowseMediaItemsInput {
+func NormalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
 	if input.Scope != BrowseScopeAll {
 		input.Scope = BrowseScopeLibrary
 	}

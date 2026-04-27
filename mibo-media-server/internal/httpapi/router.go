@@ -49,9 +49,9 @@ type Router struct {
 }
 
 type homeDiscoveryResponse struct {
-	ContinueWatching []progress.Entry                 `json:"continue_watching"`
-	RecentlyPlayed   []progress.Entry                 `json:"recently_played"`
-	LatestByLibrary  []library.LatestByLibrarySection `json:"latest_by_library"`
+	ContinueWatching []catalog.CatalogUserItemEntry          `json:"continue_watching"`
+	RecentlyPlayed   []catalog.CatalogUserItemEntry          `json:"recently_played"`
+	LatestByLibrary  []catalog.CatalogLatestByLibrarySection `json:"latest_by_library"`
 }
 
 func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service, args ...any) http.Handler {
@@ -104,13 +104,6 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/home/latest-by-library", router.handleLatestByLibrary)
 	mux.HandleFunc("GET /api/v1/home/recently-added", router.handleRecentlyAdded)
 	mux.HandleFunc("GET /api/v1/system/info", router.handleSystemInfo)
-	mux.HandleFunc("GET /api/v1/settings/catalog-migration", router.handleGetCatalogMigrationSettings)
-	mux.HandleFunc("PUT /api/v1/settings/catalog-migration", router.handleUpdateCatalogMigrationSettings)
-	mux.HandleFunc("POST /api/v1/catalog-migration/backfill", router.handleQueueCatalogLegacyBackfill)
-	mux.HandleFunc("POST /api/v1/catalog-migration/rebuild-projections", router.handleRebuildCatalogDerivedData)
-	mux.HandleFunc("GET /api/v1/catalog-migration/consistency", router.handleCheckCatalogConsistency)
-	mux.HandleFunc("GET /api/v1/catalog-migration/runs", router.handleListCatalogMigrationRuns)
-	mux.HandleFunc("GET /api/v1/catalog-migration/runs/{id}", router.handleGetCatalogMigrationRun)
 	mux.HandleFunc("GET /api/v1/settings/metadata", router.handleGetMetadataSettings)
 	mux.HandleFunc("PUT /api/v1/settings/metadata", router.handleUpdateMetadataSettings)
 	mux.HandleFunc("GET /api/v1/settings/scan", router.handleGetScanSettings)

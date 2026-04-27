@@ -18,7 +18,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestRunSyncLibraryWritesCatalogRowsWithoutLegacyMediaTables(t *testing.T) {
+func TestRunSyncLibraryWritesCatalogRows(t *testing.T) {
 	t.Parallel()
 
 	rootPath := t.TempDir()
@@ -43,8 +43,6 @@ func TestRunSyncLibraryWritesCatalogRowsWithoutLegacyMediaTables(t *testing.T) {
 	assertTableCount(t, ctx, db, &database.MediaAsset{}, 2)
 	assertTableCount(t, ctx, db, &database.AssetItem{}, 2)
 	assertTableCount(t, ctx, db, &database.AssetFile{}, 2)
-	assertTableCount(t, ctx, db, &database.MediaItem{}, 0)
-	assertTableCount(t, ctx, db, &database.MediaFile{}, 0)
 
 	var projectionJobs int64
 	if err := db.WithContext(ctx).
@@ -150,8 +148,6 @@ func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) 
 	assertTableCount(t, ctx, db, &database.MediaAsset{}, 2)
 	assertTableCount(t, ctx, db, &database.AssetItem{}, 2)
 	assertTableCount(t, ctx, db, &database.AssetFile{}, 2)
-	assertTableCount(t, ctx, db, &database.MediaItem{}, 0)
-	assertTableCount(t, ctx, db, &database.MediaFile{}, 0)
 
 	var assets []database.MediaAsset
 	if err := db.WithContext(ctx).
@@ -213,8 +209,6 @@ func TestRunSyncLibraryMarksMissingInventoryWithoutDeletingCatalogItem(t *testin
 	assertTableCount(t, ctx, db, &database.AssetItem{}, 1)
 	assertTableCount(t, ctx, db, &database.AssetFile{}, 1)
 	assertTableCount(t, ctx, db, &database.MetadataSource{}, 1)
-	assertTableCount(t, ctx, db, &database.MediaItem{}, 0)
-	assertTableCount(t, ctx, db, &database.MediaFile{}, 0)
 
 	var item database.CatalogItem
 	if err := db.WithContext(ctx).

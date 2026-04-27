@@ -56,7 +56,7 @@ func TestCatalogFileContractUsesJSONTagsOnly(t *testing.T) {
 		t.Fatalf("expected contracts.go to include canonical series type")
 	}
 	if strings.Contains(text, "show") {
-		t.Fatalf("expected contracts.go to avoid legacy show naming")
+		t.Fatalf("expected contracts.go to avoid non-canonical show naming")
 	}
 
 	assertDTOsDoNotExposeRawRows(t, "contracts.go")
@@ -73,7 +73,7 @@ func TestCatalogTypeContractKeepsSeriesCanonical(t *testing.T) {
 		t.Fatalf("expected marshaled dto to use series type, got %s", text)
 	}
 	if strings.Contains(text, `"type":"show"`) {
-		t.Fatalf("expected marshaled dto to avoid legacy show type, got %s", text)
+		t.Fatalf("expected marshaled dto to avoid non-canonical show type, got %s", text)
 	}
 }
 
@@ -190,7 +190,6 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 		Assets:      []CatalogAssetDetail{assetDetail},
 	})
 
-	legacySeriesType := "show"
 	cases := []struct {
 		name      string
 		value     any
@@ -203,7 +202,7 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 		{
 			name: "list item",
 			value: BuildCatalogListItem(CatalogListItemInput{
-				Item:        database.CatalogItem{ID: 10, LibraryID: 3, Type: legacySeriesType, Title: "The Example Show", Year: &year, AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernancePending},
+				Item:        database.CatalogItem{ID: 10, LibraryID: 3, Type: ItemTypeSeries, Title: "The Example Show", Year: &year, AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernancePending},
 				Rollup:      rollup,
 				Images:      images,
 				ExternalIDs: externalIDs,
@@ -217,7 +216,7 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 		{
 			name: "item detail",
 			value: BuildCatalogItemDetail(CatalogItemDetailInput{
-				Item:        database.CatalogItem{ID: 10, LibraryID: 3, Type: legacySeriesType, Title: "The Example Show", Year: &year, AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernanceMatched},
+				Item:        database.CatalogItem{ID: 10, LibraryID: 3, Type: ItemTypeSeries, Title: "The Example Show", Year: &year, AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernanceMatched},
 				Rollup:      rollup,
 				Images:      images,
 				ExternalIDs: externalIDs,
@@ -283,7 +282,7 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 		{
 			name: "governance workspace",
 			value: BuildCatalogGovernanceWorkspace(CatalogGovernanceWorkspaceInput{
-				Item:                database.CatalogItem{ID: 10, LibraryID: 3, Type: legacySeriesType, Title: "The Example Show", AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernanceManual},
+				Item:                database.CatalogItem{ID: 10, LibraryID: 3, Type: ItemTypeSeries, Title: "The Example Show", AvailabilityStatus: AvailabilityMissing, GovernanceStatus: GovernanceManual},
 				Images:              images,
 				ExternalIDs:         externalIDs,
 				Sources:             sources,
@@ -317,7 +316,7 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 			if tc.typeValue != "" && decoded["type"] != tc.typeValue {
 				t.Fatalf("expected %s type %q, got %#v", tc.name, tc.typeValue, decoded["type"])
 			}
-			if decoded[tc.statusKey] != tc.status {
+			if tc.statusKey != "" && decoded[tc.statusKey] != tc.status {
 				t.Fatalf("expected %s %s %q, got %#v", tc.name, tc.statusKey, tc.status, decoded[tc.statusKey])
 			}
 			assertCuratedSourceEvidenceSummary(t, decoded)

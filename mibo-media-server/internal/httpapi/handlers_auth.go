@@ -164,8 +164,12 @@ func (r *Router) handleRecentlyPlayed(w http.ResponseWriter, req *http.Request) 
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	entries, err := r.progress.RecentlyPlayed(req.Context(), user.ID, limit)
+	entries, err := r.catalog.ListRecentlyPlayed(req.Context(), user.ID, limit)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return

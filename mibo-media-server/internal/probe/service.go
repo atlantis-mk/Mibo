@@ -13,7 +13,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
-	librarysvc "github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
@@ -86,80 +85,6 @@ func NewService(db *gorm.DB, registry *providers.Registry, cfg config.FFprobeCon
 		service.ffmpeg = args[0]
 	}
 	return service
-}
-
-func (s *Service) ProbeFile(ctx context.Context, mediaFileID uint) error {
-	var file database.MediaFile
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", mediaFileID).
-		First(&file).Error; err != nil {
-		return err
-	}
-
-	provider, err := s.providerForFile(ctx, file.LibraryID)
-	if err != nil {
-		return s.markProbeError(ctx, file.ID, err)
-	}
-
-	target, err := s.resolveProbeTarget(ctx, provider, file.StoragePath)
-	if err != nil {
-		return s.markProbeError(ctx, file.ID, err)
-	}
-
-	var runtimeSeconds *int
-	if !s.cfg.Enabled {
-		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
-		return s.markUnavailable(ctx, file.ID, "ffprobe disabled")
-	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
-	defer cancel()
-
-	output, err := exec.CommandContext(probeCtx, s.cfg.Path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", target).Output()
-	if err != nil {
-		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
-		var execErr *exec.Error
-		if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
-			return s.markUnavailable(ctx, file.ID, "ffprobe not found")
-		}
-		return s.markProbeError(ctx, file.ID, err)
-	}
-
-	var parsed ffprobeOutput
-	if err := json.Unmarshal(output, &parsed); err != nil {
-		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
-		return s.markProbeError(ctx, file.ID, err)
-	}
-
-	updates, runtimeSeconds, err := buildProbeUpdates(parsed)
-	if err != nil {
-		s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
-		return s.markProbeError(ctx, file.ID, err)
-	}
-
-	if err := s.db.WithContext(ctx).
-		Model(&database.MediaFile{}).
-		Where("id = ?", file.ID).
-		Updates(updates).Error; err != nil {
-		return err
-	}
-
-	if file.MediaItemID != nil && runtimeSeconds != nil {
-		if err := s.db.WithContext(ctx).
-			Model(&database.MediaItem{}).
-			Where("id = ?", *file.MediaItemID).
-			Update("runtime_seconds", runtimeSeconds).Error; err != nil {
-			return err
-		}
-	}
-	if updates["duration_seconds"] != nil {
-		if err := librarysvc.ReconcileProvisionalMediaFile(ctx, s.db, file.ID); err != nil {
-			return err
-		}
-	}
-	s.tryGenerateFallbackArtwork(ctx, file, target, runtimeSeconds)
-
-	return nil
 }
 
 func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) error {
@@ -255,12 +180,6 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 	s.tryGenerateCatalogFallbackArtwork(ctx, file, target, runtimeSeconds)
 
 	return nil
-}
-
-func (s *Service) tryGenerateFallbackArtwork(ctx context.Context, file database.MediaFile, target string, runtimeSeconds *int) {
-	if err := s.generateFallbackArtwork(ctx, file, target, runtimeSeconds); err != nil {
-		log.Printf("probe: fallback artwork generation failed for media_file=%d: %v", file.ID, err)
-	}
 }
 
 func (s *Service) tryGenerateCatalogFallbackArtwork(ctx context.Context, file database.InventoryFile, target string, runtimeSeconds *int) {
@@ -553,31 +472,4 @@ func buildProbeUpdates(parsed ffprobeOutput) (map[string]any, *int, error) {
 		"audio_tracks_json":    string(audioJSON),
 		"subtitle_tracks_json": string(subtitleJSON),
 	}, runtimeSeconds, nil
-}
-
-func (s *Service) markUnavailable(ctx context.Context, mediaFileID uint, message string) error {
-	return s.db.WithContext(ctx).
-		Model(&database.MediaFile{}).
-		Where("id = ?", mediaFileID).
-		Updates(map[string]any{
-			"probe_status": StatusUnavailable,
-			"probe_error":  message,
-		}).Error
-}
-
-func (s *Service) markProbeError(ctx context.Context, mediaFileID uint, err error) error {
-	message := "probe failed"
-	if err != nil {
-		message = err.Error()
-	}
-	if updateErr := s.db.WithContext(ctx).
-		Model(&database.MediaFile{}).
-		Where("id = ?", mediaFileID).
-		Updates(map[string]any{
-			"probe_status": StatusError,
-			"probe_error":  message,
-		}).Error; updateErr != nil {
-		return updateErr
-	}
-	return err
 }

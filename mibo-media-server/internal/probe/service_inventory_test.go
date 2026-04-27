@@ -93,13 +93,6 @@ func TestProbeInventoryFileUpdatesAssetsAndStreams(t *testing.T) {
 		t.Fatalf("expected runtime_seconds=7260, got %#v", item.RuntimeSeconds)
 	}
 
-	var legacyCount int64
-	if err := fixture.db.WithContext(ctx).Model(&database.MediaFile{}).Count(&legacyCount).Error; err != nil {
-		t.Fatalf("count legacy media files: %v", err)
-	}
-	if legacyCount != 0 {
-		t.Fatalf("expected legacy media_files to remain untouched, got %d rows", legacyCount)
-	}
 }
 
 func TestBuildInventoryMediaStreamsAllowsSparseVideoMetadata(t *testing.T) {

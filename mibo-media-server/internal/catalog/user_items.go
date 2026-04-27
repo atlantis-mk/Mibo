@@ -46,6 +46,24 @@ func (s *Service) ListContinueWatching(ctx context.Context, userID uint, limit i
 	return s.buildUserItemEntries(ctx, rows)
 }
 
+func (s *Service) ListRecentlyPlayed(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	var rows []database.UserItemData
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ? AND item_id > 0", userID).
+		Where("last_played_at IS NOT NULL").
+		Order("last_played_at desc").
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	return s.buildUserItemEntries(ctx, rows)
+}
+
 func (s *Service) ListFavorites(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 200

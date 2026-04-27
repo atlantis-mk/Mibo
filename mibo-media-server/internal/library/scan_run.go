@@ -49,9 +49,6 @@ func (s *Service) RunSyncLibrary(ctx context.Context, job database.Job) error {
 	if err := s.updateLibraryStatus(ctx, record.ID, "active"); err != nil {
 		return err
 	}
-	if _, err := s.QueueLibrarySearchReindex(ctx, record.ID, rootPath); err != nil {
-		return err
-	}
 	if _, err := s.QueueCatalogLibraryProjectionRefresh(ctx, record.ID, rootPath); err != nil {
 		return err
 	}
@@ -81,9 +78,6 @@ func (s *Service) RunTargetedRefresh(ctx context.Context, job database.Job) erro
 		return err
 	}
 	if err := s.updateLibraryStatus(ctx, record.ID, "active"); err != nil {
-		return err
-	}
-	if _, err := s.QueueLibrarySearchReindex(ctx, record.ID, rootPath); err != nil {
 		return err
 	}
 	if _, err := s.QueueCatalogLibraryProjectionRefresh(ctx, record.ID, rootPath); err != nil {
@@ -149,7 +143,10 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 			return err
 		}
 		if writeResult.File.ID != 0 {
-			result.MediaFilesUpserted++
+			result.InventoryFilesSeen++
+			if writeResult.Item.ID != 0 {
+				result.CatalogItemsSeen++
+			}
 		}
 		if writeResult.Item.ID != 0 {
 			if _, err := s.QueueCatalogItemMatch(ctx, writeResult.Item.ID); err != nil {

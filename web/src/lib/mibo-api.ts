@@ -47,8 +47,8 @@ export type Library = {
 }
 
 export type LibraryDetail = Library & {
-  media_items_count: number
-  media_files_count: number
+  catalog_items_count: number
+  inventory_files_count: number
 }
 
 export type OpenListMediaSourceConfig = {

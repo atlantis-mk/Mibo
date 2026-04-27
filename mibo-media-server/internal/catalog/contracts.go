@@ -934,10 +934,5 @@ func normalizeGovernanceStatus(status string) string {
 }
 
 func normalizeCatalogType(itemType string) string {
-	itemType = strings.TrimSpace(itemType)
-	legacySeriesType := "sh" + "ow"
-	if itemType == legacySeriesType {
-		return ItemTypeSeries
-	}
-	return itemType
+	return strings.TrimSpace(itemType)
 }

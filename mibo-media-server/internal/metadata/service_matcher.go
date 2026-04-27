@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/config"
-	"github.com/atlan/mibo-media-server/internal/database"
 )
 
 var metadataYearPattern = regexp.MustCompile(`(?i)(?:^|[\s._\-(])((?:19|20)\d{2})(?:$|[\s._\-)])`)
@@ -30,7 +29,20 @@ type scoredMatchCandidate struct {
 	extraScore    float64
 }
 
-func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, item database.MediaItem, mediaType string) (*scoredMatchCandidate, error) {
+type metadataSearchItem struct {
+	LibraryID     uint
+	Type          string
+	Title         string
+	OriginalTitle string
+	SeriesTitle   string
+	Overview      string
+	SourcePath    string
+	Year          *int
+	SeasonNumber  *int
+	EpisodeNumber *int
+}
+
+func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, item metadataSearchItem, mediaType string) (*scoredMatchCandidate, error) {
 	candidates, err := s.collectSearchCandidates(ctx, cfg, mediaType, buildSearchQueries(item, mediaType), item)
 	if err != nil {
 		return nil, err
@@ -42,7 +54,7 @@ func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, it
 	return &best, nil
 }
 
-func (s *Service) searchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType string, queries []matchSearchQuery, item database.MediaItem) ([]SearchCandidate, error) {
+func (s *Service) searchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType string, queries []matchSearchQuery, item metadataSearchItem) ([]SearchCandidate, error) {
 	candidates, err := s.collectSearchCandidates(ctx, cfg, mediaType, queries, item)
 	if err != nil {
 		return nil, err
@@ -57,7 +69,7 @@ func (s *Service) searchCandidates(ctx context.Context, cfg config.TMDBConfig, m
 	return results, nil
 }
 
-func (s *Service) collectSearchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType string, queries []matchSearchQuery, item database.MediaItem) ([]scoredMatchCandidate, error) {
+func (s *Service) collectSearchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType string, queries []matchSearchQuery, item metadataSearchItem) ([]scoredMatchCandidate, error) {
 	if len(queries) == 0 {
 		return nil, nil
 	}
@@ -94,7 +106,7 @@ func (s *Service) collectSearchCandidates(ctx context.Context, cfg config.TMDBCo
 	return results, nil
 }
 
-func buildSearchQueries(item database.MediaItem, mediaType string) []matchSearchQuery {
+func buildSearchQueries(item metadataSearchItem, mediaType string) []matchSearchQuery {
 	titleSources := []string{}
 	if mediaType == "tv" {
 		titleSources = append(titleSources, item.SeriesTitle)
@@ -111,7 +123,7 @@ func buildSearchQueries(item database.MediaItem, mediaType string) []matchSearch
 	return buildQueryVariants(titleSources, item.Year)
 }
 
-func buildManualSearchQueries(input ManualSearchInput, item database.MediaItem, mediaType string) []matchSearchQuery {
+func buildManualSearchQueries(input ManualSearchInput, item metadataSearchItem, mediaType string) []matchSearchQuery {
 	if title := strings.TrimSpace(input.Title); title != "" {
 		return buildQueryVariants([]string{title}, input.Year)
 	}
@@ -168,7 +180,7 @@ func cleanSearchTitle(input string) string {
 	return strings.Trim(cleaned, "- ")
 }
 
-func scoreMatchCandidate(item database.MediaItem, mediaType string, query matchSearchQuery, result searchResult) scoredMatchCandidate {
+func scoreMatchCandidate(item metadataSearchItem, mediaType string, query matchSearchQuery, result searchResult) scoredMatchCandidate {
 	titleScore := bestTitleScore(query.Value, resultTitles(result, mediaType))
 	yearScore, yearReason := scoreResultYear(item.Year, mediaType, result)
 	extraScore, extraReason := scoreResultSignals(result)

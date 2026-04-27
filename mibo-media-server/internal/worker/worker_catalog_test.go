@@ -13,11 +13,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
-	"github.com/atlan/mibo-media-server/internal/metadata"
-	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/providers"
-	"github.com/atlan/mibo-media-server/internal/search"
-	"github.com/atlan/mibo-media-server/internal/settings"
 	"gorm.io/gorm"
 )
 
@@ -71,7 +67,6 @@ func TestRunSyncLibraryQueuesCatalogLibraryProjectionRefresh(t *testing.T) {
 		t.Fatalf("run sync library: %v", err)
 	}
 
-	assertQueuedJobKind(t, ctx, jobsSvc, library.JobKindReindexLibrarySearch)
 	assertQueuedJobKind(t, ctx, jobsSvc, library.JobKindCatalogRefreshLibraryProjection)
 }
 
@@ -105,7 +100,7 @@ func TestRunTargetedRefreshQueuesCatalogLibraryProjectionRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	if err := db.WithContext(ctx).Where("kind IN ?", []string{library.JobKindSyncLibrary, library.JobKindReindexLibrarySearch, library.JobKindCatalogRefreshLibraryProjection, library.JobKindMatchMediaItem, "probe_media_file"}).Delete(&database.Job{}).Error; err != nil {
+	if err := db.WithContext(ctx).Where("kind IN ?", []string{library.JobKindSyncLibrary, library.JobKindCatalogRefreshLibraryProjection, library.JobKindProbeInventoryFile}).Delete(&database.Job{}).Error; err != nil {
 		t.Fatalf("clear bootstrap jobs: %v", err)
 	}
 
@@ -117,7 +112,6 @@ func TestRunTargetedRefreshQueuesCatalogLibraryProjectionRefresh(t *testing.T) {
 		t.Fatalf("run targeted refresh: %v", err)
 	}
 
-	assertQueuedJobKind(t, ctx, jobsSvc, library.JobKindReindexLibrarySearch)
 	assertQueuedJobKind(t, ctx, jobsSvc, library.JobKindCatalogRefreshLibraryProjection)
 }
 
@@ -276,14 +270,9 @@ func newScanProjectionFixture(t *testing.T) (*gorm.DB, *jobs.Service, *library.S
 		t.Fatalf("open database: %v", err)
 	}
 	jobsSvc := jobs.NewService(db)
-	settingsSvc := settings.NewService(db, config.MetadataConfig{})
-	searchSvc := search.NewService(db)
-	ffprobePath := writeFakeFFprobe(t)
-	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: mediaRoot}, FFprobe: config.FFprobeConfig{Enabled: true, Path: ffprobePath, Timeout: time.Second}}
+	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: mediaRoot}}
 	registry := providers.NewRegistry(cfg)
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
-	_ = metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
-	_ = probe.NewService(db, registry, cfg.FFprobe)
 
 	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: mediaRoot})
 	if err != nil {
@@ -293,7 +282,7 @@ func newScanProjectionFixture(t *testing.T) (*gorm.DB, *jobs.Service, *library.S
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	if err := db.WithContext(ctx).Where("kind IN ?", []string{library.JobKindSyncLibrary, library.JobKindReindexLibrarySearch, library.JobKindCatalogRefreshLibraryProjection, library.JobKindMatchMediaItem, "probe_media_file"}).Delete(&database.Job{}).Error; err != nil {
+	if err := db.WithContext(ctx).Where("kind IN ?", []string{library.JobKindSyncLibrary, library.JobKindCatalogRefreshLibraryProjection, library.JobKindProbeInventoryFile}).Delete(&database.Job{}).Error; err != nil {
 		t.Fatalf("clear bootstrap jobs: %v", err)
 	}
 

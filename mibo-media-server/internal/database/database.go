@@ -47,8 +47,6 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&MetadataSource{},
 		&MetadataFieldState{},
 		&ItemImage{},
-		&CatalogMigrationRun{},
-		&CatalogMigrationEntry{},
 		&Person{},
 		&ItemPerson{},
 		&Tag{},
@@ -61,20 +59,14 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&UserItemData{},
 		&ItemRollup{},
 		&CatalogSearchDocument{},
-		&MediaItem{},
-		&MediaFile{},
-		&TVSeasonMetadataCache{},
-		&TVEpisodeMetadataCache{},
 		&Job{},
 		&JobActiveIntent{},
 		&Schedule{},
 		&ScheduleRun{},
 		&User{},
 		&Session{},
-		&PlaybackProgress{},
 		&SystemSetting{},
 		&SearchHistory{},
-		&SearchDocument{},
 	); err != nil {
 		return nil, err
 	}
@@ -109,9 +101,6 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&InventoryFile{}, "idx_inventory_files_library_status_path"},
 		{&MediaStream{}, "idx_media_stream_file_index"},
 		{&UserItemData{}, "idx_user_item_data_user_item_asset"},
-		{&TVSeasonMetadataCache{}, "idx_tv_season_cache_lookup"},
-		{&TVEpisodeMetadataCache{}, "idx_tv_episode_cache_lookup"},
-		{&PlaybackProgress{}, "idx_user_media_item"},
 		{&SystemSetting{}, "idx_system_setting_category_key"},
 	}
 
@@ -186,27 +175,6 @@ func validateCatalogKernelUniqueness(db *gorm.DB) error {
 			columns:    []string{"user_id", "item_id", "asset_id"},
 			groupBy:    "user_id, item_id, asset_id",
 			selectExpr: "CAST(user_id AS TEXT) || '|' || CAST(item_id AS TEXT) || '|' || COALESCE(CAST(asset_id AS TEXT), 'null')",
-		},
-		{
-			label:      "tv season metadata cache",
-			table:      "tv_season_metadata_caches",
-			columns:    []string{"series_tmdb_id", "season_number", "language"},
-			groupBy:    "series_tmdb_id, season_number, language",
-			selectExpr: "CAST(series_tmdb_id AS TEXT) || '|' || CAST(season_number AS TEXT) || '|' || language",
-		},
-		{
-			label:      "tv episode metadata cache",
-			table:      "tv_episode_metadata_caches",
-			columns:    []string{"series_tmdb_id", "season_number", "episode_number", "language"},
-			groupBy:    "series_tmdb_id, season_number, episode_number, language",
-			selectExpr: "CAST(series_tmdb_id AS TEXT) || '|' || CAST(season_number AS TEXT) || '|' || CAST(episode_number AS TEXT) || '|' || language",
-		},
-		{
-			label:      "playback progress identity",
-			table:      "playback_progress",
-			columns:    []string{"user_id", "media_item_id"},
-			groupBy:    "user_id, media_item_id",
-			selectExpr: "CAST(user_id AS TEXT) || '|' || CAST(media_item_id AS TEXT)",
 		},
 		{
 			label:      "system setting category key",

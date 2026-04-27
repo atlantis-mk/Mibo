@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/config"
-	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/library"
 )
 
@@ -208,48 +207,6 @@ func runtimeSecondsFromMinutes(minutes *int) *int {
 	}
 	seconds := *minutes * 60
 	return &seconds
-}
-
-func cacheIsStale(fetchedAt time.Time) bool {
-	if fetchedAt.IsZero() {
-		return true
-	}
-	return time.Since(fetchedAt) > tmdbCacheTTL
-}
-
-func seasonCachesStale(rows []database.TVSeasonMetadataCache) bool {
-	for _, row := range rows {
-		if cacheIsStale(row.FetchedAt) {
-			return true
-		}
-	}
-	return false
-}
-
-func episodeCachesStale(rows []database.TVEpisodeMetadataCache) bool {
-	for _, row := range rows {
-		if cacheIsStale(row.FetchedAt) {
-			return true
-		}
-	}
-	return false
-}
-
-func seasonSummariesToCacheRows(summaries []seasonSummary) []database.TVSeasonMetadataCache {
-	rows := make([]database.TVSeasonMetadataCache, 0, len(summaries))
-	for _, season := range summaries {
-		payloadJSON, err := marshalPayload(season)
-		if err != nil {
-			continue
-		}
-		rows = append(rows, database.TVSeasonMetadataCache{SeasonNumber: season.SeasonNumber, Name: season.Name, Overview: season.Overview, PosterPath: season.PosterPath, PayloadJSON: payloadJSON})
-	}
-	return rows
-}
-
-func seasonDetailToCacheRow(seriesTMDBID int, language string, detail seasonDetailResponse, fetchedAt time.Time) database.TVSeasonMetadataCache {
-	payloadJSON, _ := marshalPayload(detail)
-	return database.TVSeasonMetadataCache{SeriesTMDBID: seriesTMDBID, SeasonNumber: detail.SeasonNumber, Language: strings.TrimSpace(language), Name: detail.Name, Overview: detail.Overview, PosterPath: detail.PosterPath, PayloadJSON: payloadJSON, FetchedAt: fetchedAt}
 }
 
 func marshalPayload(value any) (string, error) {

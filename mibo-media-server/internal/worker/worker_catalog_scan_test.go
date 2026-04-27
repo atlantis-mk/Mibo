@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
@@ -154,6 +155,6 @@ func newInventoryProbeRunnerFixture(t *testing.T) inventoryProbeRunnerFixture {
 		t.Fatalf("link asset to file: %v", err)
 	}
 
-	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, nil, probeSvc, nil)
+	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, nil, probeSvc, nil, catalog.NewService(db))
 	return inventoryProbeRunnerFixture{db: db, librarySvc: librarySvc, runner: runner, asset: asset, file: file}
 }

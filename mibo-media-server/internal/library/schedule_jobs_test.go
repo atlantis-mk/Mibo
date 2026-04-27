@@ -51,7 +51,7 @@ func TestScheduledCleanupAndInvalidLinkChecks(t *testing.T) {
 	}
 
 	missingPath := filepath.Join(firstLibrary.RootPath, "missing-file.mkv")
-	file := database.MediaFile{LibraryID: firstLibrary.ID, StoragePath: missingPath}
+	file := database.InventoryFile{LibraryID: firstLibrary.ID, StoragePath: missingPath}
 	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
 		t.Fatalf("create media file: %v", err)
 	}

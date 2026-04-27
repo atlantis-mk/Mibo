@@ -400,8 +400,8 @@ func catalogTMDBMediaType(itemType string) string {
 	}
 }
 
-func catalogItemToSearchItem(item database.CatalogItem) database.MediaItem {
-	searchItem := database.MediaItem{
+func catalogItemToSearchItem(item database.CatalogItem) metadataSearchItem {
+	searchItem := metadataSearchItem{
 		LibraryID:     item.LibraryID,
 		Type:          item.Type,
 		Title:         strings.TrimSpace(item.Title),

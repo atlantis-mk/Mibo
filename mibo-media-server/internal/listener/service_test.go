@@ -247,13 +247,6 @@ func TestApplyStorageEventRefreshQueuesExistingTargetedRefreshWork(t *testing.T)
 	if len(queued) != 1 || queued[0].Kind != library.JobKindTargetedRefresh {
 		t.Fatalf("expected one targeted_refresh job, got %#v", queued)
 	}
-	var items int64
-	if err := db.WithContext(ctx).Model(&database.MediaItem{}).Count(&items).Error; err != nil {
-		t.Fatalf("count media items: %v", err)
-	}
-	if items != 0 {
-		t.Fatalf("expected listener application to queue work only, found %d media items", items)
-	}
 }
 
 func TestApplyStorageEventRefreshQueuesFullSyncForFallbackIntent(t *testing.T) {

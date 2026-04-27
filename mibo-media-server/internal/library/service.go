@@ -57,12 +57,8 @@ type targetedRefreshPayload struct {
 const (
 	JobKindSyncLibrary                     = "sync_library"
 	JobKindTargetedRefresh                 = "targeted_refresh"
-	JobKindMatchMediaItem                  = "match_media_item"
 	JobKindMatchCatalogItem                = "match_catalog_item"
-	JobKindRefetchMediaItem                = "refetch_media_item"
 	JobKindProbeInventoryFile              = "probe_inventory_file"
-	JobKindReindexSearchDocument           = "reindex_search_document"
-	JobKindReindexLibrarySearch            = "reindex_library_search"
 	JobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
 	JobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
 )

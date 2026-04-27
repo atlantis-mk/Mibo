@@ -345,35 +345,10 @@ func TestUserItemFavoritesAndContinueWatching(t *testing.T) {
 	}
 }
 
-func TestGetItemDetailFallsBackToLegacyPeopleWhenCatalogPeopleAreMissing(t *testing.T) {
-	svc, ctx := newTestService(t)
-	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Movie A", Path: "/movies/MovieA.2024.mkv", SortKey: "Movie A", AvailabilityStatus: AvailabilityAvailable})
-	if err != nil {
-		t.Fatalf("create item: %v", err)
-	}
-	legacy := database.MediaItem{
-		LibraryID:        item.LibraryID,
-		Type:             ItemTypeMovie,
-		Title:            "Movie A",
-		SourcePath:       item.Path,
-		CastJSON:         `[{"name":"Actor A","role":"Lead"}]`,
-		DirectorsJSON:    `[{"name":"Director A","role":"Director"}]`,
-		MatchStatus:      "matched",
-		MetadataProvider: "tmdb",
-		Status:           "ready",
-	}
-	if err := svc.db.WithContext(ctx).Create(&legacy).Error; err != nil {
-		t.Fatalf("create legacy item: %v", err)
-	}
+func intPtr(value int) *int {
+	return &value
+}
 
-	detail, err := svc.GetItemDetail(ctx, item.ID)
-	if err != nil {
-		t.Fatalf("get item detail: %v", err)
-	}
-	if len(detail.Cast) != 1 || detail.Cast[0].Name != "Actor A" || detail.Cast[0].Role != "Lead" {
-		t.Fatalf("unexpected fallback cast detail: %#v", detail.Cast)
-	}
-	if len(detail.Directors) != 1 || detail.Directors[0].Name != "Director A" || detail.Directors[0].Role != "Director" {
-		t.Fatalf("unexpected fallback directors detail: %#v", detail.Directors)
-	}
+func uintPtr(value uint) *uint {
+	return &value
 }

@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -487,21 +486,8 @@ func (s *Service) loadCatalogUserProgressStatesByItem(ctx context.Context, userI
 }
 
 func (s *Service) loadCatalogItemPeopleDetails(ctx context.Context, item database.CatalogItem, externalIDs []database.CatalogExternalID) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
-	cast, directors, err := s.loadCatalogPeopleDetails(ctx, item.ID)
-	if err != nil {
-		return nil, nil, err
-	}
-	fallbackCast, fallbackDirectors, err := s.loadLegacyPeopleFallback(ctx, item, externalIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(cast) == 0 {
-		cast = fallbackCast
-	}
-	if len(directors) == 0 {
-		directors = fallbackDirectors
-	}
-	return cast, directors, nil
+	_ = externalIDs
+	return s.loadCatalogPeopleDetails(ctx, item.ID)
 }
 
 func (s *Service) loadCatalogPeopleDetails(ctx context.Context, itemID uint) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
@@ -542,79 +528,6 @@ func (s *Service) loadCatalogPeopleDetails(ctx context.Context, itemID uint) ([]
 		}
 	}
 	return cast, directors, nil
-}
-
-func (s *Service) loadLegacyPeopleFallback(ctx context.Context, item database.CatalogItem, externalIDs []database.CatalogExternalID) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
-	query := s.db.WithContext(ctx).
-		Model(&database.MediaItem{}).
-		Where("library_id = ? AND deleted_at IS NULL", item.LibraryID)
-
-	switch item.Type {
-	case ItemTypeMovie, ItemTypeEpisode:
-		query = query.Where("source_path = ?", strings.TrimSpace(item.Path))
-	case ItemTypeSeries:
-		legacyExternalIDs := make([]string, 0, len(externalIDs))
-		for _, identity := range externalIDs {
-			if externalID := strings.TrimSpace(identity.ExternalID); externalID != "" {
-				legacyExternalIDs = append(legacyExternalIDs, externalID)
-			}
-		}
-		if len(legacyExternalIDs) > 0 {
-			query = query.Where("external_id IN ?", legacyExternalIDs)
-		} else {
-			query = query.Where("series_title = ?", strings.TrimSpace(item.Title))
-		}
-	default:
-		return []CatalogPersonDetail{}, []CatalogPersonDetail{}, nil
-	}
-
-	var legacyItem database.MediaItem
-	if err := query.Order("id asc").First(&legacyItem).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return []CatalogPersonDetail{}, []CatalogPersonDetail{}, nil
-		}
-		return nil, nil, err
-	}
-
-	cast, err := parseLegacyPeopleJSON(legacyItem.CastJSON)
-	if err != nil {
-		return nil, nil, err
-	}
-	directors, err := parseLegacyPeopleJSON(legacyItem.DirectorsJSON)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cast, directors, nil
-}
-
-func parseLegacyPeopleJSON(input string) ([]CatalogPersonDetail, error) {
-	if strings.TrimSpace(input) == "" {
-		return []CatalogPersonDetail{}, nil
-	}
-
-	var people []CatalogPersonDetail
-	if err := json.Unmarshal([]byte(input), &people); err == nil {
-		if people == nil {
-			return []CatalogPersonDetail{}, nil
-		}
-		return people, nil
-	}
-
-	var names []string
-	if err := json.Unmarshal([]byte(input), &names); err != nil {
-		return nil, err
-	}
-	if names == nil {
-		return []CatalogPersonDetail{}, nil
-	}
-
-	people = make([]CatalogPersonDetail, 0, len(names))
-	for _, name := range names {
-		if trimmed := strings.TrimSpace(name); trimmed != "" {
-			people = append(people, CatalogPersonDetail{Name: trimmed})
-		}
-	}
-	return people, nil
 }
 
 func (s *Service) ListSeriesSeasons(ctx context.Context, seriesID uint) ([]CatalogSeasonDetail, error) {

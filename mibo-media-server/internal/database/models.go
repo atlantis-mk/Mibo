@@ -26,101 +26,6 @@ type Library struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-type MediaItem struct {
-	ID                 uint       `gorm:"primaryKey" json:"id"`
-	LibraryID          uint       `gorm:"not null;index" json:"library_id"`
-	Type               string     `gorm:"size:64;not null;index" json:"type"`
-	Title              string     `gorm:"size:512;not null;index" json:"title"`
-	OriginalTitle      string     `gorm:"size:512" json:"original_title"`
-	SeriesTitle        string     `gorm:"size:512;index" json:"series_title"`
-	Overview           string     `gorm:"type:text" json:"overview"`
-	PosterURL          string     `gorm:"size:2048" json:"poster_url"`
-	LogoURL            string     `gorm:"size:2048" json:"logo_url"`
-	BackdropURL        string     `gorm:"size:2048" json:"backdrop_url"`
-	GenresJSON         string     `gorm:"type:text" json:"genres_json"`
-	RegionsJSON        string     `gorm:"type:text" json:"regions_json"`
-	CastJSON           string     `gorm:"type:text" json:"cast_json"`
-	DirectorsJSON      string     `gorm:"type:text" json:"directors_json"`
-	Year               *int       `json:"year,omitempty"`
-	VoteAverage        *float64   `json:"vote_average,omitempty"`
-	ReleaseDate        string     `gorm:"size:32" json:"release_date"`
-	RuntimeSeconds     *int       `json:"runtime_seconds,omitempty"`
-	SeasonNumber       *int       `json:"season_number,omitempty"`
-	EpisodeNumber      *int       `json:"episode_number,omitempty"`
-	SourcePath         string     `gorm:"size:1024;not null" json:"source_path"`
-	MatchStatus        string     `gorm:"size:64;not null;default:pending;index" json:"match_status"`
-	MetadataProvider   string     `gorm:"size:64" json:"metadata_provider"`
-	ExternalID         string     `gorm:"size:128" json:"external_id"`
-	MetadataConfidence *float64   `json:"metadata_confidence,omitempty"`
-	TrailerJSON        string     `gorm:"type:text" json:"trailer_json"`
-	Status             string     `gorm:"size:64;not null;default:pending" json:"status"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	DeletedAt          *time.Time `gorm:"index" json:"deleted_at,omitempty"`
-}
-
-type MediaFile struct {
-	ID                 uint       `gorm:"primaryKey" json:"id"`
-	LibraryID          uint       `gorm:"not null;index" json:"library_id"`
-	MediaItemID        *uint      `gorm:"index" json:"media_item_id,omitempty"`
-	StoragePath        string     `gorm:"size:1024;not null" json:"storage_path"`
-	StableIdentityKey  string     `gorm:"size:512;index:idx_media_file_stable_identity" json:"stable_identity_key"`
-	IdentitySource     string     `gorm:"size:64;not null;default:none;index" json:"identity_source"`
-	IdentityStatus     string     `gorm:"size:64;not null;default:provisional;index" json:"identity_status"`
-	ProviderName       string     `gorm:"size:255" json:"provider_name"`
-	ProviderHashesJSON string     `gorm:"type:text" json:"provider_hashes_json"`
-	ReplacedByID       *uint      `gorm:"index" json:"replaced_by_id,omitempty"`
-	ReviewStatus       string     `gorm:"size:64;not null;default:none;index" json:"review_status"`
-	ReviewReason       string     `gorm:"size:255" json:"review_reason"`
-	Container          string     `gorm:"size:64" json:"container"`
-	SizeBytes          int64      `gorm:"not null;default:0" json:"size_bytes"`
-	Fingerprint        string     `gorm:"size:255" json:"fingerprint"`
-	ProbeStatus        string     `gorm:"size:64;not null;default:pending;index" json:"probe_status"`
-	ProbeError         string     `gorm:"type:text" json:"probe_error"`
-	DurationSeconds    *float64   `json:"duration_seconds,omitempty"`
-	BitRate            *int64     `json:"bit_rate,omitempty"`
-	Width              *int       `json:"width,omitempty"`
-	Height             *int       `json:"height,omitempty"`
-	VideoCodec         string     `gorm:"size:128" json:"video_codec"`
-	AudioTracksJSON    string     `gorm:"type:text" json:"audio_tracks_json"`
-	SubtitleTracksJSON string     `gorm:"type:text" json:"subtitle_tracks_json"`
-	LastModifiedAt     *time.Time `json:"last_modified_at,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	DeletedAt          *time.Time `gorm:"index" json:"deleted_at,omitempty"`
-}
-
-type TVSeasonMetadataCache struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	SeriesTMDBID   int       `gorm:"not null;uniqueIndex:idx_tv_season_cache_lookup" json:"series_tmdb_id"`
-	SeasonNumber   int       `gorm:"not null;uniqueIndex:idx_tv_season_cache_lookup" json:"season_number"`
-	Language       string    `gorm:"size:32;not null;uniqueIndex:idx_tv_season_cache_lookup" json:"language"`
-	Name           string    `gorm:"size:512" json:"name"`
-	Overview       string    `gorm:"type:text" json:"overview"`
-	PosterPath     string    `gorm:"size:2048" json:"poster_path"`
-	RuntimeSeconds *int      `json:"runtime_seconds,omitempty"`
-	PayloadJSON    string    `gorm:"type:text" json:"-"`
-	FetchedAt      time.Time `gorm:"not null;index" json:"fetched_at"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-type TVEpisodeMetadataCache struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	SeriesTMDBID   int       `gorm:"not null;uniqueIndex:idx_tv_episode_cache_lookup" json:"series_tmdb_id"`
-	SeasonNumber   int       `gorm:"not null;uniqueIndex:idx_tv_episode_cache_lookup" json:"season_number"`
-	EpisodeNumber  int       `gorm:"not null;uniqueIndex:idx_tv_episode_cache_lookup" json:"episode_number"`
-	Language       string    `gorm:"size:32;not null;uniqueIndex:idx_tv_episode_cache_lookup" json:"language"`
-	Name           string    `gorm:"size:512" json:"name"`
-	Overview       string    `gorm:"type:text" json:"overview"`
-	StillPath      string    `gorm:"size:2048" json:"still_path"`
-	RuntimeSeconds *int      `json:"runtime_seconds,omitempty"`
-	PayloadJSON    string    `gorm:"type:text" json:"-"`
-	FetchedAt      time.Time `gorm:"not null;index" json:"fetched_at"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
 type Job struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	JobKey       string     `gorm:"size:255;index" json:"job_key"`
@@ -198,20 +103,6 @@ type Session struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
-type PlaybackProgress struct {
-	ID              uint       `gorm:"primaryKey" json:"id"`
-	UserID          uint       `gorm:"not null;uniqueIndex:idx_user_media_item" json:"user_id"`
-	MediaItemID     uint       `gorm:"not null;uniqueIndex:idx_user_media_item;index" json:"media_item_id"`
-	MediaFileID     *uint      `gorm:"index" json:"media_file_id,omitempty"`
-	PositionSeconds int        `gorm:"not null;default:0" json:"position_seconds"`
-	DurationSeconds *int       `json:"duration_seconds,omitempty"`
-	Watched         bool       `gorm:"not null;default:false;index" json:"watched"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	LastPlayedAt    *time.Time `gorm:"index" json:"last_played_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-}
-
 type SystemSetting struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	Category  string    `gorm:"size:64;not null;uniqueIndex:idx_system_setting_category_key" json:"category"`
@@ -237,20 +128,4 @@ type SearchHistory struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	DeletedAt    *time.Time `gorm:"index" json:"deleted_at,omitempty"`
-}
-
-type SearchDocument struct {
-	MediaItemID         uint      `gorm:"primaryKey" json:"media_item_id"`
-	LibraryID           uint      `gorm:"not null;index" json:"library_id"`
-	MediaType           string    `gorm:"size:64;not null;index" json:"media_type"`
-	Title               string    `gorm:"size:512;not null;index" json:"title"`
-	OriginalTitle       string    `gorm:"size:512" json:"original_title"`
-	SeriesTitle         string    `gorm:"size:512;index" json:"series_title"`
-	Overview            string    `gorm:"type:text" json:"overview"`
-	SearchPeopleText    string    `gorm:"type:text" json:"search_people_text"`
-	SearchGenresText    string    `gorm:"type:text" json:"search_genres_text"`
-	SearchCountriesText string    `gorm:"type:text" json:"search_countries_text"`
-	Year                *int      `json:"year,omitempty"`
-	VoteAverage         *float64  `json:"vote_average,omitempty"`
-	UpdatedAt           time.Time `json:"updated_at"`
 }

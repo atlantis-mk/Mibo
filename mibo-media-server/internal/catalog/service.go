@@ -474,7 +474,7 @@ func asTime(value any) (time.Time, bool) {
 		}
 		return typed.UTC(), true
 	case string:
-		parsed := parseLegacyReleaseDate(typed)
+		parsed := parseCatalogDate(typed)
 		if parsed == nil {
 			return time.Time{}, false
 		}
@@ -482,6 +482,19 @@ func asTime(value any) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+func parseCatalogDate(value string) *time.Time {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	parsed, err := time.Parse("2006-01-02", trimmed)
+	if err != nil {
+		return nil
+	}
+	parsed = parsed.UTC()
+	return &parsed
 }
 
 func defaultString(value string, fallback string) string {

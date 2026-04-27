@@ -1,7 +1,7 @@
 package metadata
 
 import (
-	"time"
+	"context"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/search"
@@ -15,7 +15,6 @@ const (
 	StatusNeedsReview = "needs_review"
 	StatusUnmatched   = "unmatched"
 	StatusSkipped     = "skipped"
-	tmdbCacheTTL      = 7 * 24 * time.Hour
 )
 
 type Service struct {
@@ -184,25 +183,6 @@ type seasonEpisodeResponse struct {
 	GuestStars    []castMember `json:"guest_stars"`
 }
 
-type TVSeasonMetadata struct {
-	SeasonNumber   int    `json:"season_number"`
-	Name           string `json:"name"`
-	Overview       string `json:"overview"`
-	PosterURL      string `json:"poster_url"`
-	RuntimeSeconds *int   `json:"runtime_seconds,omitempty"`
-}
-
-type TVEpisodeMetadata struct {
-	MediaItemID    *uint  `json:"media_item_id,omitempty"`
-	SeasonNumber   int    `json:"season_number"`
-	EpisodeNumber  int    `json:"episode_number"`
-	Name           string `json:"name"`
-	AirDate        string `json:"air_date,omitempty"`
-	Overview       string `json:"overview"`
-	StillURL       string `json:"still_url"`
-	RuntimeSeconds *int   `json:"runtime_seconds,omitempty"`
-}
-
 type imagesResponse struct {
 	Logos []imageAsset `json:"logos"`
 }
@@ -249,4 +229,15 @@ func NewService(db *gorm.DB, cfg config.MetadataConfig, settingsSvc *settings.Se
 		}
 	}
 	return service
+}
+
+func (s *Service) tmdbConfig(ctx context.Context) (config.TMDBConfig, error) {
+	if s.settings == nil {
+		return s.fallback.TMDB, nil
+	}
+	resolved, _, err := s.settings.ResolveTMDBConfig(ctx)
+	if err != nil {
+		return config.TMDBConfig{}, err
+	}
+	return resolved, nil
 }

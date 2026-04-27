@@ -23,8 +23,6 @@ type PlaybackSource struct {
 	ItemID         uint             `json:"item_id,omitempty"`
 	AssetID        uint             `json:"asset_id,omitempty"`
 	FileID         uint             `json:"file_id,omitempty"`
-	MediaItemID    uint             `json:"media_item_id"`
-	MediaFileID    uint             `json:"media_file_id"`
 	Title          string           `json:"title"`
 	Type           string           `json:"type"`
 	Container      string           `json:"container"`
@@ -47,11 +45,19 @@ type PlaybackSource struct {
 type FileLink struct {
 	FileID      uint            `json:"file_id,omitempty"`
 	AssetID     uint            `json:"asset_id,omitempty"`
-	MediaFileID uint            `json:"media_file_id"`
 	StoragePath string          `json:"storage_path"`
 	URL         string          `json:"url"`
 	Checks      []PlaybackCheck `json:"checks"`
 	Playable    bool            `json:"playable"`
+}
+
+type mediaInfo struct {
+	Container   string
+	ProbeStatus string
+	VideoCodec  string
+	BitRate     *int64
+	Width       *int
+	Height      *int
 }
 
 type PlaybackCheck struct {
@@ -352,8 +358,8 @@ func catalogPlaybackRank(candidate catalogPlaybackCandidate) int {
 	return score
 }
 
-func inventoryCandidateMediaInfo(candidate catalogPlaybackCandidate) (database.MediaFile, []Track, []Track) {
-	pseudo := database.MediaFile{Container: candidate.File.Container, ProbeStatus: candidate.Asset.ProbeStatus}
+func inventoryCandidateMediaInfo(candidate catalogPlaybackCandidate) (mediaInfo, []Track, []Track) {
+	pseudo := mediaInfo{Container: candidate.File.Container, ProbeStatus: candidate.Asset.ProbeStatus}
 	audioTracks := make([]Track, 0)
 	subtitleTracks := make([]Track, 0)
 	for _, stream := range candidate.Streams {
@@ -386,7 +392,7 @@ type directPlayAssessment struct {
 	reasons []DecisionReason
 }
 
-func assessDirectPlay(file database.MediaFile, clientProfile ClientProfile) directPlayAssessment {
+func assessDirectPlay(file mediaInfo, clientProfile ClientProfile) directPlayAssessment {
 	container := normalizeContainer(file.Container)
 	codec := strings.ToLower(strings.TrimSpace(file.VideoCodec))
 
@@ -488,7 +494,7 @@ func isMP4Family(container string) bool {
 	return container == "mp4" || container == "m4v"
 }
 
-func resolutionPixels(file database.MediaFile) int {
+func resolutionPixels(file mediaInfo) int {
 	if file.Width == nil || file.Height == nil {
 		return 0
 	}
@@ -509,7 +515,7 @@ func fallbackValue(value, fallback string) string {
 	return value
 }
 
-func buildMediaInfoCheck(file database.MediaFile) PlaybackCheck {
+func buildMediaInfoCheck(file mediaInfo) PlaybackCheck {
 	switch file.ProbeStatus {
 	case probe.StatusReady:
 		return PlaybackCheck{Code: "media_info", Status: "pass", Message: "media technical info available"}

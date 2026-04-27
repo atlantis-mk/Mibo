@@ -675,6 +675,14 @@ func scopedCatalogItemIDs(ctx context.Context, tx *gorm.DB, libraryID uint, root
 	return itemIDs, nil
 }
 
+func applyScopedPathFilter(query *gorm.DB, column string, rootPath string) *gorm.DB {
+	scope := strings.TrimRight(strings.TrimSpace(rootPath), "/")
+	if scope == "" {
+		return query
+	}
+	return query.Where(column+" = ? OR "+column+" LIKE ?", scope, scope+"/%")
+}
+
 func scopedCatalogItemAndAncestorIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string) ([]uint, error) {
 	itemIDs, err := scopedCatalogItemIDs(ctx, tx, libraryID, rootPath)
 	if err != nil || len(itemIDs) == 0 {

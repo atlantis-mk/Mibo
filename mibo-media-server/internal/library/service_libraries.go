@@ -69,21 +69,6 @@ func (s *Service) QueueTargetedRefresh(ctx context.Context, libraryID uint, root
 	return s.jobs.EnqueueUnique(ctx, JobKindTargetedRefresh, jobKey, targetedRefreshPayload{LibraryID: record.ID, RootPath: targetRoot, Reason: normalizedReason})
 }
 
-func (s *Service) QueueSearchDocumentReindex(ctx context.Context, mediaItemID uint) (database.Job, error) {
-	return s.jobs.EnqueueUnique(ctx, JobKindReindexSearchDocument, fmt.Sprintf("reindex-search-document:%d", mediaItemID), map[string]any{
-		"media_item_id": mediaItemID,
-	})
-}
-
-func (s *Service) QueueLibrarySearchReindex(ctx context.Context, libraryID uint, rootPath string) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
-	}
-	payload := targetedRefreshPayload{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)}
-	jobKey := fmt.Sprintf("reindex-library-search:%d:%s", libraryID, payload.RootPath)
-	return s.jobs.EnqueueUnique(ctx, JobKindReindexLibrarySearch, jobKey, payload)
-}
-
 func (s *Service) QueueCatalogItemProjectionRefresh(ctx context.Context, itemID uint) (database.Job, error) {
 	if s.jobs == nil {
 		return database.Job{}, fmt.Errorf("jobs service unavailable")
@@ -151,22 +136,10 @@ func deleteLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) erro
 	if err := tx.WithContext(ctx).First(&record, libraryID).Error; err != nil {
 		return err
 	}
-	var mediaItemIDs []uint
-	if err := tx.WithContext(ctx).Model(&database.MediaItem{}).Where("library_id = ?", libraryID).Pluck("id", &mediaItemIDs).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&database.InventoryFile{}).Error; err != nil {
 		return err
 	}
-	if len(mediaItemIDs) > 0 {
-		if err := tx.WithContext(ctx).Where("media_item_id IN ?", mediaItemIDs).Delete(&database.PlaybackProgress{}).Error; err != nil {
-			return err
-		}
-		if err := tx.WithContext(ctx).Where("media_item_id IN ?", mediaItemIDs).Delete(&database.SearchDocument{}).Error; err != nil {
-			return err
-		}
-	}
-	if err := tx.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&database.MediaFile{}).Error; err != nil {
-		return err
-	}
-	if err := tx.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&database.MediaItem{}).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&database.CatalogItem{}).Error; err != nil {
 		return err
 	}
 	result := tx.WithContext(ctx).Where("id = ?", libraryID).Delete(&database.Library{})

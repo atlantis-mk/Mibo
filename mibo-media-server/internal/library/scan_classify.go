@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
@@ -404,39 +403,6 @@ func looksLikeReleaseGroupToken(input string) bool {
 		}
 	}
 	return hasUpper && !hasLower
-}
-
-func mediaItemBaseChanged(item database.MediaItem, classified classifiedMedia) bool {
-	return item.Type != classified.Type || !equalIntPointers(item.Year, classified.Year) || !equalIntPointers(item.SeasonNumber, classified.SeasonNumber) || !equalIntPointers(item.EpisodeNumber, classified.EpisodeNumber)
-}
-
-func resetMediaItemMetadata(item *database.MediaItem) {
-	item.Overview = ""
-	item.PosterURL = ""
-	item.BackdropURL = ""
-	item.GenresJSON = ""
-	item.CastJSON = ""
-	item.DirectorsJSON = ""
-	item.ReleaseDate = ""
-	item.RuntimeSeconds = nil
-	item.MetadataProvider = ""
-	item.ExternalID = ""
-	item.MetadataConfidence = nil
-}
-
-func resetMediaFileProbe(file *database.MediaFile) {
-	file.ProbeError = ""
-	file.DurationSeconds = nil
-	file.BitRate = nil
-	file.Width = nil
-	file.Height = nil
-	file.VideoCodec = ""
-	file.AudioTracksJSON = ""
-	file.SubtitleTracksJSON = ""
-}
-
-func hasMatchedMetadata(item database.MediaItem) bool {
-	return strings.TrimSpace(item.MetadataProvider) != "" || strings.TrimSpace(item.ExternalID) != ""
 }
 
 func equalIntPointers(left, right *int) bool {
