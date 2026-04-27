@@ -194,6 +194,92 @@ export type CatalogAssetLink = {
   source?: string
 }
 
+export type CatalogEpisodeParentContext = {
+  series?: {
+    id: number
+    title: string
+    selected_images?: CatalogSelectedImage[]
+  }
+  season?: {
+    id: number
+    title: string
+    number?: number
+    selected_images?: CatalogSelectedImage[]
+  }
+  season_number?: number
+  episode_number?: number
+  episode_number_end?: number
+  incomplete_hierarchy: boolean
+}
+
+export type CatalogAssetFileSummary = {
+  file_id: number
+  role: string
+  part_index: number
+  storage_provider: string
+  storage_path?: string
+  stable_identity_key?: string
+  size_bytes: number
+  container?: string
+  status: string
+  modified_at?: string
+}
+
+export type CatalogMediaStreamSummary = {
+  file_id: number
+  stream_index: number
+  stream_type: string
+  codec?: string
+  profile?: string
+  level?: number
+  language?: string
+  title?: string
+  width?: number
+  height?: number
+  avg_frame_rate?: string
+  r_frame_rate?: string
+  field_order?: string
+  color_space?: string
+  bit_depth?: number
+  pixel_format?: string
+  reference_frames?: number
+  channels?: number
+  channel_layout?: string
+  sample_rate?: number
+  bit_rate?: number
+  duration_seconds?: number
+  default?: boolean
+  forced?: boolean
+  hearing_impaired?: boolean
+  external?: boolean
+}
+
+export type CatalogPersonDetail = {
+  id?: number
+  name: string
+  role?: string
+  avatar_url?: string
+}
+
+export type CatalogPersonPageDetail = {
+  id: number
+  name: string
+  sort_name?: string
+  avatar_url?: string
+  biography?: string
+  birthday?: string
+  deathday?: string
+  place_of_birth?: string
+  known_for_department?: string
+  external_identities?: CatalogExternalIdentity[]
+  related_items?: CatalogListItem[]
+}
+
+export type CatalogTagDetail = {
+  kind: string
+  name: string
+}
+
 export type CatalogListItem = {
   id: number
   library_id: number
@@ -203,6 +289,7 @@ export type CatalogListItem = {
   sort_title?: string
   overview?: string
   year?: number
+  end_year?: number
   runtime_seconds?: number
   community_rating?: number
   official_rating?: string
@@ -228,7 +315,30 @@ export type CatalogAssetDetail = {
   status: string
   probe_status: string
   file_ids: number[]
+  files?: CatalogAssetFileSummary[]
+  streams?: CatalogMediaStreamSummary[]
   links: CatalogAssetLink[]
+}
+
+export type CatalogEpisodeShelfItem = {
+  id: number
+  library_id: number
+  type: string
+  title: string
+  label?: string
+  overview?: string
+  season_number?: number
+  episode_number?: number
+  episode_number_end?: number
+  runtime_seconds?: number
+  availability_status: string
+  governance_status: string
+  release_date?: string
+  first_air_date?: string
+  selected_images?: CatalogSelectedImage[]
+  external_identities?: CatalogExternalIdentity[]
+  current: boolean
+  progress?: ProgressState
 }
 
 export type CatalogEpisodeDetail = {
@@ -295,11 +405,31 @@ export type CatalogItemDetail = {
   child_summary?: CatalogChildSummary
   selected_images?: CatalogSelectedImage[]
   external_identities?: CatalogExternalIdentity[]
+  tags?: CatalogTagDetail[]
+  genres?: string[]
   source_evidence?: CatalogSourceEvidence[]
   field_states?: CatalogFieldState[]
+  cast?: CatalogPersonDetail[]
+  directors?: CatalogPersonDetail[]
   seasons?: CatalogSeasonDetail[]
   episodes?: CatalogEpisodeDetail[]
+  episode_context?: CatalogEpisodeParentContext
+  same_season_episodes?: CatalogEpisodeShelfItem[]
   assets?: CatalogAssetDetail[]
+  related_items?: CatalogListItem[]
+}
+
+export type CatalogMetadataOperationResult = {
+  origin_item_id: number
+  target_item_id: number
+  target_type: string
+  action: string
+  descendant_status?: string
+  descendant_item_id?: number
+  season_number?: number
+  episode_number?: number
+  provider_external_id?: string
+  message?: string
 }
 
 export type CatalogGovernanceWorkspace = {
@@ -316,6 +446,7 @@ export type CatalogGovernanceWorkspace = {
   field_states?: CatalogFieldState[]
   assets?: CatalogAssetDetail[]
   recommended_children?: CatalogListItem[]
+  metadata_result?: CatalogMetadataOperationResult
 }
 
 export type ProgressState = {
@@ -327,8 +458,14 @@ export type ProgressState = {
   played_percentage?: number
   play_count?: number
   watched: boolean
+  favorite?: boolean
   completed_at?: string
   last_played_at?: string
+}
+
+export type CatalogUserItemEntry = ProgressState & {
+  favorite: boolean
+  item: CatalogListItem
 }
 
 export type CatalogLatestByLibrarySection = {
@@ -371,17 +508,29 @@ export type DiscoveryQuery = {
   scope?: 'all' | 'library'
   library_id?: number
   q?: string
-  type?: 'all' | 'movie' | 'show'
+  type?: 'all' | 'movie' | 'show' | 'episode'
   genre?: string
   region?: string
   year?: number
   min_rating?: number
   watched_state?: 'all' | 'unwatched' | 'in_progress' | 'watched'
   sort?: 'recent' | 'title' | 'year' | 'watch_status'
+  sort_direction?: 'asc' | 'desc'
   limit?: number
+  offset?: number
 }
 
 export type CatalogDiscoveryResult = CatalogListItem
+
+export type CatalogDiscoveryResponse = {
+  items: CatalogListItem[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
+  sort: 'recent' | 'title' | 'year' | 'watch_status'
+  sort_direction: 'asc' | 'desc'
+}
 
 export type SearchHistoryEntry = {
   id: number
@@ -540,7 +689,7 @@ export function getApiBaseUrl() {
     (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
       /\/$/,
       '',
-    ) ?? 'http://10.0.0.33:8080'
+    ) ?? 'http://127.0.0.1:8080'
   )
 }
 
@@ -805,12 +954,18 @@ export function createMiboApi(options: ApiOptions) {
         query.set('watched_state', queryOptions.watched_state)
       }
       if (queryOptions?.sort) query.set('sort', queryOptions.sort)
+      if (queryOptions?.sort_direction) {
+        query.set('sort_direction', queryOptions.sort_direction)
+      }
       if (typeof queryOptions?.limit === 'number') {
         query.set('limit', String(queryOptions.limit))
       }
+      if (typeof queryOptions?.offset === 'number') {
+        query.set('offset', String(queryOptions.offset))
+      }
 
       const queryString = query.toString()
-      return request<{ items: CatalogListItem[] }>(
+      return request<CatalogDiscoveryResponse>(
         `/api/v1/discovery${queryString ? `?${queryString}` : ''}`,
       )
     },
@@ -821,6 +976,9 @@ export function createMiboApi(options: ApiOptions) {
     },
     getCatalogItem(itemId: number) {
       return request<CatalogItemDetail>(`/api/v1/items/${itemId}`)
+    },
+    getCatalogPerson(personId: number) {
+      return request<CatalogPersonPageDetail>(`/api/v1/people/${personId}`)
     },
     listCatalogSeriesSeasons(itemId: number) {
       return request<CatalogSeasonDetail[]>(`/api/v1/series/${itemId}/seasons`)
@@ -868,12 +1026,33 @@ export function createMiboApi(options: ApiOptions) {
       assetId: number,
       input: {
         target_item_id: number
+        source_item_id?: number
+        mode?: 'copy' | 'move'
+        segment_index?: number
+        start_seconds?: number
+        end_seconds?: number
       },
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links`,
         {
           method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+    },
+    correctCatalogEpisodeNumbering(
+      itemId: number,
+      input: {
+        season_number: number
+        episode_number: number
+        episode_number_end?: number
+      },
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/governance/episode-numbering`,
+        {
+          method: 'PUT',
           body: JSON.stringify(input),
         },
       )
@@ -1031,7 +1210,20 @@ export function createMiboApi(options: ApiOptions) {
       })
     },
     continueWatching() {
-      return request<unknown[]>('/api/v1/me/continue-watching')
+      return request<CatalogUserItemEntry[]>('/api/v1/me/continue-watching')
+    },
+    listFavorites() {
+      return request<CatalogUserItemEntry[]>('/api/v1/me/favorites')
+    },
+    addFavorite(itemId: number) {
+      return request<CatalogUserItemEntry>(`/api/v1/me/favorites/${itemId}`, {
+        method: 'POST',
+      })
+    },
+    removeFavorite(itemId: number) {
+      return request<CatalogUserItemEntry>(`/api/v1/me/favorites/${itemId}`, {
+        method: 'DELETE',
+      })
     },
     latestByLibrary() {
       return request<CatalogLatestByLibrarySection[]>(

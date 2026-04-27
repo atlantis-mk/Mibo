@@ -42,11 +42,20 @@ const (
 )
 
 type Service struct {
-	db *gorm.DB
+	db                     *gorm.DB
+	personProfileRefresher PersonProfileRefresher
+}
+
+type PersonProfileRefresher interface {
+	RefreshCatalogPersonProfile(ctx context.Context, personID uint) error
 }
 
 func NewService(db *gorm.DB) *Service {
 	return &Service{db: db}
+}
+
+func (s *Service) SetPersonProfileRefresher(refresher PersonProfileRefresher) {
+	s.personProfileRefresher = refresher
 }
 
 type CreateItemInput struct {
@@ -108,6 +117,13 @@ type ApplyFieldInput struct {
 	LockReason     string
 	EditedByUserID *uint
 	Force          bool
+}
+
+type CorrectEpisodeNumberingInput struct {
+	EpisodeID        uint
+	SeasonNumber     int
+	EpisodeNumber    int
+	EpisodeNumberEnd *int
 }
 
 func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (database.CatalogItem, error) {
@@ -314,6 +330,97 @@ func (s *Service) ApplyField(ctx context.Context, input ApplyFieldInput) (databa
 	return state, applied, err
 }
 
+func (s *Service) CorrectEpisodeNumbering(ctx context.Context, input CorrectEpisodeNumberingInput) (database.CatalogItem, error) {
+	if input.EpisodeID == 0 {
+		return database.CatalogItem{}, errors.New("episode id is required")
+	}
+	if input.SeasonNumber < 0 || input.EpisodeNumber <= 0 {
+		return database.CatalogItem{}, errors.New("season_number and episode_number are required")
+	}
+
+	var updated database.CatalogItem
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var episode database.CatalogItem
+		if err := tx.Where("id = ? AND deleted_at IS NULL", input.EpisodeID).First(&episode).Error; err != nil {
+			return err
+		}
+		if episode.Type != ItemTypeEpisode {
+			return errors.New("item must be an episode")
+		}
+		if episode.RootID == nil || *episode.RootID == 0 {
+			return errors.New("episode lacks series root")
+		}
+
+		var series database.CatalogItem
+		if err := tx.Where("id = ? AND type = ? AND deleted_at IS NULL", *episode.RootID, ItemTypeSeries).First(&series).Error; err != nil {
+			return err
+		}
+
+		var season database.CatalogItem
+		err := tx.Where("parent_id = ? AND type = ? AND index_number = ? AND deleted_at IS NULL", series.ID, ItemTypeSeason, input.SeasonNumber).First(&season).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			seasonNumber := input.SeasonNumber
+			season = database.CatalogItem{
+				LibraryID:           series.LibraryID,
+				Type:                ItemTypeSeason,
+				ParentID:            &series.ID,
+				RootID:              &series.ID,
+				Path:                strings.TrimRight(series.Path, "/") + fmt.Sprintf("/Season %02d", input.SeasonNumber),
+				SortKey:             fmt.Sprintf("%s S%02d", strings.TrimSpace(series.Title), input.SeasonNumber),
+				DisplayOrder:        DisplayOrderAired,
+				IndexNumber:         &seasonNumber,
+				ParentIndexNumber:   &seasonNumber,
+				Title:               fmt.Sprintf("Season %d", input.SeasonNumber),
+				AvailabilityStatus:  AvailabilityNoLocalMedia,
+				GovernanceStatus:    GovernancePending,
+				CanonicalVersion:    1,
+				LastCanonicalizedAt: timePtr(time.Now().UTC()),
+			}
+			if err := tx.Create(&season).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+
+		var conflict database.CatalogItem
+		err = tx.Where("parent_id = ? AND type = ? AND index_number = ? AND id <> ? AND deleted_at IS NULL", season.ID, ItemTypeEpisode, input.EpisodeNumber, episode.ID).First(&conflict).Error
+		if err == nil {
+			return fmt.Errorf("target episode slot already occupied by item %d", conflict.ID)
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		updates := map[string]any{
+			"parent_id":             season.ID,
+			"root_id":               series.ID,
+			"parent_index_number":   input.SeasonNumber,
+			"index_number":          input.EpisodeNumber,
+			"index_number_end":      input.EpisodeNumberEnd,
+			"last_canonicalized_at": time.Now().UTC(),
+		}
+		if err := tx.Model(&database.CatalogItem{}).Where("id = ?", episode.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id = ?", episode.ID).First(&updated).Error; err != nil {
+			return err
+		}
+		for _, itemID := range []uint{episode.ID, season.ID, series.ID} {
+			if err := s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: itemID}); err != nil {
+				return err
+			}
+		}
+		if episode.ParentID != nil && *episode.ParentID != season.ID {
+			if err := s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: *episode.ParentID}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return updated, err
+}
+
 func catalogItemUpdate(fieldKey string, value any, now time.Time) (map[string]any, error) {
 	updates := map[string]any{"last_canonicalized_at": now}
 	switch fieldKey {
@@ -329,6 +436,12 @@ func catalogItemUpdate(fieldKey string, value any, now time.Time) (map[string]an
 			return nil, fmt.Errorf("field %s requires an integer value", fieldKey)
 		}
 		updates[fieldKey] = intValue
+	case "release_date", "first_air_date", "last_air_date":
+		dateValue, ok := asTime(value)
+		if !ok {
+			return nil, fmt.Errorf("field %s requires a date value", fieldKey)
+		}
+		updates[fieldKey] = dateValue
 	default:
 		return updates, nil
 	}
@@ -349,6 +462,26 @@ func asInt(value any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func asTime(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed.UTC(), true
+	case *time.Time:
+		if typed == nil {
+			return time.Time{}, false
+		}
+		return typed.UTC(), true
+	case string:
+		parsed := parseLegacyReleaseDate(typed)
+		if parsed == nil {
+			return time.Time{}, false
+		}
+		return *parsed, true
+	default:
+		return time.Time{}, false
+	}
 }
 
 func defaultString(value string, fallback string) string {

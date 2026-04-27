@@ -12,7 +12,7 @@ import (
 )
 
 func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
-	_, err := r.requireUser(req)
+	user, err := r.requireUser(req)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -26,18 +26,27 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
 		return
 	}
-	var items []catalog.CatalogListItem
-	if strings.TrimSpace(input.Query) == "" {
-		items, err = r.catalog.ListItems(req.Context(), input.LibraryID, "", string(input.TypeFilter), input.Limit)
-	} else {
-		items, err = r.catalog.SearchItems(req.Context(), input.LibraryID, input.Query, string(input.TypeFilter), input.Limit)
-	}
+	result, err := r.catalog.BrowseItems(req.Context(), catalog.BrowseItemsInput{
+		LibraryID:     input.LibraryID,
+		Query:         input.Query,
+		TypeFilter:    string(input.TypeFilter),
+		Genre:         input.Genre,
+		Region:        input.Region,
+		Year:          input.Year,
+		MinRating:     input.MinRating,
+		WatchedState:  string(input.Watched),
+		Sort:          string(input.Sort),
+		SortDirection: string(input.SortDirection),
+		Limit:         input.Limit,
+		Offset:        input.Offset,
+		UserID:        user.ID,
+	})
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	normalizeCatalogListItemsArtworkURLs(req, items)
-	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"items": items})
+	normalizeCatalogListItemsArtworkURLs(req, result.Items)
+	writeJSON(req.Context(), w, http.StatusOK, result)
 }
 
 func (r *Router) handleListSearchHistory(w http.ResponseWriter, req *http.Request) {
@@ -58,6 +67,7 @@ func (r *Router) handleListSearchHistory(w http.ResponseWriter, req *http.Reques
 func discoveryInputFromRequest(req *http.Request) (library.BrowseMediaItemsInput, error) {
 	query := req.URL.Query()
 	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset, _ := strconv.Atoi(query.Get("offset"))
 	var libraryID uint
 	if raw := strings.TrimSpace(query.Get("library_id")); raw != "" {
 		parsed, err := strconv.ParseUint(raw, 10, 64)
@@ -67,17 +77,19 @@ func discoveryInputFromRequest(req *http.Request) (library.BrowseMediaItemsInput
 		libraryID = uint(parsed)
 	}
 	input := library.BrowseMediaItemsInput{
-		LibraryID:  libraryID,
-		Scope:      library.BrowseScopeAll,
-		Query:      strings.TrimSpace(query.Get("q")),
-		TypeFilter: normalizeBrowseTypeFilter(query.Get("type")),
-		Genre:      strings.TrimSpace(query.Get("genre")),
-		Region:     strings.TrimSpace(query.Get("region")),
-		Year:       library.ParseBrowseYear(query.Get("year")),
-		MinRating:  parseBrowseRating(query.Get("min_rating")),
-		Watched:    normalizeWatchedStateFilter(query.Get("watched_state")),
-		Sort:       normalizeBrowseSort(query.Get("sort")),
-		Limit:      limit,
+		LibraryID:     libraryID,
+		Scope:         library.BrowseScopeAll,
+		Query:         strings.TrimSpace(query.Get("q")),
+		TypeFilter:    normalizeBrowseTypeFilter(query.Get("type")),
+		Genre:         strings.TrimSpace(query.Get("genre")),
+		Region:        strings.TrimSpace(query.Get("region")),
+		Year:          library.ParseBrowseYear(query.Get("year")),
+		MinRating:     parseBrowseRating(query.Get("min_rating")),
+		Watched:       normalizeWatchedStateFilter(query.Get("watched_state")),
+		Sort:          normalizeBrowseSort(query.Get("sort")),
+		SortDirection: normalizeSortDirection(query.Get("sort_direction")),
+		Limit:         limit,
+		Offset:        offset,
 	}
 	if query.Get("scope") == "library" {
 		input.Scope = library.BrowseScopeLibrary

@@ -16,9 +16,17 @@ const (
 type BrowseTypeFilter string
 
 const (
-	BrowseTypeFilterAll   BrowseTypeFilter = "all"
-	BrowseTypeFilterMovie BrowseTypeFilter = "movie"
-	BrowseTypeFilterShow  BrowseTypeFilter = "show"
+	BrowseTypeFilterAll     BrowseTypeFilter = "all"
+	BrowseTypeFilterMovie   BrowseTypeFilter = "movie"
+	BrowseTypeFilterShow    BrowseTypeFilter = "show"
+	BrowseTypeFilterEpisode BrowseTypeFilter = "episode"
+)
+
+type SortDirection string
+
+const (
+	SortDirectionAsc  SortDirection = "asc"
+	SortDirectionDesc SortDirection = "desc"
 )
 
 type BrowseSort string
@@ -40,17 +48,19 @@ const (
 )
 
 type BrowseMediaItemsInput struct {
-	LibraryID  uint
-	Scope      BrowseScope
-	Query      string
-	TypeFilter BrowseTypeFilter
-	Genre      string
-	Region     string
-	Year       *int
-	MinRating  *float64
-	Watched    WatchedStateFilter
-	Sort       BrowseSort
-	Limit      int
+	LibraryID     uint
+	Scope         BrowseScope
+	Query         string
+	TypeFilter    BrowseTypeFilter
+	Genre         string
+	Region        string
+	Year          *int
+	MinRating     *float64
+	Watched       WatchedStateFilter
+	Sort          BrowseSort
+	SortDirection SortDirection
+	Limit         int
+	Offset        int
 }
 
 type browseCandidate struct {
@@ -71,9 +81,10 @@ type DiscoveryItem struct {
 }
 
 type PersonDetail struct {
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	AvatarURL string `json:"avatar_url"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	AvatarURL    string `json:"avatar_url"`
+	TMDBPersonID *int   `json:"tmdb_person_id,omitempty"`
 }
 
 type TrailerDetail struct {
@@ -151,7 +162,7 @@ func NormalizeBrowseMediaItemsInput(input BrowseMediaItemsInput) BrowseMediaItem
 		input.Scope = BrowseScopeLibrary
 	}
 	switch input.TypeFilter {
-	case BrowseTypeFilterMovie, BrowseTypeFilterShow:
+	case BrowseTypeFilterMovie, BrowseTypeFilterShow, BrowseTypeFilterEpisode:
 	default:
 		input.TypeFilter = BrowseTypeFilterAll
 	}
@@ -182,6 +193,17 @@ func NormalizeBrowseMediaItemsInput(input BrowseMediaItemsInput) BrowseMediaItem
 	input.Region = strings.TrimSpace(input.Region)
 	if input.Limit < 0 || input.Limit > 200 {
 		input.Limit = 50
+	}
+	if input.Offset < 0 {
+		input.Offset = 0
+	}
+	switch input.SortDirection {
+	case SortDirectionAsc, SortDirectionDesc:
+	default:
+		input.SortDirection = SortDirectionDesc
+		if input.Sort == BrowseSortTitle {
+			input.SortDirection = SortDirectionAsc
+		}
 	}
 	return input
 }

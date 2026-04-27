@@ -270,7 +270,7 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 		case "/tv/777":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 777, "name": "Matched Show", "original_name": "Matched Show Original", "overview": "Series overview", "poster_path": "/matched-show-poster.jpg", "backdrop_path": "/matched-show-backdrop.jpg", "first_air_date": "2024-01-01", "episode_run_time": []int{45}, "seasons": []map[string]any{{"id": 701, "season_number": 1, "name": "Season 1", "overview": "Season overview", "poster_path": "/matched-season-1.jpg"}}, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{{"file_path": "/matched-show-logo-en.png", "iso_639_1": "en", "vote_average": 9.0}}}, "videos": map[string]any{"results": []map[string]any{}}})
 		case "/tv/777/season/1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 701, "season_number": 1, "name": "Season 1", "overview": "Season overview", "poster_path": "/matched-season-1.jpg", "episodes": []map[string]any{{"id": 1001, "season_number": 1, "episode_number": 1, "name": "Pilot", "air_date": "2024-01-01", "overview": "Pilot overview", "still_path": "/pilot-still.jpg", "runtime": 45}, {"id": 1002, "season_number": 1, "episode_number": 2, "name": "Second Episode", "air_date": "2024-01-08", "overview": "Second overview", "still_path": "/second-still.jpg", "runtime": 47}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 701, "season_number": 1, "name": "Season 1", "overview": "Season overview", "poster_path": "/matched-season-1.jpg", "episodes": []map[string]any{{"id": 1001, "season_number": 1, "episode_number": 1, "name": "Pilot", "air_date": "2024-01-01", "overview": "Pilot overview", "still_path": "/pilot-still.jpg", "runtime": 45}, {"id": 1002, "season_number": 1, "episode_number": 2, "name": "Second Episode", "air_date": "2024-01-08", "overview": "Second overview", "still_path": "/second-still.jpg", "runtime": 47, "crew": []map[string]any{{"id": 9201, "name": "Episode Director", "job": "Director", "department": "Directing", "profile_path": "/director.jpg"}}, "guest_stars": []map[string]any{{"id": 9101, "name": "Guest Actor", "character": "Guest", "profile_path": "/guest.jpg"}}}}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -298,6 +298,11 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create season: %v", err)
 	}
+	episodeOneNumber := 1
+	looseEpisodeOne, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeEpisode, ParentID: &series.ID, Title: "Local Episode 1", Path: "/shows/ShowA/ShowA.S01E01.mkv", SortKey: "Show A S01E01", IndexNumber: &episodeOneNumber, ParentIndexNumber: &seasonNumber})
+	if err != nil {
+		t.Fatalf("create loose episode one: %v", err)
+	}
 	episodeNumber := 2
 	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 2", Path: "/shows/ShowA/Season 1/ShowA.S01E02.mkv", SortKey: "Show A S01E02", IndexNumber: &episodeNumber, ParentIndexNumber: &seasonNumber})
 	if err != nil {
@@ -319,8 +324,12 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	if err := svc.MatchCatalogItem(ctx, episode.ID); err != nil {
+	result, err := svc.MatchCatalogItemWithResult(ctx, episode.ID)
+	if err != nil {
 		t.Fatalf("match catalog episode via series root: %v", err)
+	}
+	if result.OriginItemID != episode.ID || result.TargetItemID != series.ID || result.DescendantStatus != "identity_retained" || result.ProviderExternalID != "tv:1002" {
+		t.Fatalf("unexpected descendant match result: %#v", result)
 	}
 
 	var storedSeries database.CatalogItem
@@ -354,8 +363,8 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	if len(episodes) != 2 {
 		t.Fatalf("expected provider sync to create missing episode rows, got %#v", episodes)
 	}
-	if episodes[0].IndexNumber == nil || *episodes[0].IndexNumber != 1 || episodes[0].AvailabilityStatus != catalog.AvailabilityMissing {
-		t.Fatalf("expected provider-only episode 1 to be created as missing, got %#v", episodes[0])
+	if episodes[0].ID != looseEpisodeOne.ID || episodes[0].IndexNumber == nil || *episodes[0].IndexNumber != 1 || episodes[0].AvailabilityStatus != catalog.AvailabilityMissing {
+		t.Fatalf("expected existing loose episode 1 to be reparented and enriched as missing, got %#v", episodes[0])
 	}
 	if episodes[1].ID != episode.ID || episodes[1].AvailabilityStatus != catalog.AvailabilityAvailable {
 		t.Fatalf("expected existing episode with local asset to be reused and stay available, got %#v", episodes[1])
@@ -408,6 +417,29 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	if firstEpisodeImages[0].SourceID == nil || *firstEpisodeImages[0].SourceID != firstEpisodeSource.ID {
 		t.Fatalf("expected episode image provenance to point at metadata source %d, got %#v", firstEpisodeSource.ID, firstEpisodeImages[0])
 	}
+	if episodes[0].FirstAirDate == nil || !episodes[0].FirstAirDate.Equal(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected episode air date to persist, got %#v", episodes[0].FirstAirDate)
+	}
+
+	var episodePeople []struct {
+		RelationRole string
+		Character    string
+		Name         string
+		AvatarURL    string
+		TMDBPersonID *int
+	}
+	if err := db.WithContext(ctx).
+		Table("item_people").
+		Select("item_people.role AS relation_role, item_people.character, people.name, people.avatar_url, people.tmdb_person_id").
+		Joins("JOIN people ON people.id = item_people.person_id").
+		Where("item_people.item_id = ?", episode.ID).
+		Order("item_people.role asc, people.name asc").
+		Scan(&episodePeople).Error; err != nil {
+		t.Fatalf("load episode people: %v", err)
+	}
+	if len(episodePeople) != 2 || episodePeople[0].Name != "Guest Actor" || episodePeople[0].Character != "Guest" || episodePeople[0].TMDBPersonID == nil || *episodePeople[0].TMDBPersonID != 9101 || episodePeople[1].Name != "Episode Director" || episodePeople[1].AvatarURL != tmdb.URL+"/images/director.jpg" || episodePeople[1].TMDBPersonID == nil || *episodePeople[1].TMDBPersonID != 9201 {
+		t.Fatalf("unexpected episode people: %#v", episodePeople)
+	}
 
 	detail, err := catalogSvc.GetItemDetail(ctx, episodes[0].ID)
 	if err != nil {
@@ -429,6 +461,59 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 		if got := summary[key]; got != want {
 			t.Fatalf("expected episode source summary %q=%#v, got %#v", key, want, got)
 		}
+	}
+}
+
+func TestMatchCatalogEpisodeReportsProviderSlotMissing(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 777, "name": "Matched Show", "first_air_date": "2024-01-01"}}})
+		case "/tv/777":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 777, "name": "Matched Show", "first_air_date": "2024-01-01", "seasons": []map[string]any{{"id": 701, "season_number": 1, "name": "Season 1"}}, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		case "/tv/777/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 701, "season_number": 1, "name": "Season 1", "episodes": []map[string]any{{"id": 1001, "season_number": 1, "episode_number": 1, "name": "Pilot", "air_date": "2024-01-01"}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	catalogSvc := catalog.NewService(db)
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeSeries, Title: "Show A", Path: "/shows/ShowA", SortKey: "Show A"})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonNumber := 1
+	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", Path: "/shows/ShowA/Season 1", SortKey: "Show A S01", IndexNumber: &seasonNumber, ParentIndexNumber: &seasonNumber})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episodeNumber := 99
+	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Bad Slot", Path: "/shows/ShowA/Season 1/ShowA.S01E99.mkv", SortKey: "Show A S01E99", IndexNumber: &episodeNumber, ParentIndexNumber: &seasonNumber})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	result, err := svc.MatchCatalogItemWithResult(ctx, episode.ID)
+	if err != nil {
+		t.Fatalf("match catalog episode: %v", err)
+	}
+	if result.DescendantStatus != "provider_slot_missing" || result.SeasonNumber == nil || *result.SeasonNumber != 1 || result.EpisodeNumber == nil || *result.EpisodeNumber != 99 {
+		t.Fatalf("unexpected provider slot result: %#v", result)
 	}
 }
 

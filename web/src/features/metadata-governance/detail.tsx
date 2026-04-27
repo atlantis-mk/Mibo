@@ -537,7 +537,7 @@ export function MetadataGovernanceDetail({
   const workspaceImageCandidates = workspace.image_candidates ?? []
   const workspaceRecommendedChildren = workspace.recommended_children ?? []
   const item = buildPreviewItem(workspace)
-  const activeCandidates = searchMutation.data ?? []
+  const activeCandidates = uniqueMetadataCandidates(searchMutation.data ?? [])
   const firstInventoryFileId = workspaceAssets.find(
     (asset) => asset.file_ids.length > 0,
   )?.file_ids[0]
@@ -899,6 +899,25 @@ function parseOptionalNumber(value: string) {
 
   const parsed = Number(trimmed)
   return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function uniqueMetadataCandidates(candidates: MetadataSearchCandidate[]) {
+  const seen = new Set<string>()
+  const result: MetadataSearchCandidate[] = []
+
+  for (const candidate of candidates) {
+    const key = metadataCandidateIdentity(candidate)
+    if (seen.has(key)) continue
+
+    seen.add(key)
+    result.push(candidate)
+  }
+
+  return result
+}
+
+function metadataCandidateIdentity(candidate: MetadataSearchCandidate) {
+  return `${candidate.provider.trim().toLowerCase()}-${candidate.external_id.trim()}`
 }
 
 function describeAsyncAction(type: AsyncActionState['type']) {

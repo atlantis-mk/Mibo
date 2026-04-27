@@ -185,6 +185,48 @@ func TestApplyFieldSupportsManualAndLockedGovernanceOverrides(t *testing.T) {
 	}
 }
 
+func TestCorrectEpisodeNumberingMovesEpisodeWithinSeriesAndDetectsConflict(t *testing.T) {
+	svc, ctx := newTestService(t)
+	series, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "Show A", Path: "/shows/ShowA"})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonOneNumber := 1
+	seasonOne, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", IndexNumber: &seasonOneNumber})
+	if err != nil {
+		t.Fatalf("create season one: %v", err)
+	}
+	episodeOneNumber := 1
+	episode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &seasonOne.ID, Title: "Episode 1", IndexNumber: &episodeOneNumber, ParentIndexNumber: &seasonOneNumber, GovernanceStatus: GovernanceLocked})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+	seasonTwoNumber := 2
+	conflict, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &series.ID, Title: "Season 2", IndexNumber: &seasonTwoNumber})
+	if err != nil {
+		t.Fatalf("create season two: %v", err)
+	}
+	conflictEpisodeNumber := 3
+	if _, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &conflict.ID, Title: "Episode 3", IndexNumber: &conflictEpisodeNumber, ParentIndexNumber: &seasonTwoNumber}); err != nil {
+		t.Fatalf("create conflict episode: %v", err)
+	}
+
+	if _, err := svc.CorrectEpisodeNumbering(ctx, CorrectEpisodeNumberingInput{EpisodeID: episode.ID, SeasonNumber: 2, EpisodeNumber: 3}); err == nil || !strings.Contains(err.Error(), "already occupied") {
+		t.Fatalf("expected occupied slot conflict, got %v", err)
+	}
+
+	updated, err := svc.CorrectEpisodeNumbering(ctx, CorrectEpisodeNumberingInput{EpisodeID: episode.ID, SeasonNumber: 2, EpisodeNumber: 4})
+	if err != nil {
+		t.Fatalf("correct episode numbering: %v", err)
+	}
+	if updated.ParentID == nil || *updated.ParentID != conflict.ID || updated.ParentIndexNumber == nil || *updated.ParentIndexNumber != 2 || updated.IndexNumber == nil || *updated.IndexNumber != 4 {
+		t.Fatalf("unexpected corrected episode: %#v", updated)
+	}
+	if updated.GovernanceStatus != GovernanceLocked {
+		t.Fatalf("expected unrelated governance status to be preserved, got %#v", updated)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, context.Context) {
 	t.Helper()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})

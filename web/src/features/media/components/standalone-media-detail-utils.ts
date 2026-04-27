@@ -1,5 +1,6 @@
 import type {
   CatalogAssetDetail,
+  CatalogAssetFileSummary,
   CatalogSourceEvidence,
   Track,
 } from '#/lib/mibo-api'
@@ -57,16 +58,83 @@ export function formatAudioTrackLabel(track?: Track) {
     .join(' ')
 }
 
-export function formatChannels(track?: Track) {
+export function formatChannels(track?: Pick<Track, 'channels'>) {
   if (!track?.channels || track.channels <= 0) return '立体声'
   if (track.channels === 1) return '单声道'
   if (track.channels === 2) return 'stereo'
   return `${track.channels} ch`
 }
 
-export function formatChannelsCompact(track?: Track) {
+export function formatChannelsCompact(track?: Pick<Track, 'channels'>) {
   if (!track?.channels || track.channels <= 0) return '未知'
   return `${track.channels} ch`
+}
+
+export function formatStreamLanguage(language?: string) {
+  const value = formatTechnicalValue(language)
+  if (!value) return ''
+
+  const normalized = value.toLowerCase()
+  const fallbackLabels: Record<string, string> = {
+    jpn: 'Japanese',
+    ja: 'Japanese',
+    eng: 'English',
+    en: 'English',
+    zho: 'Chinese',
+    chi: 'Chinese',
+    zh: 'Chinese',
+  }
+  if (fallbackLabels[normalized]) {
+    return fallbackLabels[normalized]
+  }
+
+  try {
+    const label = new Intl.DisplayNames(['en'], { type: 'language' }).of(value)
+    return label || value
+  } catch {
+    return value
+  }
+}
+
+export function formatCodecLabel(codec?: string) {
+  return formatTechnicalValue(codec).toUpperCase()
+}
+
+export function formatAudioLayout(layout?: string, channels?: number) {
+  const value = formatTechnicalValue(layout)
+  if (value) return value
+  if (channels === 1) return 'mono'
+  if (channels === 2) return 'stereo'
+  return ''
+}
+
+export function formatSampleRate(value?: number) {
+  if (!value || value <= 0) return ''
+  return `${new Intl.NumberFormat('en-US').format(value)} Hz`
+}
+
+export function formatAudioBitDepth(value?: number) {
+  if (!value || value <= 0) return ''
+  return `${value} bit`
+}
+
+export function formatBooleanFlag(value?: boolean) {
+  return value ? '是' : '否'
+}
+
+export function fileNameFromStoragePath(path?: string) {
+  const value = formatTechnicalValue(path)
+  if (!value) return ''
+  const segments = value.split('/')
+  return segments[segments.length - 1] || value
+}
+
+export function findAssetFileName(
+  files: CatalogAssetFileSummary[] | undefined,
+  fileID: number,
+) {
+  const match = files?.find((file) => file.file_id === fileID)
+  return fileNameFromStoragePath(match?.storage_path)
 }
 
 export function formatBitRate(value?: number) {
@@ -74,6 +142,68 @@ export function formatBitRate(value?: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} Mbps`
   if (value >= 1_000) return `${Math.round(value / 1_000)} kbps`
   return `${value} bps`
+}
+
+export function formatTechnicalValue(value?: number | string | null) {
+  if (typeof value === 'number') return value > 0 ? String(value) : ''
+  return value?.trim() ?? ''
+}
+
+export function formatFrameRate(primary?: string, fallback?: string) {
+  const raw = formatTechnicalValue(primary) || formatTechnicalValue(fallback)
+  if (!raw || raw === '0/0') return ''
+  const [numeratorRaw, denominatorRaw] = raw.split('/')
+  if (!denominatorRaw) return raw
+
+  const numerator = Number(numeratorRaw)
+  const denominator = Number(denominatorRaw)
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    denominator <= 0
+  ) {
+    return raw
+  }
+  const value = numerator / denominator
+  if (value <= 0) return ''
+  return `${value
+    .toFixed(value >= 100 ? 0 : 3)
+    .replace(/\.0+$/, '')
+    .replace(/(\.\d*?)0+$/, '$1')} fps`
+}
+
+export function formatInterlaceState(fieldOrder?: string) {
+  switch (formatTechnicalValue(fieldOrder).toLowerCase()) {
+    case 'progressive':
+      return '否（逐行）'
+    case 'tt':
+    case 'bb':
+    case 'tb':
+    case 'bt':
+      return '是（隔行）'
+    case 'unknown':
+      return ''
+    default:
+      return formatTechnicalValue(fieldOrder)
+  }
+}
+
+export function formatCodecLevel(value?: number, codec?: string) {
+  if (!value || value <= 0) return ''
+  const normalizedCodec = codec?.toLowerCase() ?? ''
+  if (
+    (normalizedCodec.includes('h264') || normalizedCodec.includes('avc')) &&
+    value >= 10 &&
+    value < 100
+  ) {
+    return `${Math.floor(value / 10)}.${value % 10}`
+  }
+  return String(value)
+}
+
+export function formatBitDepth(value?: number) {
+  if (!value || value <= 0) return ''
+  return `${value}-bit`
 }
 
 export function formatFileSize(value?: number) {

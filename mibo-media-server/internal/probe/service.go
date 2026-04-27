@@ -44,12 +44,30 @@ type ffprobeFormat struct {
 }
 
 type ffprobeStream struct {
-	CodecType string `json:"codec_type"`
-	CodecName string `json:"codec_name"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-	Channels  int    `json:"channels"`
-	Tags      struct {
+	CodecType        string `json:"codec_type"`
+	CodecName        string `json:"codec_name"`
+	Profile          string `json:"profile"`
+	Level            int    `json:"level"`
+	Width            int    `json:"width"`
+	Height           int    `json:"height"`
+	Channels         int    `json:"channels"`
+	ChannelLayout    string `json:"channel_layout"`
+	SampleRate       string `json:"sample_rate"`
+	AvgFrameRate     string `json:"avg_frame_rate"`
+	RFrameRate       string `json:"r_frame_rate"`
+	FieldOrder       string `json:"field_order"`
+	BitRate          string `json:"bit_rate"`
+	ColorSpace       string `json:"color_space"`
+	BitsPerRawSample string `json:"bits_per_raw_sample"`
+	PixelFormat      string `json:"pix_fmt"`
+	ReferenceFrames  int    `json:"refs"`
+	Disposition      struct {
+		Default         int `json:"default"`
+		Forced          int `json:"forced"`
+		External        int `json:"external"`
+		HearingImpaired int `json:"hearing_impaired"`
+	} `json:"disposition"`
+	Tags struct {
 		Language string `json:"language"`
 		Title    string `json:"title"`
 	} `json:"tags"`
@@ -254,7 +272,6 @@ func (s *Service) tryGenerateCatalogFallbackArtwork(ctx context.Context, file da
 func buildInventoryMediaStreams(fileID uint, parsed ffprobeOutput, updates map[string]any) []database.MediaStream {
 	streams := make([]database.MediaStream, 0, len(parsed.Streams))
 	durationSeconds, _ := updates["duration_seconds"].(*float64)
-	bitRate, _ := updates["bit_rate"].(*int64)
 	for index, stream := range parsed.Streams {
 		row := database.MediaStream{
 			FileID:          fileID,
@@ -263,8 +280,28 @@ func buildInventoryMediaStreams(fileID uint, parsed ffprobeOutput, updates map[s
 			Codec:           strings.TrimSpace(stream.CodecName),
 			Language:        strings.TrimSpace(stream.Tags.Language),
 			Title:           strings.TrimSpace(stream.Tags.Title),
-			BitRate:         bitRate,
+			ChannelLayout:   strings.TrimSpace(stream.ChannelLayout),
+			SampleRate:      parsePositiveIntPointer(stream.SampleRate),
+			BitRate:         parsePositiveInt64Pointer(stream.BitRate),
 			DurationSeconds: durationSeconds,
+			DispositionJSON: buildDispositionJSON(stream),
+		}
+		row.BitDepth = parsePositiveIntPointer(stream.BitsPerRawSample)
+		if row.StreamType == "video" {
+			row.Profile = strings.TrimSpace(stream.Profile)
+			if stream.Level > 0 {
+				level := stream.Level
+				row.Level = &level
+			}
+			row.AvgFrameRate = strings.TrimSpace(stream.AvgFrameRate)
+			row.RFrameRate = strings.TrimSpace(stream.RFrameRate)
+			row.FieldOrder = strings.TrimSpace(stream.FieldOrder)
+			row.ColorSpace = strings.TrimSpace(stream.ColorSpace)
+			row.PixelFormat = strings.TrimSpace(stream.PixelFormat)
+			if stream.ReferenceFrames > 0 {
+				referenceFrames := stream.ReferenceFrames
+				row.ReferenceFrames = &referenceFrames
+			}
 		}
 		if stream.Width > 0 {
 			width := stream.Width
@@ -281,6 +318,43 @@ func buildInventoryMediaStreams(fileID uint, parsed ffprobeOutput, updates map[s
 		streams = append(streams, row)
 	}
 	return streams
+}
+
+func buildDispositionJSON(stream ffprobeStream) string {
+	values := map[string]bool{
+		"default":          stream.Disposition.Default != 0,
+		"forced":           stream.Disposition.Forced != 0,
+		"external":         stream.Disposition.External != 0,
+		"hearing_impaired": stream.Disposition.HearingImpaired != 0,
+	}
+
+	for _, value := range values {
+		if value {
+			encoded, err := json.Marshal(values)
+			if err != nil {
+				return ""
+			}
+			return string(encoded)
+		}
+	}
+	return ""
+}
+
+func parsePositiveIntPointer(raw string) *int {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32)
+	if err != nil || value <= 0 {
+		return nil
+	}
+	parsed := int(value)
+	return &parsed
+}
+
+func parsePositiveInt64Pointer(raw string) *int64 {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return nil
+	}
+	return &value
 }
 
 func buildTechnicalSummaryJSON(parsed ffprobeOutput, updates map[string]any) (string, error) {

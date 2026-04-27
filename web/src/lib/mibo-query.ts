@@ -5,8 +5,20 @@ import { createMiboApi, getApiBaseUrl } from '#/lib/mibo-api'
 export const miboQueryKeys = {
   authUser: (token: string) => ['auth', 'me', token] as const,
   homeData: (token: string) => ['home', 'hero', token] as const,
+  favorites: (token: string) => ['me', 'favorites', token] as const,
+  libraryDetail: (token: string, libraryId: number) =>
+    ['library', 'detail', token, libraryId] as const,
+  libraryBrowse: (
+    token: string,
+    libraryId: number,
+    tab: string,
+    filters: unknown,
+    page: number,
+  ) => ['library', 'browse', token, libraryId, tab, filters, page] as const,
   catalogItemDetail: (token: string, itemId: number) =>
     ['catalog', 'detail', token, itemId] as const,
+  catalogPersonDetail: (token: string, personId: number) =>
+    ['catalog', 'person-detail', token, personId] as const,
   catalogItemProgress: (token: string, itemId: number) =>
     ['catalog', 'progress', token, itemId] as const,
   catalogSeriesSeasons: (token: string, itemId: number) =>
@@ -57,7 +69,9 @@ export function homeDataQueryOptions(token: string) {
 
       return {
         items,
+        continueWatching,
         continueWatchingCount: continueWatching.length,
+        libraries,
         libraryCount: libraries.length,
         latestByLibrary,
       }
@@ -65,10 +79,28 @@ export function homeDataQueryOptions(token: string) {
   })
 }
 
+export function favoritesQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.favorites(token),
+    queryFn: () => createAuthedMiboApi(token).listFavorites(),
+  })
+}
+
 export function catalogItemDetailQueryOptions(token: string, itemId: number) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
     queryFn: () => createAuthedMiboApi(token).getCatalogItem(itemId),
+  })
+}
+
+export function catalogPersonDetailQueryOptions(
+  token: string,
+  personId: number,
+) {
+  return queryOptions({
+    queryKey: miboQueryKeys.catalogPersonDetail(token, personId),
+    queryFn: () => createAuthedMiboApi(token).getCatalogPerson(personId),
+    enabled: personId > 0,
   })
 }
 

@@ -47,11 +47,21 @@ func TestProbeInventoryFileUpdatesAssetsAndStreams(t *testing.T) {
 	if streams[0].StreamIndex != 0 || streams[0].StreamType != "video" || streams[0].Codec != "h264" {
 		t.Fatalf("unexpected video stream: %#v", streams[0])
 	}
-	if streams[1].StreamIndex != 1 || streams[1].StreamType != "audio" || streams[1].Codec != "aac" {
+	assertDetailedVideoStream(t, streams[0])
+	if streams[1].StreamIndex != 1 || streams[1].StreamType != "audio" || streams[1].Codec != "flac" {
 		t.Fatalf("unexpected audio stream: %#v", streams[1])
 	}
-	if streams[2].StreamIndex != 2 || streams[2].StreamType != "subtitle" || streams[2].Codec != "subrip" {
+	if streams[1].ChannelLayout != "stereo" || streams[1].SampleRate == nil || *streams[1].SampleRate != 48000 || streams[1].BitDepth == nil || *streams[1].BitDepth != 24 {
+		t.Fatalf("unexpected detailed audio stream: %#v", streams[1])
+	}
+	if streams[1].BitRate != nil {
+		t.Fatalf("expected audio stream bitrate to remain empty without stream bitrate, got %#v", streams[1].BitRate)
+	}
+	if streams[2].StreamIndex != 2 || streams[2].StreamType != "subtitle" || streams[2].Codec != "ass" {
 		t.Fatalf("unexpected subtitle stream: %#v", streams[2])
+	}
+	if streams[2].Title != "Chinese Traditional" || streams[2].Language != "zho" || !strings.Contains(streams[2].DispositionJSON, `"default":true`) || !strings.Contains(streams[2].DispositionJSON, `"external":true`) {
+		t.Fatalf("unexpected subtitle stream metadata: %#v", streams[2])
 	}
 
 	var asset database.MediaAsset
@@ -89,6 +99,48 @@ func TestProbeInventoryFileUpdatesAssetsAndStreams(t *testing.T) {
 	}
 	if legacyCount != 0 {
 		t.Fatalf("expected legacy media_files to remain untouched, got %d rows", legacyCount)
+	}
+}
+
+func TestBuildInventoryMediaStreamsAllowsSparseVideoMetadata(t *testing.T) {
+	t.Parallel()
+
+	streams := buildInventoryMediaStreams(10, ffprobeOutput{Streams: []ffprobeStream{{CodecType: "video", CodecName: "hevc", Width: 3840, Height: 2160}}}, map[string]any{})
+	if len(streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(streams))
+	}
+	stream := streams[0]
+	if stream.Codec != "hevc" || stream.Width == nil || *stream.Width != 3840 || stream.Height == nil || *stream.Height != 2160 {
+		t.Fatalf("expected compact video metadata to be preserved, got %#v", stream)
+	}
+	if stream.Profile != "" || stream.Level != nil || stream.AvgFrameRate != "" || stream.BitDepth != nil || stream.ReferenceFrames != nil || stream.BitRate != nil {
+		t.Fatalf("expected sparse optional technical fields to stay empty, got %#v", stream)
+	}
+}
+
+func assertDetailedVideoStream(t *testing.T, stream database.MediaStream) {
+	t.Helper()
+
+	if stream.Profile != "High" {
+		t.Fatalf("expected profile High, got %q", stream.Profile)
+	}
+	if stream.Level == nil || *stream.Level != 41 {
+		t.Fatalf("expected level 41, got %#v", stream.Level)
+	}
+	if stream.AvgFrameRate != "24000/1001" || stream.RFrameRate != "24000/1001" {
+		t.Fatalf("unexpected frame rates: avg=%q r=%q", stream.AvgFrameRate, stream.RFrameRate)
+	}
+	if stream.FieldOrder != "progressive" || stream.ColorSpace != "bt709" || stream.PixelFormat != "yuv420p10le" {
+		t.Fatalf("unexpected color/interlace fields: %#v", stream)
+	}
+	if stream.BitDepth == nil || *stream.BitDepth != 10 {
+		t.Fatalf("expected bit depth 10, got %#v", stream.BitDepth)
+	}
+	if stream.ReferenceFrames == nil || *stream.ReferenceFrames != 4 {
+		t.Fatalf("expected reference frames 4, got %#v", stream.ReferenceFrames)
+	}
+	if stream.BitRate == nil || *stream.BitRate != 4200000 {
+		t.Fatalf("expected stream bitrate 4200000, got %#v", stream.BitRate)
 	}
 }
 
@@ -337,7 +389,7 @@ func newInventoryProbeFixture(t *testing.T) inventoryProbeFixture {
 func writeInventoryFakeFFprobe(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ffprobe")
-	content := "#!/bin/sh\ncat <<'EOF'\n{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080},{\"codec_type\":\"audio\",\"codec_name\":\"aac\",\"channels\":2,\"tags\":{\"language\":\"eng\",\"title\":\"Stereo\"}},{\"codec_type\":\"subtitle\",\"codec_name\":\"subrip\",\"tags\":{\"language\":\"eng\",\"title\":\"English\"}}],\"format\":{\"duration\":\"7260.25\",\"bit_rate\":\"5000000\"}}\nEOF\n"
+	content := "#!/bin/sh\ncat <<'EOF'\n{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"profile\":\"High\",\"level\":41,\"width\":1920,\"height\":1080,\"avg_frame_rate\":\"24000/1001\",\"r_frame_rate\":\"24000/1001\",\"field_order\":\"progressive\",\"bit_rate\":\"4200000\",\"color_space\":\"bt709\",\"bits_per_raw_sample\":\"10\",\"pix_fmt\":\"yuv420p10le\",\"refs\":4},{\"codec_type\":\"audio\",\"codec_name\":\"flac\",\"channels\":2,\"channel_layout\":\"stereo\",\"sample_rate\":\"48000\",\"bits_per_raw_sample\":\"24\",\"tags\":{\"language\":\"jpn\",\"title\":\"Stereo\"}},{\"codec_type\":\"subtitle\",\"codec_name\":\"ass\",\"disposition\":{\"default\":1,\"forced\":0,\"hearing_impaired\":0,\"external\":1},\"tags\":{\"language\":\"zho\",\"title\":\"Chinese Traditional\"}}],\"format\":{\"duration\":\"7260.25\",\"bit_rate\":\"5000000\"}}\nEOF\n"
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake ffprobe: %v", err)
 	}

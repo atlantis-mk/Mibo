@@ -9,6 +9,7 @@ export type DiscoveryFilters = {
   minRating: string
   watchedState: 'all' | 'unwatched' | 'in_progress' | 'watched'
   sort: 'recent' | 'title' | 'year' | 'watch_status'
+  sortDirection: 'asc' | 'desc'
 }
 
 type Props = {
@@ -77,6 +78,20 @@ export function DiscoveryControls({
         <option value="year">年份</option>
         <option value="watch_status">观看状态</option>
       </select>
+      <select
+        value={filters.sortDirection}
+        onChange={(event) =>
+          onChange({
+            ...filters,
+            sortDirection: event.target
+              .value as DiscoveryFilters['sortDirection'],
+          })
+        }
+        className="h-10 rounded-xl border border-input bg-background px-3 text-sm"
+      >
+        <option value="asc">升序</option>
+        <option value="desc">降序</option>
+      </select>
       <Input
         value={filters.genre}
         onChange={(event) =>
@@ -121,5 +136,6 @@ export function createDefaultDiscoveryFilters(
     minRating: initial?.minRating ?? '',
     watchedState: initial?.watchedState ?? 'all',
     sort: initial?.sort ?? 'recent',
+    sortDirection: initial?.sortDirection ?? 'desc',
   }
 }

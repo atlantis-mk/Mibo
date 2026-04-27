@@ -1,25 +1,61 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { LoaderCircleIcon, Settings2Icon } from 'lucide-react'
+import {
+  CastIcon,
+  HeartIcon,
+  LoaderCircleIcon,
+  SearchIcon,
+  Settings2Icon,
+  UserCircleIcon,
+} from 'lucide-react'
 import type { Swiper as SwiperType } from 'swiper/types'
 
 import 'swiper/css'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '#/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '#/components/ui/dropdown-menu'
 import { AppTopBar } from '#/components/app-top-bar'
 import { SidebarTrigger } from '#/components/ui/sidebar'
-import { homeDataQueryOptions } from '#/lib/mibo-query'
+import type { CatalogListItem } from '#/lib/mibo-api'
+import {
+  createAuthedMiboApi,
+  favoritesQueryOptions,
+  homeDataQueryOptions,
+  miboQueryKeys,
+} from '#/lib/mibo-query'
 import { useAuthStore } from '#/stores/auth-store'
 
-import { HeroCarousel, LatestLibraryRail } from './home-sections'
+import {
+  ContinueWatchingRail,
+  HeroCarousel,
+  LatestLibraryRail,
+  MyMediaSection,
+} from './home-sections'
 
 export default function Home() {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
+  const clearSession = useAuthStore((state) => state.clearSession)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const queryToken = token ?? 'guest'
 
   const [swiper, setSwiper] = useState<SwiperType | null>(null)
@@ -28,13 +64,41 @@ export default function Home() {
     ...homeDataQueryOptions(queryToken),
     enabled: hasHydrated && !!token,
   })
+  const favoritesQuery = useQuery({
+    ...favoritesQueryOptions(queryToken),
+    enabled: hasHydrated && !!token,
+  })
+  const favoriteMutation = useMutation({
+    mutationFn: async ({
+      item,
+      favorite,
+    }: {
+      item: CatalogListItem
+      favorite: boolean
+    }) => {
+      if (!token) throw new Error('当前未登录，无法更新收藏。')
+      const api = createAuthedMiboApi(token)
+      return favorite ? api.addFavorite(item.id) : api.removeFavorite(item.id)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.favorites(queryToken),
+      })
+    },
+  })
 
   const data = homeQuery.data ?? {
     items: [],
+    continueWatching: [],
     continueWatchingCount: 0,
+    libraries: [],
     libraryCount: 0,
     latestByLibrary: [],
   }
+  const favoriteIds = useMemo(
+    () => new Set((favoritesQuery.data ?? []).map((entry) => entry.item.id)),
+    [favoritesQuery.data],
+  )
   const heroItems = data.items.slice(0, 6)
   const canLoopHeroItems = heroItems.length > 2
   const latestLibrarySections = useMemo(
@@ -72,6 +136,22 @@ export default function Home() {
       return
     }
     swiper.slideTo(index)
+  }
+
+  const handleFavoriteToggle = (item: CatalogListItem, favorite: boolean) => {
+    favoriteMutation.mutate({ item, favorite })
+  }
+
+  const handleLogout = async () => {
+    if (token) {
+      try {
+        await createAuthedMiboApi(token).logout()
+      } catch {
+        // Local session cleanup is still valid if the server session already expired.
+      }
+    }
+    clearSession()
+    await navigate({ to: '/login', search: { redirect: '/' }, replace: true })
   }
 
   if (!hasHydrated || (token && homeQuery.isLoading)) {
@@ -129,6 +209,25 @@ export default function Home() {
       leftSlot={
         <>
           <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+          <Link
+            to="/"
+            className="hidden text-base font-semibold tracking-tight sm:block"
+          >
+            Mibo
+          </Link>
+          <div className="hidden rounded-full border border-border/50 bg-background/80 p-1 sm:flex">
+            <Button asChild size="sm" className="h-8 rounded-full px-4">
+              <Link to="/">首页</Link>
+            </Button>
+            <Button
+              asChild
+              size="sm"
+              variant="ghost"
+              className="h-8 rounded-full px-4 text-muted-foreground"
+            >
+              <Link to="/favorites">收藏</Link>
+            </Button>
+          </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">Mibo Home</div>
             <div className="truncate text-xs text-muted-foreground">
@@ -157,6 +256,70 @@ export default function Home() {
             variant="outline"
             className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
           >
+            <Link to="/search" search={{ q: undefined }}>
+              <SearchIcon className="size-4" />
+              <span className="sr-only">搜索</span>
+            </Link>
+          </Button>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
+              >
+                <CastIcon className="size-4" />
+                <span className="sr-only">投屏</span>
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>投屏暂不可用</DialogTitle>
+                <DialogDescription>
+                  设备发现和投屏控制还没有接入当前播放器。后续可以在播放能力中继续实现
+                  Chromecast / AirPlay。
+                </DialogDescription>
+              </DialogHeader>
+            </DialogContent>
+          </Dialog>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
+              >
+                <UserCircleIcon className="size-4" />
+                <span className="sr-only">用户菜单</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>{user.username}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/favorites">
+                  <HeartIcon className="size-4" />
+                  收藏
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/settings">
+                  <Settings2Icon className="size-4" />
+                  设置
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => void handleLogout()}>
+                退出登录
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            asChild
+            size="icon-sm"
+            variant="outline"
+            className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
+          >
             <Link to="/settings">
               <Settings2Icon className="size-4" />
               <span className="sr-only">进入设置</span>
@@ -167,7 +330,12 @@ export default function Home() {
     />
   )
 
-  if (data.items.length === 0) {
+  if (
+    data.items.length === 0 &&
+    data.libraries.length === 0 &&
+    latestLibrarySections.length === 0 &&
+    data.continueWatching.length === 0
+  ) {
     return (
       <div className="relative min-w-0 flex-1 bg-background text-foreground">
         {topBar}
@@ -212,7 +380,20 @@ export default function Home() {
         onDotClick={scrollHeroTo}
       />
 
-      <LatestLibraryRail latestLibrarySections={latestLibrarySections} />
+      <MyMediaSection
+        libraries={data.libraries}
+        latestLibrarySections={latestLibrarySections}
+      />
+      <ContinueWatchingRail
+        entries={data.continueWatching}
+        favoriteIds={favoriteIds}
+        onFavoriteToggle={handleFavoriteToggle}
+      />
+      <LatestLibraryRail
+        latestLibrarySections={latestLibrarySections}
+        favoriteIds={favoriteIds}
+        onFavoriteToggle={handleFavoriteToggle}
+      />
     </div>
   )
 }

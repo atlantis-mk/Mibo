@@ -23,8 +23,10 @@ import { Route as SettingsMetadataSourcesRouteImport } from './routes/settings.m
 import { Route as SettingsLibraryRouteImport } from './routes/settings.library'
 import { Route as PlayIdRouteImport } from './routes/play.$id'
 import { Route as AppSearchRouteImport } from './routes/_app.search'
+import { Route as AppFavoritesRouteImport } from './routes/_app.favorites'
 import { Route as SettingsMetadataIndexRouteImport } from './routes/settings.metadata.index'
 import { Route as SettingsMetadataIdRouteImport } from './routes/settings.metadata.$id'
+import { Route as AppPersonIdRouteImport } from './routes/_app.person.$id'
 import { Route as AppMediaIdRouteImport } from './routes/_app.media.$id'
 import { Route as AppLibraryIdRouteImport } from './routes/_app.library.$id'
 
@@ -97,6 +99,11 @@ const AppSearchRoute = AppSearchRouteImport.update({
   path: '/search',
   getParentRoute: () => AppRoute,
 } as any)
+const AppFavoritesRoute = AppFavoritesRouteImport.update({
+  id: '/favorites',
+  path: '/favorites',
+  getParentRoute: () => AppRoute,
+} as any)
 const SettingsMetadataIndexRoute = SettingsMetadataIndexRouteImport.update({
   id: '/metadata/',
   path: '/metadata/',
@@ -106,6 +113,11 @@ const SettingsMetadataIdRoute = SettingsMetadataIdRouteImport.update({
   id: '/metadata/$id',
   path: '/metadata/$id',
   getParentRoute: () => SettingsRoute,
+} as any)
+const AppPersonIdRoute = AppPersonIdRouteImport.update({
+  id: '/person/$id',
+  path: '/person/$id',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppMediaIdRoute = AppMediaIdRouteImport.update({
   id: '/media/$id',
@@ -123,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
+  '/favorites': typeof AppFavoritesRoute
   '/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
   '/settings/library': typeof SettingsLibraryRoute
@@ -134,12 +147,14 @@ export interface FileRoutesByFullPath {
   '/settings/': typeof SettingsIndexRoute
   '/library/$id': typeof AppLibraryIdRoute
   '/media/$id': typeof AppMediaIdRoute
+  '/person/$id': typeof AppPersonIdRoute
   '/settings/metadata/$id': typeof SettingsMetadataIdRoute
   '/settings/metadata/': typeof SettingsMetadataIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/favorites': typeof AppFavoritesRoute
   '/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
   '/settings/library': typeof SettingsLibraryRoute
@@ -152,6 +167,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsIndexRoute
   '/library/$id': typeof AppLibraryIdRoute
   '/media/$id': typeof AppMediaIdRoute
+  '/person/$id': typeof AppPersonIdRoute
   '/settings/metadata/$id': typeof SettingsMetadataIdRoute
   '/settings/metadata': typeof SettingsMetadataIndexRoute
 }
@@ -161,6 +177,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
+  '/_app/favorites': typeof AppFavoritesRoute
   '/_app/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
   '/settings/library': typeof SettingsLibraryRoute
@@ -173,6 +190,7 @@ export interface FileRoutesById {
   '/settings/': typeof SettingsIndexRoute
   '/_app/library/$id': typeof AppLibraryIdRoute
   '/_app/media/$id': typeof AppMediaIdRoute
+  '/_app/person/$id': typeof AppPersonIdRoute
   '/settings/metadata/$id': typeof SettingsMetadataIdRoute
   '/settings/metadata/': typeof SettingsMetadataIndexRoute
 }
@@ -183,6 +201,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/settings'
     | '/setup'
+    | '/favorites'
     | '/search'
     | '/play/$id'
     | '/settings/library'
@@ -194,12 +213,14 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/library/$id'
     | '/media/$id'
+    | '/person/$id'
     | '/settings/metadata/$id'
     | '/settings/metadata/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/setup'
+    | '/favorites'
     | '/search'
     | '/play/$id'
     | '/settings/library'
@@ -212,6 +233,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/library/$id'
     | '/media/$id'
+    | '/person/$id'
     | '/settings/metadata/$id'
     | '/settings/metadata'
   id:
@@ -220,6 +242,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/settings'
     | '/setup'
+    | '/_app/favorites'
     | '/_app/search'
     | '/play/$id'
     | '/settings/library'
@@ -232,6 +255,7 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/_app/library/$id'
     | '/_app/media/$id'
+    | '/_app/person/$id'
     | '/settings/metadata/$id'
     | '/settings/metadata/'
   fileRoutesById: FileRoutesById
@@ -344,6 +368,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSearchRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/favorites': {
+      id: '/_app/favorites'
+      path: '/favorites'
+      fullPath: '/favorites'
+      preLoaderRoute: typeof AppFavoritesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/settings/metadata/': {
       id: '/settings/metadata/'
       path: '/metadata'
@@ -357,6 +388,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/metadata/$id'
       preLoaderRoute: typeof SettingsMetadataIdRouteImport
       parentRoute: typeof SettingsRoute
+    }
+    '/_app/person/$id': {
+      id: '/_app/person/$id'
+      path: '/person/$id'
+      fullPath: '/person/$id'
+      preLoaderRoute: typeof AppPersonIdRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/media/$id': {
       id: '/_app/media/$id'
@@ -376,17 +414,21 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppFavoritesRoute: typeof AppFavoritesRoute
   AppSearchRoute: typeof AppSearchRoute
   AppIndexRoute: typeof AppIndexRoute
   AppLibraryIdRoute: typeof AppLibraryIdRoute
   AppMediaIdRoute: typeof AppMediaIdRoute
+  AppPersonIdRoute: typeof AppPersonIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppFavoritesRoute: AppFavoritesRoute,
   AppSearchRoute: AppSearchRoute,
   AppIndexRoute: AppIndexRoute,
   AppLibraryIdRoute: AppLibraryIdRoute,
   AppMediaIdRoute: AppMediaIdRoute,
+  AppPersonIdRoute: AppPersonIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

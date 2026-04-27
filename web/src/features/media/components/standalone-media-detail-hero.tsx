@@ -3,30 +3,31 @@ import {
   Check,
   Ellipsis,
   Heart,
-  Image as ImageIcon,
   LoaderCircle,
   Play,
   RefreshCw,
   Sparkles,
   Star,
-  Trash2,
 } from 'lucide-react'
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '#/components/ui/alert-dialog'
 import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Button } from '#/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '#/components/ui/dropdown-menu'
 import type { CatalogAssetDetail, ProgressState } from '#/lib/mibo-api'
 import type { CatalogDetailPresentation } from '#/lib/media-presentation'
+import {
+  formatMediaDetailYearRange,
+  formatMediaRating,
+  formatProviderLabel,
+  formatSeasonSummary,
+} from '#/lib/media-presentation'
 import { cn } from '#/lib/utils'
 
 import {
@@ -36,7 +37,6 @@ import {
   formatMediaType,
   formatRuntime,
   formatSeconds,
-  getDisplayDatabaseLinks,
   getDisplayMatchStatus,
   getPrimaryCatalogAsset,
 } from './standalone-media-detail-utils'
@@ -55,13 +55,18 @@ export function DetailHeroSection({
   onReprobePrimaryFile,
   isReprobePending,
   onMarkWatched,
+  isFavorite,
+  onFavoriteToggle,
 }: {
   item: CatalogDetailPresentation
   progress: ProgressState | null
   itemProgressPercent: number
   overviewExpanded: boolean
   onOverviewExpandedChange: (value: boolean) => void
-  onOpenPlaybackEntry: (options?: { fromStart?: boolean }) => void
+  onOpenPlaybackEntry: (options?: {
+    fromStart?: boolean
+    assetId?: number
+  }) => void
   onOpenAssetPlaybackEntry?: (assetId: number) => void
   assetChoices?: CatalogAssetDetail[]
   onManageMetadata: () => void
@@ -69,55 +74,68 @@ export function DetailHeroSection({
   onReprobePrimaryFile?: () => void
   isReprobePending: boolean
   onMarkWatched: () => void
+  isFavorite: boolean
+  onFavoriteToggle: (favorite: boolean) => void
 }) {
   const primaryAsset = getPrimaryCatalogAsset(item)
+  const isEpisode = item.type === 'episode'
+  const canPlay =
+    item.availability_status === 'available' && Boolean(primaryAsset)
   const hasResumableProgress = Boolean(
     progress && !progress.watched && progress.position_seconds > 0,
   )
-  const primaryPlayLabel = hasResumableProgress ? '继续播放' : '播放'
-  const metadataScore =
-    typeof item.metadata_confidence === 'number'
-      ? (item.metadata_confidence * 10).toFixed(1)
-      : null
-  const yearLabel =
-    item.year ?? (item.release_date ? item.release_date.slice(0, 4) : null)
+  const primaryPlayLabel = canPlay
+    ? hasResumableProgress
+      ? '继续播放'
+      : '播放'
+    : item.availability_status === 'unaired'
+      ? '未播出'
+      : '暂无播放'
+  const ratingLabel = formatMediaRating(item.community_rating)
+  const yearLabel = formatMediaDetailYearRange(item)
   const titleLine = item.original_title || item.title
   const assetSummary = formatAssetLabel(primaryAsset)
-  const databaseLinks = getDisplayDatabaseLinks(item)
   const matchStatus = getDisplayMatchStatus(item)
+  const genreLabel = item.genres.slice(0, 3).join(' / ')
+  const seasonSummary = formatSeasonSummary(item)
+  const watched = Boolean(progress?.watched)
 
   return (
     <div className="min-w-0 max-w-[980px] pt-1">
       <div className="space-y-5">
         <div className="space-y-3">
+          {isEpisode && item.episode_context?.series ? (
+            <div className="text-base font-medium text-muted-foreground">
+              {item.episode_context.series.title}
+            </div>
+          ) : null}
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="min-w-0 break-words text-4xl font-semibold tracking-tight text-foreground lg:text-[52px]">
               {item.title}
             </h1>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="size-8 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            >
-              <ImageIcon className="size-4" />
-            </Button>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[15px] text-muted-foreground lg:text-base">
-            {metadataScore ? (
+            {isEpisode && item.episode_label ? (
+              <span>{item.episode_label}</span>
+            ) : null}
+            {ratingLabel ? (
               <span className="inline-flex items-center gap-1.5">
                 <Star className="size-4 fill-primary text-primary" />
-                {metadataScore}
+                {ratingLabel}
               </span>
             ) : null}
             {yearLabel ? <span>{yearLabel}</span> : null}
+            {item.official_rating ? <span>{item.official_rating}</span> : null}
+            {genreLabel ? <span>{genreLabel}</span> : null}
             {item.runtime_seconds ? (
               <span>{formatRuntime(item.runtime_seconds)}</span>
             ) : null}
-            {databaseLinks ? (
+            {item.metadata_provider ? (
               <span className="rounded border border-border/50 bg-background/70 px-1.5 py-0.5 text-xs text-muted-foreground">
-                {item.metadata_provider?.toUpperCase()}
+                {formatProviderLabel(item.metadata_provider)}
               </span>
             ) : null}
+            {seasonSummary ? <span>{seasonSummary}</span> : null}
             <span>{formatMediaType(item.type)}</span>
             {progress?.last_played_at ? (
               <span>结束于 {formatDateTime(progress.last_played_at)}</span>
@@ -138,67 +156,89 @@ export function DetailHeroSection({
           <Button
             size="lg"
             className="h-12 rounded-full px-8 text-base"
-            onClick={() => onOpenPlaybackEntry()}
+            onClick={() => onOpenPlaybackEntry({ assetId: primaryAsset?.id })}
+            disabled={!canPlay}
           >
             <Play className="size-4 fill-current" />
             {primaryPlayLabel}
           </Button>
-          <PillIconButton icon={<Check className="size-4" />} />
-          <PillIconButton icon={<Heart className="size-4" />} />
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
+          <Button
+            size="icon"
+            variant="outline"
+            type="button"
+            className={cn(
+              'size-11 rounded-full border-border/50 bg-background/75 hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-primary',
+              watched ? 'text-emerald-400' : 'text-muted-foreground',
+            )}
+            onClick={onMarkWatched}
+            aria-label={watched ? '已看完' : '标记看完'}
+          >
+            <Check className={cn('size-4', watched ? 'stroke-[3]' : '')} />
+          </Button>
+          <Button
+            size="icon"
+            variant="outline"
+            type="button"
+            className={cn(
+              'size-11 rounded-full border-border/50 bg-background/75 hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-primary',
+              isFavorite ? 'text-rose-400' : 'text-muted-foreground',
+            )}
+            onClick={() => onFavoriteToggle(!isFavorite)}
+          >
+            <Heart className={cn('size-4', isFavorite ? 'fill-current' : '')} />
+            <span className="sr-only">
+              {isFavorite ? '取消收藏' : '加入收藏'}
+            </span>
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
                 size="icon"
                 variant="outline"
-                className="size-11 rounded-full border-border/50 bg-background/75 text-foreground hover:bg-accent hover:text-accent-foreground"
+                type="button"
+                className="size-11 rounded-full border-border/50 bg-background/75 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-primary"
               >
-                <Trash2 className="size-4" />
+                <Ellipsis className="size-4" />
+                <span className="sr-only">更多操作</span>
               </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>标记看完</AlertDialogTitle>
-                <AlertDialogDescription>
-                  标记后该条目会从继续观看中移除，并在下次默认从头播放。确认继续？
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={onMarkWatched}>
-                  确认标记
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-          <PillIconButton icon={<Ellipsis className="size-4" />} />
-          <PillButton
-            icon={<Sparkles className="size-4" />}
-            label="治理元数据"
-            onClick={onManageMetadata}
-          />
-          {hasResumableProgress ? (
-            <PillButton
-              icon={<Play className="size-4" />}
-              label="从头播放"
-              onClick={() => onOpenPlaybackEntry({ fromStart: true })}
-            />
-          ) : null}
-          <PillButton
-            icon={<Sparkles className="size-4" />}
-            label="重新匹配"
-            onClick={onRematchItem}
-          />
-          <PillButton
-            icon={
-              isReprobePending ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <RefreshCw className="size-4" />
-              )
-            }
-            label={isReprobePending ? '探测排队中' : '重新探测'}
-            onClick={isReprobePending ? undefined : onReprobePrimaryFile}
-          />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              <DropdownMenuLabel>更多操作</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {hasResumableProgress ? (
+                <DropdownMenuItem
+                  onSelect={() =>
+                    onOpenPlaybackEntry({
+                      fromStart: true,
+                      assetId: primaryAsset?.id,
+                    })
+                  }
+                >
+                  <Play className="size-4" />
+                  从头播放
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onSelect={onManageMetadata}>
+                <Sparkles className="size-4" />
+                治理元数据
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onRematchItem}>
+                <Sparkles className="size-4" />
+                重新匹配
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={isReprobePending || !onReprobePrimaryFile}
+                onSelect={() => onReprobePrimaryFile?.()}
+              >
+                {isReprobePending ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {isReprobePending ? '探测排队中' : '重新探测'}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {assetChoices.length > 1 && onOpenAssetPlaybackEntry ? (
@@ -213,6 +253,26 @@ export function DetailHeroSection({
               />
             ))}
           </div>
+        ) : null}
+
+        {isEpisode && item.episode_context?.incomplete_hierarchy ? (
+          <Alert className="border-amber-400/30 bg-amber-950/20 text-foreground backdrop-blur-sm">
+            <AlertTitle>剧集层级不完整</AlertTitle>
+            <AlertDescription className="text-muted-foreground">
+              当前集缺少完整的剧集或季信息，页面只展示已有元数据。可以在治理页修正季集编号。
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {!canPlay ? (
+          <Alert className="border-border/40 bg-card/75 text-foreground backdrop-blur-sm">
+            <AlertTitle>暂不可播放</AlertTitle>
+            <AlertDescription className="text-muted-foreground">
+              {item.availability_status === 'unaired'
+                ? '这一集尚未播出，仍可查看元数据和治理信息。'
+                : '这一集还没有可播放的本地资源，仍可查看元数据和治理信息。'}
+            </AlertDescription>
+          </Alert>
         ) : null}
 
         {describeMatchStatus(matchStatus) && matchStatus !== 'matched' ? (
@@ -293,21 +353,6 @@ function PillButton({
     >
       {icon}
       {label}
-    </Button>
-  )
-}
-
-function PillIconButton({ icon }: { icon: ReactNode }) {
-  return (
-    <Button
-      size="icon"
-      variant="outline"
-      type="button"
-      className="pointer-events-none size-11 rounded-full border-border/50 bg-background/75 text-muted-foreground opacity-80"
-      tabIndex={-1}
-      aria-hidden="true"
-    >
-      {icon}
     </Button>
   )
 }

@@ -8,6 +8,7 @@ import { Button } from '#/components/ui/button'
 import { StandaloneMediaDetail } from '#/features/media/components/standalone-media-detail'
 import {
   buildPresentedCatalogItem,
+  catalogEpisodeShelfToSeasonRails,
   catalogItemDetailToPresentation,
   catalogSeasonsToRails,
   type MediaDetailView,
@@ -17,7 +18,9 @@ import {
   catalogItemProgressQueryOptions,
   catalogSeriesSeasonsQueryOptions,
   createAuthedMiboApi,
+  favoritesQueryOptions,
   homeDataQueryOptions,
+  miboQueryKeys,
 } from '#/lib/mibo-query'
 import { useAuthStore } from '#/stores/auth-store'
 
@@ -44,6 +47,10 @@ export default function MediaDetail({
     ...catalogItemProgressQueryOptions(queryToken, itemId),
     enabled: hasHydrated && !!token && hasValidItemId,
   })
+  const favoritesQuery = useQuery({
+    ...favoritesQueryOptions(queryToken),
+    enabled: hasHydrated && !!token && hasValidItemId,
+  })
   const detailItem = itemQuery.data
   const detailAssets = itemQuery.data?.assets ?? []
   const presentationItem = itemQuery.data
@@ -60,6 +67,11 @@ export default function MediaDetail({
         detailView,
       )
     : null
+  const displayedSeasonRails = presentedItem
+    ? presentedItem.type === 'episode'
+      ? catalogEpisodeShelfToSeasonRails(presentedItem)
+      : catalogSeasonsToRails(seriesEpisodesQuery.data ?? [])
+    : []
 
   const rematchMutation = useMutation({
     mutationFn: async () => {
@@ -146,10 +158,30 @@ export default function MediaDetail({
       ])
     },
   })
+  const favoriteMutation = useMutation({
+    mutationFn: async (favorite: boolean) => {
+      if (!token) {
+        throw new Error('当前未登录，无法更新收藏。')
+      }
+
+      const api = createAuthedMiboApi(token)
+      return favorite ? api.addFavorite(itemId) : api.removeFavorite(itemId)
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.favorites(queryToken),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: homeDataQueryOptions(queryToken).queryKey,
+        }),
+      ])
+    },
+  })
 
   if (!hasHydrated || (token && itemQuery.isLoading)) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background text-foreground">
+      <div className="flex min-h-svh w-full items-center justify-center bg-background text-foreground">
         <div className="flex items-center gap-3 rounded-full border border-border/40 bg-background/80 px-5 py-3 backdrop-blur-xl">
           <LoaderCircleIcon className="size-4 animate-spin" />
           <span className="text-sm text-muted-foreground">
@@ -162,7 +194,7 @@ export default function MediaDetail({
 
   if (!token || !user) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
+      <div className="flex min-h-svh w-full items-center justify-center bg-background px-6 text-foreground">
         <div className="max-w-xl space-y-4 text-center">
           <Badge
             className="border-border/60 bg-background/80"
@@ -214,7 +246,11 @@ export default function MediaDetail({
   const mutationErrorMessage =
     rematchMutation.error?.message ||
     reprobeMutation.error?.message ||
-    markWatchedMutation.error?.message
+    markWatchedMutation.error?.message ||
+    favoriteMutation.error?.message
+  const isFavorite = Boolean(
+    favoritesQuery.data?.some((entry) => entry.item.id === itemId),
+  )
 
   return (
     <div className="relative min-w-0 flex-1 overflow-x-hidden">
@@ -233,7 +269,7 @@ export default function MediaDetail({
         item={presentedItem ?? presentationItem}
         itemProgressPercent={itemProgressPercent}
         progress={progress}
-        seriesSeasons={catalogSeasonsToRails(seriesEpisodesQuery.data ?? [])}
+        seriesSeasons={displayedSeasonRails}
         isSeriesEpisodesLoading={seriesEpisodesQuery.isLoading}
         seriesEpisodesErrorMessage={seriesEpisodesQuery.error?.message ?? null}
         onGoBack={() => {
@@ -250,7 +286,7 @@ export default function MediaDetail({
             params: { id: String(itemId) },
             search: {
               fromStart: Boolean(options?.fromStart),
-              assetId: undefined,
+              assetId: options?.assetId,
             },
           })
         }}
@@ -278,6 +314,10 @@ export default function MediaDetail({
         onMarkWatched={() => {
           void markWatchedMutation.mutateAsync()
         }}
+        isFavorite={isFavorite}
+        onFavoriteToggle={(favorite) => {
+          void favoriteMutation.mutateAsync(favorite)
+        }}
       />
     </div>
   )
@@ -285,7 +325,7 @@ export default function MediaDetail({
 
 function MediaDetailError({ message }: { message: string }) {
   return (
-    <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
+    <div className="flex min-h-svh w-full items-center justify-center bg-background px-6 text-foreground">
       <div className="max-w-lg rounded-[2rem] border border-border/40 bg-card/80 p-8 text-center backdrop-blur-xl">
         <Badge className="border-border/60 bg-background/80" variant="outline">
           加载失败

@@ -19,12 +19,17 @@ func TestCatalogDTOContractExportsRequiredTypes(t *testing.T) {
 		CatalogItemDetail{},
 		CatalogSeasonDetail{},
 		CatalogEpisodeDetail{},
+		CatalogEpisodeParentContext{},
+		CatalogEpisodeShelfItem{},
 		CatalogAssetDetail{},
+		CatalogAssetFileSummary{},
+		CatalogMediaStreamSummary{},
 		CatalogGovernanceWorkspace{},
+		CatalogMetadataOperationResult{},
 	}
 
-	if len(exported) != 6 {
-		t.Fatalf("expected 6 exported catalog DTO types, got %d", len(exported))
+	if len(exported) != 11 {
+		t.Fatalf("expected 11 exported catalog DTO types, got %d", len(exported))
 	}
 }
 
@@ -144,9 +149,14 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 	rollup := &database.ItemRollup{ChildCount: 8, AvailableCount: 6, MissingCount: 1, UnairedCount: 1, PlayedCount: 2, InProgressCount: 1, LatestAirDate: &now, LatestAddedAt: &now}
 
 	assetDetail := BuildCatalogAssetDetail(CatalogAssetDetailInput{
-		Asset: database.MediaAsset{ID: 21, LibraryID: 3, AssetType: "main", DisplayName: "4K HDR", Edition: "Director's Cut", QualityLabel: "2160p", DurationSeconds: &durationSeconds, Status: AvailabilityAvailable, ProbeStatus: "ready"},
-		Links: []database.AssetItem{{ItemID: 13, Role: "primary", SegmentIndex: 0, EndSeconds: &segmentEnd, Confidence: &confidence, Source: "scanner"}},
+		Asset:   database.MediaAsset{ID: 21, LibraryID: 3, AssetType: "main", DisplayName: "4K HDR", Edition: "Director's Cut", QualityLabel: "2160p", DurationSeconds: &durationSeconds, Status: AvailabilityAvailable, ProbeStatus: "ready"},
+		Links:   []database.AssetItem{{ItemID: 13, Role: "primary", SegmentIndex: 0, EndSeconds: &segmentEnd, Confidence: &confidence, Source: "scanner"}},
+		Files:   []CatalogAssetFileSummary{{FileID: 31, Role: "source", PartIndex: 0, StorageProvider: "local", StoragePath: "/media/example.mkv", SizeBytes: 1234, Container: "mkv", Status: AvailabilityAvailable}},
+		Streams: []CatalogMediaStreamSummary{{FileID: 31, StreamIndex: 0, StreamType: "video", Codec: "h264", Width: &width, Height: &height}},
 	})
+	cast := []CatalogPersonDetail{{Name: "Actor A", Role: "Lead"}}
+	directors := []CatalogPersonDetail{{Name: "Director A", Role: "Director"}}
+	birthday := now
 
 	seasonDetail := BuildCatalogSeasonDetail(CatalogSeasonDetailInput{
 		Item:        database.CatalogItem{ID: 11, LibraryID: 3, Type: ItemTypeSeason, Title: "Season 1", Overview: "Season overview", IndexNumber: &seasonNumber, RuntimeSeconds: &seasonRuntime, AvailabilityStatus: AvailabilityAvailable, GovernanceStatus: GovernanceMatched},
@@ -213,11 +223,15 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 				ExternalIDs: externalIDs,
 				Sources:     sources,
 				FieldStates: fieldStates,
+				Cast:        cast,
+				Directors:   directors,
+				Tags:        []CatalogTagDetail{{Kind: "genre", Name: "Drama"}},
 				Seasons:     []CatalogSeasonDetail{seasonDetail},
 				Episodes:    []CatalogEpisodeDetail{episodeDetail},
 				Assets:      []CatalogAssetDetail{assetDetail},
+				Related:     []CatalogListItem{BuildCatalogListItem(CatalogListItemInput{Item: database.CatalogItem{ID: 13, LibraryID: 3, Type: ItemTypeSeries, Title: "Related Show", AvailabilityStatus: AvailabilityAvailable, GovernanceStatus: GovernanceMatched}})},
 			}),
-			required:  []string{"id", "library_id", "type", "availability_status", "governance_status", "assets", "source_evidence", "field_states", "seasons", "episodes"},
+			required:  []string{"id", "library_id", "type", "availability_status", "governance_status", "tags", "genres", "related_items", "assets", "source_evidence", "field_states", "cast", "directors", "seasons", "episodes", "same_season_episodes"},
 			forbidden: []string{"deleted_at", "parent_id", "root_id", "payload_json", "value_json"},
 			typeValue: ItemTypeSeries,
 			statusKey: "availability_status",
@@ -244,10 +258,27 @@ func TestCatalogJSONContractShapeAndMapperBehavior(t *testing.T) {
 		{
 			name:      "asset detail",
 			value:     assetDetail,
-			required:  []string{"id", "library_id", "asset_type", "status", "probe_status", "links"},
+			required:  []string{"id", "library_id", "asset_type", "status", "probe_status", "links", "files", "streams"},
 			forbidden: []string{"deleted_at", "payload_json", "value_json"},
 			statusKey: "status",
 			status:    AvailabilityAvailable,
+		},
+		{
+			name: "person detail",
+			value: CatalogPersonPageDetail{
+				ID:                 91,
+				Name:               "Actor A",
+				SortName:           "Actor A",
+				AvatarURL:          "https://example.com/actor-a.jpg",
+				Biography:          "Lead performer.",
+				Birthday:           &birthday,
+				PlaceOfBirth:       "Seoul",
+				KnownForDepartment: "Acting",
+				ExternalIdentities: []CatalogExternalIdentity{{Provider: "tmdb", ProviderType: "person", ExternalID: "321", IsPrimary: true}},
+				RelatedItems:       []CatalogListItem{BuildCatalogListItem(CatalogListItemInput{Item: database.CatalogItem{ID: 13, LibraryID: 3, Type: ItemTypeSeries, Title: "Related Show", AvailabilityStatus: AvailabilityAvailable, GovernanceStatus: GovernanceMatched}})},
+			},
+			required:  []string{"id", "name", "avatar_url", "biography", "birthday", "place_of_birth", "known_for_department", "external_identities", "related_items"},
+			forbidden: []string{"deleted_at", "payload_json", "value_json"},
 		},
 		{
 			name: "governance workspace",

@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ChevronLeft, ChevronRight, Disc3 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Disc3, Film } from 'lucide-react'
 import { FreeMode } from 'swiper/modules'
 import { Swiper, SwiperSlide } from 'swiper/react'
 import type { Swiper as SwiperType } from 'swiper/types'
 
 import { Button } from '#/components/ui/button'
+import { MediaPosterCard } from '#/components/media-poster-card'
 import type {
   CatalogDetailPresentation,
   CatalogEpisodeRail,
@@ -14,7 +15,7 @@ import type {
 import { cn } from '#/lib/utils'
 
 export { DetailHeroSection } from './standalone-media-detail-hero'
-export { SpecsSection } from './standalone-media-detail-specs'
+export { PeopleSection, SpecsSection } from './standalone-media-detail-specs'
 
 import {
   formatAvailabilityStatus,
@@ -32,6 +33,37 @@ export function SeriesEpisodesSection({
   isLoading: boolean
   errorMessage: string | null
 }) {
+  const numberedSeasons = useMemo(
+    () => seasons.filter((season) => !isSpecialSeason(season)),
+    [seasons],
+  )
+  const specialsSeasons = useMemo(
+    () => seasons.filter((season) => isSpecialSeason(season)),
+    [seasons],
+  )
+  const [selectedSeasonNumber, setSelectedSeasonNumber] = useState<
+    number | undefined
+  >(numberedSeasons[0]?.season_number)
+
+  useEffect(() => {
+    if (numberedSeasons.length === 0) {
+      setSelectedSeasonNumber(undefined)
+      return
+    }
+    if (
+      !numberedSeasons.some(
+        (season) => season.season_number === selectedSeasonNumber,
+      )
+    ) {
+      setSelectedSeasonNumber(numberedSeasons[0].season_number)
+    }
+  }, [numberedSeasons, selectedSeasonNumber])
+
+  const selectedSeason =
+    numberedSeasons.find(
+      (season) => season.season_number === selectedSeasonNumber,
+    ) ?? numberedSeasons[0]
+
   if (item.type !== 'series' && item.type !== 'episode') {
     return null
   }
@@ -69,8 +101,35 @@ export function SeriesEpisodesSection({
 
       {!isLoading && !errorMessage && seasons.length > 0 ? (
         <div className="space-y-8">
-          {seasons.map((season) => (
-            <SeasonEpisodesRail key={season.season_number} season={season} />
+          {numberedSeasons.length > 1 ? (
+            <div className="flex flex-wrap gap-2">
+              {numberedSeasons.map((season) => (
+                <Button
+                  key={season.season_number}
+                  type="button"
+                  size="sm"
+                  variant={
+                    selectedSeason?.season_number === season.season_number
+                      ? 'default'
+                      : 'outline'
+                  }
+                  className="rounded-full"
+                  onClick={() => setSelectedSeasonNumber(season.season_number)}
+                >
+                  {season.name?.trim() || `第 ${season.season_number} 季`}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+          {selectedSeason ? (
+            <SeasonEpisodesRail season={selectedSeason} />
+          ) : null}
+          {specialsSeasons.map((season) => (
+            <SeasonEpisodesRail
+              key={`special-${season.season_number}-${season.name}`}
+              season={season}
+              title="特别篇"
+            />
           ))}
         </div>
       ) : null}
@@ -78,7 +137,13 @@ export function SeriesEpisodesSection({
   )
 }
 
-function SeasonEpisodesRail({ season }: { season: CatalogSeasonRail }) {
+function SeasonEpisodesRail({
+  season,
+  title,
+}: {
+  season: CatalogSeasonRail
+  title?: string
+}) {
   const [swiper, setSwiper] = useState<SwiperType | null>(null)
   const [canScrollPrev, setCanScrollPrev] = useState(false)
   const [canScrollNext, setCanScrollNext] = useState(false)
@@ -93,7 +158,7 @@ function SeasonEpisodesRail({ season }: { season: CatalogSeasonRail }) {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-1">
           <h3 className="text-[28px] font-semibold tracking-tight text-foreground">
-            {season.name?.trim() || `第 ${season.season_number} 季`}
+            {title || season.name?.trim() || `第 ${season.season_number} 季`}
           </h3>
           <div className="text-sm text-muted-foreground">
             共 {season.episodes.length} 集
@@ -132,7 +197,7 @@ function SeasonEpisodesRail({ season }: { season: CatalogSeasonRail }) {
         >
           {season.episodes.map((episode) => (
             <SwiperSlide
-              key={`${season.season_number}-${episode.episode_number}`}
+              key={`${season.season_number}-${episode.episode_number}-${episode.item_id}`}
               className="!h-auto !w-[290px] sm:!w-[360px] lg:!w-[392px]"
             >
               <EpisodeCard
@@ -168,10 +233,18 @@ function EpisodeCard({
   fallbackImage: string
 }) {
   const title = episode.name?.trim() || `第 ${episode.episode_number} 集`
+  const episodeLabel = `S${episode.season_number}:E${episode.episode_number}`
+  const statusLabel = episode.watched
+    ? '已看完'
+    : typeof episode.progress_percent === 'number' &&
+        episode.progress_percent > 0
+      ? `已观看 ${Math.round(episode.progress_percent)}%`
+      : formatAvailabilityStatus(episode.availability_status)
   const cardContent = (
     <div
       className={cn(
         'group overflow-hidden rounded-[16px] border border-border/40 bg-card/70 shadow-lg backdrop-blur-md transition',
+        episode.current && 'border-primary/70 bg-primary/10',
         episode.item_id
           ? 'hover:border-border/70 hover:bg-card/85'
           : 'opacity-90',
@@ -189,7 +262,7 @@ function EpisodeCard({
       </div>
       <div className="space-y-2 p-4">
         <div className="line-clamp-1 text-lg text-foreground">
-          {episode.episode_number}. {title}
+          {episodeLabel} - {title}
         </div>
         <div className="text-sm text-muted-foreground">
           {[
@@ -199,9 +272,10 @@ function EpisodeCard({
             .filter(Boolean)
             .join('  ')}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {formatAvailabilityStatus(episode.availability_status)}
-        </div>
+        <div className="text-xs text-muted-foreground">{statusLabel}</div>
+        {episode.current ? (
+          <div className="text-xs font-medium text-primary">当前正在查看</div>
+        ) : null}
         <p className="line-clamp-3 text-sm leading-6 text-muted-foreground">
           {episode.overview || '暂无剧情简介'}
         </p>
@@ -221,6 +295,85 @@ function EpisodeCard({
     >
       {cardContent}
     </Link>
+  )
+}
+
+export function RelatedMediaSection({
+  item,
+}: {
+  item: CatalogDetailPresentation
+}) {
+  const [swiper, setSwiper] = useState<SwiperType | null>(null)
+  const [canScrollPrev, setCanScrollPrev] = useState(false)
+  const [canScrollNext, setCanScrollNext] = useState(false)
+  const relatedItems = item.related_items
+
+  const updateNavigation = (instance: SwiperType) => {
+    setCanScrollPrev(!instance.isBeginning)
+    setCanScrollNext(!instance.isEnd)
+  }
+
+  if (relatedItems.length === 0) {
+    return null
+  }
+
+  return (
+    <section className="mt-12 space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-[19px] font-semibold text-foreground">
+            <Film className="size-4 text-muted-foreground" />
+            相似推荐
+          </div>
+          <p className="text-sm text-muted-foreground">
+            基于同媒体库和标签生成的相关内容。
+          </p>
+        </div>
+        <div className="hidden items-center gap-2 sm:flex">
+          <RailArrowButton
+            direction="prev"
+            disabled={!canScrollPrev}
+            onClick={() => swiper?.slidePrev()}
+          />
+          <RailArrowButton
+            direction="next"
+            disabled={!canScrollNext}
+            onClick={() => swiper?.slideNext()}
+          />
+        </div>
+      </div>
+      <div className="relative px-0 sm:px-12">
+        <Swiper
+          modules={[FreeMode]}
+          freeMode
+          slidesPerView="auto"
+          spaceBetween={18}
+          onSwiper={(instance) => {
+            setSwiper(instance)
+            updateNavigation(instance)
+          }}
+          onSlideChange={updateNavigation}
+          onResize={updateNavigation}
+          className="w-full"
+        >
+          {relatedItems.map((relatedItem) => (
+            <SwiperSlide key={relatedItem.id} className="!h-auto !w-auto">
+              <MediaPosterCard item={relatedItem} />
+            </SwiperSlide>
+          ))}
+        </Swiper>
+      </div>
+    </section>
+  )
+}
+
+function isSpecialSeason(season: CatalogSeasonRail) {
+  const name = season.name.trim().toLowerCase()
+  return (
+    season.season_number === 0 ||
+    name.includes('special') ||
+    name.includes('特别') ||
+    name.includes('番外')
   )
 }
 

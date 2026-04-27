@@ -26,7 +26,18 @@ type catalogGovernanceImageSelectionInput struct {
 }
 
 type catalogGovernanceAssetLinkInput struct {
-	TargetItemID uint `json:"target_item_id"`
+	TargetItemID uint     `json:"target_item_id"`
+	SourceItemID *uint    `json:"source_item_id"`
+	Mode         string   `json:"mode"`
+	SegmentIndex int      `json:"segment_index"`
+	StartSeconds *float64 `json:"start_seconds"`
+	EndSeconds   *float64 `json:"end_seconds"`
+}
+
+type catalogGovernanceEpisodeNumberingInput struct {
+	SeasonNumber     int  `json:"season_number"`
+	EpisodeNumber    int  `json:"episode_number"`
+	EpisodeNumberEnd *int `json:"episode_number_end"`
 }
 
 func (r *Router) handleGetCatalogItem(w http.ResponseWriter, req *http.Request) {
@@ -39,13 +50,45 @@ func (r *Router) handleGetCatalogItem(w http.ResponseWriter, req *http.Request) 
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	detail, err := r.catalog.GetItemDetail(req.Context(), itemID)
+	var userID *uint
+	if user, err := r.optionalUser(req); err == nil && user != nil {
+		id := user.ID
+		userID = &id
+	}
+	detail, err := r.catalog.GetItemDetailForUser(req.Context(), itemID, userID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
 	normalizeCatalogItemDetailArtworkURLs(req, &detail)
 	writeJSON(req.Context(), w, http.StatusOK, detail)
+}
+
+func (r *Router) handleGetCatalogPerson(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	personID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	person, err := r.catalog.GetPersonDetail(req.Context(), personID)
+	if err != nil {
+		if catalog.IsPersonNotFound(err) {
+			writeError(req.Context(), w, http.StatusNotFound, err)
+			return
+		}
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	normalizeCatalogPersonDetailArtworkURLs(req, &person)
+	writeJSON(req.Context(), w, http.StatusOK, person)
 }
 
 func (r *Router) handleListCatalogSeriesSeasons(w http.ResponseWriter, req *http.Request) {
@@ -322,6 +365,44 @@ func (r *Router) handleSelectCatalogGovernanceImage(w http.ResponseWriter, req *
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
 
+func (r *Router) handleCorrectCatalogEpisodeNumbering(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	episodeID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input catalogGovernanceEpisodeNumberingInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	updated, err := r.catalog.CorrectEpisodeNumbering(req.Context(), catalog.CorrectEpisodeNumberingInput{
+		EpisodeID:        episodeID,
+		SeasonNumber:     input.SeasonNumber,
+		EpisodeNumber:    input.EpisodeNumber,
+		EpisodeNumberEnd: input.EpisodeNumberEnd,
+	})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), updated.ID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
+	writeJSON(req.Context(), w, http.StatusOK, workspace)
+}
+
 func (r *Router) handleLinkCatalogGovernanceAsset(w http.ResponseWriter, req *http.Request) {
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
@@ -355,14 +436,34 @@ func (r *Router) handleLinkCatalogGovernanceAsset(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("target_item_id 必须是当前治理条目或其后代"))
 		return
 	}
+	if input.SourceItemID != nil {
+		allowed, err := r.catalog.IsGovernanceTargetAllowed(req.Context(), workspaceItemID, *input.SourceItemID)
+		if err != nil {
+			writeError(req.Context(), w, http.StatusBadRequest, err)
+			return
+		}
+		if !allowed {
+			writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("source_item_id 必须是当前治理条目或其后代"))
+			return
+		}
+	}
 	if _, err := inventory.NewService(r.db).LinkAssetToItem(req.Context(), inventory.LinkAssetItemInput{
-		AssetID: assetID,
-		ItemID:  input.TargetItemID,
-		Role:    inventory.AssetItemRolePrimary,
-		Source:  "governance",
+		AssetID:      assetID,
+		ItemID:       input.TargetItemID,
+		Role:         inventory.AssetItemRolePrimary,
+		SegmentIndex: input.SegmentIndex,
+		StartSeconds: input.StartSeconds,
+		EndSeconds:   input.EndSeconds,
+		Source:       "governance",
 	}); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
+	}
+	if strings.EqualFold(strings.TrimSpace(input.Mode), "move") && input.SourceItemID != nil && *input.SourceItemID != input.TargetItemID {
+		if err := inventory.NewService(r.db).UnlinkAssetFromItem(req.Context(), assetID, *input.SourceItemID); err != nil {
+			writeError(req.Context(), w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), workspaceItemID)
 	if err != nil {
@@ -500,7 +601,8 @@ func (r *Router) handleMatchCatalogItem(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	if err := r.metadata.MatchCatalogItem(req.Context(), itemID); err != nil {
+	metadataResult, err := r.metadata.MatchCatalogItemWithResult(req.Context(), itemID)
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
@@ -509,6 +611,7 @@ func (r *Router) handleMatchCatalogItem(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataResult = &metadataResult
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -527,7 +630,8 @@ func (r *Router) handleRefetchCatalogItemMetadata(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	if err := r.metadata.RefetchCatalogItem(req.Context(), itemID); err != nil {
+	metadataResult, err := r.metadata.RefetchCatalogItemWithResult(req.Context(), itemID)
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
@@ -536,6 +640,7 @@ func (r *Router) handleRefetchCatalogItemMetadata(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataResult = &metadataResult
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -601,8 +706,32 @@ func normalizeCatalogItemDetailArtworkURLs(req *http.Request, item *catalog.Cata
 	for idx := range item.SelectedImages {
 		item.SelectedImages[idx].URL = buildAssetURL(req, item.SelectedImages[idx].URL)
 	}
+	if item.EpisodeContext != nil {
+		if item.EpisodeContext.Series != nil {
+			for idx := range item.EpisodeContext.Series.SelectedImages {
+				item.EpisodeContext.Series.SelectedImages[idx].URL = buildAssetURL(req, item.EpisodeContext.Series.SelectedImages[idx].URL)
+			}
+		}
+		if item.EpisodeContext.Season != nil {
+			for idx := range item.EpisodeContext.Season.SelectedImages {
+				item.EpisodeContext.Season.SelectedImages[idx].URL = buildAssetURL(req, item.EpisodeContext.Season.SelectedImages[idx].URL)
+			}
+		}
+	}
+	for idx := range item.SameSeasonEpisodes {
+		for imageIdx := range item.SameSeasonEpisodes[idx].SelectedImages {
+			item.SameSeasonEpisodes[idx].SelectedImages[imageIdx].URL = buildAssetURL(req, item.SameSeasonEpisodes[idx].SelectedImages[imageIdx].URL)
+		}
+	}
 	normalizeCatalogSeasonDetailsArtworkURLs(req, item.Seasons)
 	normalizeCatalogEpisodeDetailsArtworkURLs(req, item.Episodes)
+}
+
+func normalizeCatalogPersonDetailArtworkURLs(req *http.Request, person *catalog.CatalogPersonPageDetail) {
+	if person == nil {
+		return
+	}
+	normalizeCatalogListItemsArtworkURLs(req, person.RelatedItems)
 }
 
 func normalizeCatalogGovernanceWorkspaceArtworkURLs(req *http.Request, workspace *catalog.CatalogGovernanceWorkspace) {

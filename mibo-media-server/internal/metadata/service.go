@@ -128,6 +128,18 @@ type detailResponse struct {
 	VoteAverage         float64         `json:"vote_average"`
 }
 
+type personDetailResponse struct {
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	Biography          string `json:"biography"`
+	Birthday           string `json:"birthday"`
+	Deathday           string `json:"deathday"`
+	PlaceOfBirth       string `json:"place_of_birth"`
+	KnownForDepartment string `json:"known_for_department"`
+	ProfilePath        string `json:"profile_path"`
+	IMDbID             string `json:"imdb_id"`
+}
+
 type videosResponse struct {
 	Results []videoAsset `json:"results"`
 }
@@ -160,14 +172,16 @@ type seasonDetailResponse struct {
 }
 
 type seasonEpisodeResponse struct {
-	ID            int    `json:"id"`
-	SeasonNumber  int    `json:"season_number"`
-	EpisodeNumber int    `json:"episode_number"`
-	Name          string `json:"name"`
-	AirDate       string `json:"air_date"`
-	Overview      string `json:"overview"`
-	StillPath     string `json:"still_path"`
-	Runtime       *int   `json:"runtime"`
+	ID            int          `json:"id"`
+	SeasonNumber  int          `json:"season_number"`
+	EpisodeNumber int          `json:"episode_number"`
+	Name          string       `json:"name"`
+	AirDate       string       `json:"air_date"`
+	Overview      string       `json:"overview"`
+	StillPath     string       `json:"still_path"`
+	Runtime       *int         `json:"runtime"`
+	Crew          []crewMember `json:"crew"`
+	GuestStars    []castMember `json:"guest_stars"`
 }
 
 type TVSeasonMetadata struct {
@@ -213,12 +227,14 @@ type creditsResponse struct {
 }
 
 type castMember struct {
+	ID          int    `json:"id"`
 	Name        string `json:"name"`
 	Character   string `json:"character"`
 	ProfilePath string `json:"profile_path"`
 }
 
 type crewMember struct {
+	ID          int    `json:"id"`
 	Name        string `json:"name"`
 	Job         string `json:"job"`
 	Department  string `json:"department"`

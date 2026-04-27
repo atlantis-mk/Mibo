@@ -68,11 +68,22 @@ type MediaStream struct {
 	StreamIndex     int       `gorm:"not null;uniqueIndex:idx_media_stream_file_index" json:"stream_index"`
 	StreamType      string    `gorm:"size:64;not null;index" json:"stream_type"`
 	Codec           string    `gorm:"size:128;index" json:"codec"`
+	Profile         string    `gorm:"size:128" json:"profile,omitempty"`
+	Level           *int      `json:"level,omitempty"`
 	Language        string    `gorm:"size:32;index" json:"language"`
 	Title           string    `gorm:"size:255" json:"title"`
 	Width           *int      `json:"width,omitempty"`
 	Height          *int      `json:"height,omitempty"`
+	AvgFrameRate    string    `gorm:"size:32" json:"avg_frame_rate,omitempty"`
+	RFrameRate      string    `gorm:"size:32" json:"r_frame_rate,omitempty"`
+	FieldOrder      string    `gorm:"size:64" json:"field_order,omitempty"`
+	ColorSpace      string    `gorm:"size:64" json:"color_space,omitempty"`
+	BitDepth        *int      `json:"bit_depth,omitempty"`
+	PixelFormat     string    `gorm:"size:64" json:"pixel_format,omitempty"`
+	ReferenceFrames *int      `json:"reference_frames,omitempty"`
 	Channels        *int      `json:"channels,omitempty"`
+	ChannelLayout   string    `gorm:"size:64" json:"channel_layout,omitempty"`
+	SampleRate      *int      `json:"sample_rate,omitempty"`
 	BitRate         *int64    `json:"bit_rate,omitempty"`
 	DurationSeconds *float64  `json:"duration_seconds,omitempty"`
 	DispositionJSON string    `gorm:"type:text" json:"disposition_json"`

@@ -95,11 +95,20 @@ type ItemImage struct {
 }
 
 type Person struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Name      string    `gorm:"size:255;not null;uniqueIndex" json:"name"`
-	SortName  string    `gorm:"size:255;index" json:"sort_name"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	Name               string     `gorm:"size:255;not null;uniqueIndex" json:"name"`
+	SortName           string     `gorm:"size:255;index" json:"sort_name"`
+	AvatarURL          string     `gorm:"size:2048" json:"avatar_url"`
+	TMDBPersonID       *int       `gorm:"index" json:"tmdb_person_id,omitempty"`
+	IMDBID             string     `gorm:"size:32" json:"imdb_id"`
+	Biography          string     `gorm:"type:text" json:"biography"`
+	Birthday           *time.Time `json:"birthday,omitempty"`
+	Deathday           *time.Time `json:"deathday,omitempty"`
+	PlaceOfBirth       string     `gorm:"size:255" json:"place_of_birth"`
+	KnownForDepartment string     `gorm:"size:128" json:"known_for_department"`
+	ProfileRefreshedAt *time.Time `gorm:"index" json:"profile_refreshed_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type ItemPerson struct {

@@ -2,17 +2,45 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"gorm.io/gorm"
 )
 
 type CatalogLatestByLibrarySection struct {
 	LibraryID   uint              `json:"library_id"`
 	LibraryName string            `json:"library_name"`
 	Items       []CatalogListItem `json:"items"`
+}
+
+type BrowseItemsInput struct {
+	LibraryID     uint
+	Query         string
+	TypeFilter    string
+	Genre         string
+	Region        string
+	Year          *int
+	MinRating     *float64
+	WatchedState  string
+	Sort          string
+	SortDirection string
+	Limit         int
+	Offset        int
+	UserID        uint
+}
+
+type BrowseItemsResult struct {
+	Items         []CatalogListItem `json:"items"`
+	Total         int64             `json:"total"`
+	Limit         int               `json:"limit"`
+	Offset        int               `json:"offset"`
+	HasMore       bool              `json:"has_more"`
+	Sort          string            `json:"sort"`
+	SortDirection string            `json:"sort_direction"`
 }
 
 func (s *Service) ListLibraryItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
@@ -83,6 +111,157 @@ func (s *Service) SearchItems(ctx context.Context, libraryID uint, query string,
 	return s.buildCatalogListItems(ctx, ordered)
 }
 
+func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (BrowseItemsResult, error) {
+	input = normalizeBrowseItemsInput(input)
+	db := s.db.WithContext(ctx).
+		Model(&database.CatalogItem{}).
+		Where("catalog_items.deleted_at IS NULL")
+	if input.LibraryID != 0 {
+		db = db.Where("catalog_items.library_id = ?", input.LibraryID)
+	}
+	switch input.TypeFilter {
+	case ItemTypeMovie:
+		db = db.Where("catalog_items.parent_id IS NULL").Where("catalog_items.type = ?", ItemTypeMovie)
+	case ItemTypeEpisode:
+		db = db.Where("catalog_items.type = ?", ItemTypeEpisode)
+	case ItemTypeSeries, "show":
+		db = db.Where("catalog_items.parent_id IS NULL").Where("catalog_items.type = ?", ItemTypeSeries)
+	default:
+		db = db.Where("catalog_items.parent_id IS NULL").Where("catalog_items.type IN ?", []string{ItemTypeMovie, ItemTypeSeries})
+	}
+	if input.Year != nil {
+		db = db.Where("catalog_items.year = ?", *input.Year)
+	}
+	if input.MinRating != nil {
+		db = db.Where("catalog_items.community_rating IS NOT NULL AND catalog_items.community_rating >= ?", *input.MinRating)
+	}
+	if query := strings.TrimSpace(input.Query); query != "" {
+		like := "%" + strings.ToLower(query) + "%"
+		db = db.Where(`LOWER(catalog_items.title) LIKE ?
+			OR LOWER(catalog_items.original_title) LIKE ?
+			OR LOWER(catalog_items.sort_title) LIKE ?
+			OR EXISTS (
+				SELECT 1 FROM catalog_search_documents
+				WHERE catalog_search_documents.item_id = catalog_items.id
+				AND (LOWER(catalog_search_documents.people_text) LIKE ?
+					OR LOWER(catalog_search_documents.tags_text) LIKE ?
+					OR LOWER(catalog_search_documents.provider_ids_text) LIKE ?)
+			)`, like, like, like, like, like, like)
+	}
+	if genre := strings.TrimSpace(input.Genre); genre != "" {
+		db = db.Where(`EXISTS (
+			SELECT 1 FROM catalog_search_documents
+			WHERE catalog_search_documents.item_id = catalog_items.id
+			AND LOWER(catalog_search_documents.tags_text) LIKE ?
+		)`, "%"+strings.ToLower(genre)+"%")
+	}
+	if region := strings.TrimSpace(input.Region); region != "" {
+		db = db.Where(`EXISTS (
+			SELECT 1 FROM catalog_search_documents
+			WHERE catalog_search_documents.item_id = catalog_items.id
+			AND LOWER(catalog_search_documents.tags_text) LIKE ?
+		)`, "%"+strings.ToLower(region)+"%")
+	}
+	if input.WatchedState != "all" {
+		db = db.Joins("LEFT JOIN user_item_data browse_user_item_data ON browse_user_item_data.item_id = catalog_items.id AND browse_user_item_data.asset_id IS NULL AND browse_user_item_data.user_id = ?", input.UserID)
+		switch input.WatchedState {
+		case "watched":
+			db = db.Where("browse_user_item_data.completed_at IS NOT NULL")
+		case "in_progress":
+			db = db.Where("browse_user_item_data.completed_at IS NULL AND browse_user_item_data.position_seconds > 0")
+		case "unwatched":
+			db = db.Where("browse_user_item_data.id IS NULL OR (browse_user_item_data.completed_at IS NULL AND browse_user_item_data.position_seconds = 0)")
+		}
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return BrowseItemsResult{}, err
+	}
+
+	var items []database.CatalogItem
+	ordered := applyBrowseItemsOrder(db, input)
+	if err := ordered.Limit(input.Limit).Offset(input.Offset).Find(&items).Error; err != nil {
+		return BrowseItemsResult{}, err
+	}
+	mapped, err := s.buildCatalogListItems(ctx, items)
+	if err != nil {
+		return BrowseItemsResult{}, err
+	}
+	return BrowseItemsResult{
+		Items:         mapped,
+		Total:         total,
+		Limit:         input.Limit,
+		Offset:        input.Offset,
+		HasMore:       int64(input.Offset+len(mapped)) < total,
+		Sort:          input.Sort,
+		SortDirection: input.SortDirection,
+	}, nil
+}
+
+func normalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
+	input.Query = strings.TrimSpace(input.Query)
+	input.Genre = strings.TrimSpace(input.Genre)
+	input.Region = strings.TrimSpace(input.Region)
+	input.TypeFilter = strings.ToLower(strings.TrimSpace(input.TypeFilter))
+	input.Sort = strings.ToLower(strings.TrimSpace(input.Sort))
+	input.SortDirection = strings.ToLower(strings.TrimSpace(input.SortDirection))
+	input.WatchedState = strings.ToLower(strings.TrimSpace(input.WatchedState))
+	switch input.TypeFilter {
+	case ItemTypeMovie, ItemTypeSeries, "show", ItemTypeEpisode:
+	default:
+		input.TypeFilter = "all"
+	}
+	switch input.Sort {
+	case "title", "year", "watch_status":
+	default:
+		input.Sort = "recent"
+	}
+	switch input.WatchedState {
+	case "unwatched", "in_progress", "watched":
+	default:
+		input.WatchedState = "all"
+	}
+	if input.Limit <= 0 || input.Limit > 200 {
+		input.Limit = 50
+	}
+	if input.Offset < 0 {
+		input.Offset = 0
+	}
+	switch input.SortDirection {
+	case "asc", "desc":
+	default:
+		input.SortDirection = "desc"
+		if input.Sort == "title" {
+			input.SortDirection = "asc"
+		}
+	}
+	return input
+}
+
+func applyBrowseItemsOrder(db *gorm.DB, input BrowseItemsInput) *gorm.DB {
+	direction := "desc"
+	if input.SortDirection == "asc" {
+		direction = "asc"
+	}
+	switch input.Sort {
+	case "title":
+		return db.Order("COALESCE(NULLIF(catalog_items.sort_title, ''), NULLIF(catalog_items.sort_key, ''), catalog_items.title) " + direction).Order("catalog_items.id " + direction)
+	case "year":
+		return db.Order("catalog_items.year IS NULL asc").Order("catalog_items.year " + direction).Order("catalog_items.id " + direction)
+	case "watch_status":
+		if input.UserID != 0 {
+			db = db.Joins("LEFT JOIN user_item_data browse_sort_user_item_data ON browse_sort_user_item_data.item_id = catalog_items.id AND browse_sort_user_item_data.asset_id IS NULL AND browse_sort_user_item_data.user_id = ?", input.UserID)
+			return db.Order(`CASE
+				WHEN browse_sort_user_item_data.completed_at IS NULL AND browse_sort_user_item_data.position_seconds > 0 THEN 1
+				WHEN browse_sort_user_item_data.completed_at IS NOT NULL THEN 2
+				ELSE 0
+			END ` + direction).Order("COALESCE(NULLIF(catalog_items.sort_title, ''), NULLIF(catalog_items.sort_key, ''), catalog_items.title) asc").Order("catalog_items.id asc")
+		}
+	}
+	return db.Order("catalog_items.created_at " + direction).Order("catalog_items.id " + direction)
+}
+
 func (s *Service) listItems(ctx context.Context, libraryID *uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -116,6 +295,10 @@ func (s *Service) listItems(ctx context.Context, libraryID *uint, query string, 
 }
 
 func (s *Service) GetItemDetail(ctx context.Context, itemID uint) (CatalogItemDetail, error) {
+	return s.GetItemDetailForUser(ctx, itemID, nil)
+}
+
+func (s *Service) GetItemDetailForUser(ctx context.Context, itemID uint, userID *uint) (CatalogItemDetail, error) {
 	item, err := s.loadCatalogItem(ctx, itemID)
 	if err != nil {
 		return CatalogItemDetail{}, err
@@ -126,6 +309,18 @@ func (s *Service) GetItemDetail(ctx context.Context, itemID uint) (CatalogItemDe
 		return CatalogItemDetail{}, err
 	}
 	assetsByItem, err := s.loadCatalogAssetsByItem(ctx, []uint{item.ID})
+	if err != nil {
+		return CatalogItemDetail{}, err
+	}
+	tagsByItem, err := s.loadCatalogDisplayTagsByItem(ctx, []uint{item.ID})
+	if err != nil {
+		return CatalogItemDetail{}, err
+	}
+	relatedItems, err := s.loadRelatedCatalogItems(ctx, item, tagsByItem[item.ID], 12)
+	if err != nil {
+		return CatalogItemDetail{}, err
+	}
+	cast, directors, err := s.loadCatalogItemPeopleDetails(ctx, item, externalIDs[item.ID])
 	if err != nil {
 		return CatalogItemDetail{}, err
 	}
@@ -144,18 +339,282 @@ func (s *Service) GetItemDetail(ctx context.Context, itemID uint) (CatalogItemDe
 			return CatalogItemDetail{}, err
 		}
 	}
+	episodeContext, seasonID, err := s.loadEpisodeParentContext(ctx, item)
+	if err != nil {
+		return CatalogItemDetail{}, err
+	}
+	sameSeasonEpisodes, err := s.buildSameSeasonEpisodeShelf(ctx, seasonID, item.ID, userID)
+	if err != nil {
+		return CatalogItemDetail{}, err
+	}
 
 	return BuildCatalogItemDetail(CatalogItemDetailInput{
-		Item:        item,
-		Rollup:      rollups[item.ID],
-		Images:      images[item.ID],
-		ExternalIDs: externalIDs[item.ID],
-		Sources:     sources[item.ID],
-		FieldStates: fieldStates[item.ID],
-		Seasons:     seasons,
-		Episodes:    episodes,
-		Assets:      assetsByItem[item.ID],
+		Item:               item,
+		Rollup:             rollups[item.ID],
+		Images:             images[item.ID],
+		ExternalIDs:        externalIDs[item.ID],
+		Sources:            sources[item.ID],
+		FieldStates:        fieldStates[item.ID],
+		Cast:               cast,
+		Directors:          directors,
+		Tags:               tagsByItem[item.ID],
+		Seasons:            seasons,
+		Episodes:           episodes,
+		EpisodeContext:     episodeContext,
+		SameSeasonEpisodes: sameSeasonEpisodes,
+		Assets:             assetsByItem[item.ID],
+		Related:            relatedItems,
 	}), nil
+}
+
+func (s *Service) loadEpisodeParentContext(ctx context.Context, item database.CatalogItem) (*CatalogEpisodeParentContext, *uint, error) {
+	if item.Type != ItemTypeEpisode {
+		return nil, nil, nil
+	}
+
+	var season *database.CatalogItem
+	if item.ParentID != nil && *item.ParentID > 0 {
+		loaded, err := s.loadCatalogItem(ctx, *item.ParentID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, err
+		}
+		if err == nil && loaded.Type == ItemTypeSeason {
+			season = &loaded
+		}
+	}
+
+	var series *database.CatalogItem
+	if season != nil && season.ParentID != nil && *season.ParentID > 0 {
+		loaded, err := s.loadCatalogItem(ctx, *season.ParentID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, err
+		}
+		if err == nil && loaded.Type == ItemTypeSeries {
+			series = &loaded
+		}
+	}
+	if series == nil && item.RootID != nil && *item.RootID > 0 {
+		loaded, err := s.loadCatalogItem(ctx, *item.RootID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, err
+		}
+		if err == nil && loaded.Type == ItemTypeSeries {
+			series = &loaded
+		}
+	}
+
+	imageIDs := make([]uint, 0, 2)
+	if series != nil {
+		imageIDs = append(imageIDs, series.ID)
+	}
+	if season != nil {
+		imageIDs = append(imageIDs, season.ID)
+	}
+	_, images, _, _, _, err := s.loadCatalogQueryData(ctx, imageIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var seasonID *uint
+	if season != nil {
+		id := season.ID
+		seasonID = &id
+	}
+	return BuildCatalogEpisodeParentContext(series, season, selectedImagesForItem(images, series), selectedImagesForItem(images, season), item), seasonID, nil
+}
+
+func selectedImagesForItem(images map[uint][]database.ItemImage, item *database.CatalogItem) []database.ItemImage {
+	if item == nil {
+		return nil
+	}
+	return images[item.ID]
+}
+
+func (s *Service) buildSameSeasonEpisodeShelf(ctx context.Context, seasonID *uint, currentItemID uint, userID *uint) ([]CatalogEpisodeShelfItem, error) {
+	if seasonID == nil || *seasonID == 0 {
+		return []CatalogEpisodeShelfItem{}, nil
+	}
+	episodes, err := s.buildCatalogEpisodeDetailsForParent(ctx, *seasonID)
+	if err != nil {
+		return nil, err
+	}
+	if len(episodes) == 0 {
+		return []CatalogEpisodeShelfItem{}, nil
+	}
+
+	episodeIDs := make([]uint, 0, len(episodes))
+	durationsByItem := make(map[uint]*int, len(episodes))
+	for _, episode := range episodes {
+		episodeIDs = append(episodeIDs, episode.ID)
+		durationsByItem[episode.ID] = episode.RuntimeSeconds
+	}
+	progressByItem := map[uint]*CatalogUserProgressState{}
+	if userID != nil && *userID > 0 {
+		progressByItem, err = s.loadCatalogUserProgressStatesByItem(ctx, *userID, episodeIDs, durationsByItem)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	shelf := make([]CatalogEpisodeShelfItem, 0, len(episodes))
+	for _, episode := range episodes {
+		shelf = append(shelf, BuildCatalogEpisodeShelfItem(CatalogEpisodeShelfItemInput{
+			Episode:       episode,
+			CurrentItemID: currentItemID,
+			Progress:      progressByItem[episode.ID],
+		}))
+	}
+	return shelf, nil
+}
+
+func (s *Service) loadCatalogUserProgressStatesByItem(ctx context.Context, userID uint, itemIDs []uint, durationsByItem map[uint]*int) (map[uint]*CatalogUserProgressState, error) {
+	result := make(map[uint]*CatalogUserProgressState, len(itemIDs))
+	if userID == 0 || len(itemIDs) == 0 {
+		return result, nil
+	}
+
+	var rows []database.UserItemData
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ? AND item_id IN ? AND asset_id IS NULL", userID, itemIDs).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		state := catalogUserProgressState(row, durationsByItem[row.ItemID])
+		result[row.ItemID] = &state
+	}
+	return result, nil
+}
+
+func (s *Service) loadCatalogItemPeopleDetails(ctx context.Context, item database.CatalogItem, externalIDs []database.CatalogExternalID) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
+	cast, directors, err := s.loadCatalogPeopleDetails(ctx, item.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	fallbackCast, fallbackDirectors, err := s.loadLegacyPeopleFallback(ctx, item, externalIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cast) == 0 {
+		cast = fallbackCast
+	}
+	if len(directors) == 0 {
+		directors = fallbackDirectors
+	}
+	return cast, directors, nil
+}
+
+func (s *Service) loadCatalogPeopleDetails(ctx context.Context, itemID uint) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
+	rows := make([]struct {
+		PersonID     uint
+		RelationRole string
+		Character    string
+		Name         string
+		AvatarURL    string
+	}, 0)
+	if err := s.db.WithContext(ctx).
+		Table("item_people").
+		Select("people.id AS person_id, item_people.role AS relation_role, item_people.character, people.name, people.avatar_url").
+		Joins("JOIN people ON people.id = item_people.person_id").
+		Where("item_people.item_id = ?", itemID).
+		Order("item_people.role asc, item_people.sort_order asc, people.name asc").
+		Scan(&rows).Error; err != nil {
+		return nil, nil, err
+	}
+
+	cast := make([]CatalogPersonDetail, 0, len(rows))
+	directors := make([]CatalogPersonDetail, 0, len(rows))
+	for _, row := range rows {
+		person := CatalogPersonDetail{
+			ID:        row.PersonID,
+			Name:      strings.TrimSpace(row.Name),
+			Role:      strings.TrimSpace(row.Character),
+			AvatarURL: strings.TrimSpace(row.AvatarURL),
+		}
+		if person.Name == "" {
+			continue
+		}
+		switch strings.TrimSpace(row.RelationRole) {
+		case "director":
+			directors = append(directors, person)
+		default:
+			cast = append(cast, person)
+		}
+	}
+	return cast, directors, nil
+}
+
+func (s *Service) loadLegacyPeopleFallback(ctx context.Context, item database.CatalogItem, externalIDs []database.CatalogExternalID) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
+	query := s.db.WithContext(ctx).
+		Model(&database.MediaItem{}).
+		Where("library_id = ? AND deleted_at IS NULL", item.LibraryID)
+
+	switch item.Type {
+	case ItemTypeMovie, ItemTypeEpisode:
+		query = query.Where("source_path = ?", strings.TrimSpace(item.Path))
+	case ItemTypeSeries:
+		legacyExternalIDs := make([]string, 0, len(externalIDs))
+		for _, identity := range externalIDs {
+			if externalID := strings.TrimSpace(identity.ExternalID); externalID != "" {
+				legacyExternalIDs = append(legacyExternalIDs, externalID)
+			}
+		}
+		if len(legacyExternalIDs) > 0 {
+			query = query.Where("external_id IN ?", legacyExternalIDs)
+		} else {
+			query = query.Where("series_title = ?", strings.TrimSpace(item.Title))
+		}
+	default:
+		return []CatalogPersonDetail{}, []CatalogPersonDetail{}, nil
+	}
+
+	var legacyItem database.MediaItem
+	if err := query.Order("id asc").First(&legacyItem).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return []CatalogPersonDetail{}, []CatalogPersonDetail{}, nil
+		}
+		return nil, nil, err
+	}
+
+	cast, err := parseLegacyPeopleJSON(legacyItem.CastJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	directors, err := parseLegacyPeopleJSON(legacyItem.DirectorsJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cast, directors, nil
+}
+
+func parseLegacyPeopleJSON(input string) ([]CatalogPersonDetail, error) {
+	if strings.TrimSpace(input) == "" {
+		return []CatalogPersonDetail{}, nil
+	}
+
+	var people []CatalogPersonDetail
+	if err := json.Unmarshal([]byte(input), &people); err == nil {
+		if people == nil {
+			return []CatalogPersonDetail{}, nil
+		}
+		return people, nil
+	}
+
+	var names []string
+	if err := json.Unmarshal([]byte(input), &names); err != nil {
+		return nil, err
+	}
+	if names == nil {
+		return []CatalogPersonDetail{}, nil
+	}
+
+	people = make([]CatalogPersonDetail, 0, len(names))
+	for _, name := range names {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			people = append(people, CatalogPersonDetail{Name: trimmed})
+		}
+	}
+	return people, nil
 }
 
 func (s *Service) ListSeriesSeasons(ctx context.Context, seriesID uint) ([]CatalogSeasonDetail, error) {
@@ -349,6 +808,162 @@ func (s *Service) buildCatalogListItems(ctx context.Context, items []database.Ca
 	return result, nil
 }
 
+func (s *Service) loadCatalogDisplayTagsByItem(ctx context.Context, itemIDs []uint) (map[uint][]CatalogTagDetail, error) {
+	result := make(map[uint][]CatalogTagDetail, len(itemIDs))
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+	var rows []struct {
+		ItemID uint
+		Kind   string
+		Name   string
+	}
+	if err := s.db.WithContext(ctx).
+		Table("item_tags").
+		Select("item_tags.item_id, tags.kind, tags.name").
+		Joins("JOIN tags ON tags.id = item_tags.tag_id").
+		Where("item_tags.item_id IN ?", itemIDs).
+		Order("item_tags.item_id asc, CASE WHEN LOWER(tags.kind) = 'genre' THEN 0 ELSE 1 END asc, tags.kind asc, tags.name asc").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	seen := make(map[uint]map[string]struct{}, len(itemIDs))
+	for _, row := range rows {
+		name := strings.TrimSpace(row.Name)
+		if name == "" {
+			continue
+		}
+		kind := strings.TrimSpace(row.Kind)
+		key := strings.ToLower(kind) + "\x00" + strings.ToLower(name)
+		if seen[row.ItemID] == nil {
+			seen[row.ItemID] = make(map[string]struct{})
+		}
+		if _, ok := seen[row.ItemID][key]; ok {
+			continue
+		}
+		seen[row.ItemID][key] = struct{}{}
+		result[row.ItemID] = append(result[row.ItemID], CatalogTagDetail{Kind: kind, Name: name})
+	}
+	return result, nil
+}
+
+func (s *Service) loadRelatedCatalogItems(ctx context.Context, item database.CatalogItem, tags []CatalogTagDetail, limit int) ([]CatalogListItem, error) {
+	if limit <= 0 || limit > 24 {
+		limit = 12
+	}
+	if item.ID == 0 || item.LibraryID == 0 {
+		return []CatalogListItem{}, nil
+	}
+
+	items, err := s.findRelatedItemsByTags(ctx, item, tags, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) < limit {
+		fallback, err := s.findRelatedItemsByLibrary(ctx, item, limit-len(items), relatedItemIDSet(items, item.ID))
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, fallback...)
+	}
+	return s.buildCatalogListItems(ctx, items)
+}
+
+func (s *Service) findRelatedItemsByTags(ctx context.Context, item database.CatalogItem, tags []CatalogTagDetail, limit int) ([]database.CatalogItem, error) {
+	tagNames := relatedTagNames(tags)
+	if len(tagNames) == 0 {
+		return []database.CatalogItem{}, nil
+	}
+	var items []database.CatalogItem
+	err := s.db.WithContext(ctx).
+		Model(&database.CatalogItem{}).
+		Select("catalog_items.*").
+		Joins("JOIN item_tags ON item_tags.item_id = catalog_items.id").
+		Joins("JOIN tags ON tags.id = item_tags.tag_id").
+		Where("catalog_items.deleted_at IS NULL").
+		Where("catalog_items.library_id = ?", item.LibraryID).
+		Where("catalog_items.id <> ?", item.ID).
+		Where("catalog_items.parent_id IS NULL").
+		Where("catalog_items.type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
+		Where("LOWER(tags.name) IN ?", tagNames).
+		Group("catalog_items.id").
+		Order("COUNT(tags.id) desc").
+		Order("catalog_items.year desc").
+		Order("catalog_items.sort_key asc").
+		Order("catalog_items.title asc").
+		Order("catalog_items.id asc").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
+}
+
+func (s *Service) findRelatedItemsByLibrary(ctx context.Context, item database.CatalogItem, limit int, excluded map[uint]struct{}) ([]database.CatalogItem, error) {
+	if limit <= 0 {
+		return []database.CatalogItem{}, nil
+	}
+	excludedIDs := make([]uint, 0, len(excluded))
+	for id := range excluded {
+		excludedIDs = append(excludedIDs, id)
+	}
+	sort.Slice(excludedIDs, func(i, j int) bool { return excludedIDs[i] < excludedIDs[j] })
+	var items []database.CatalogItem
+	query := s.db.WithContext(ctx).
+		Where("deleted_at IS NULL").
+		Where("library_id = ?", item.LibraryID).
+		Where("parent_id IS NULL").
+		Where("type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
+		Where("id NOT IN ?", excludedIDs).
+		Order("year desc").
+		Order("sort_key asc").
+		Order("title asc").
+		Order("id asc").
+		Limit(limit)
+	if err := query.Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func relatedTagNames(tags []CatalogTagDetail) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	preferred := make([]string, 0, len(tags))
+	fallback := make([]string, 0, len(tags))
+	seenPreferred := make(map[string]struct{}, len(tags))
+	seenFallback := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		name := strings.ToLower(strings.TrimSpace(tag.Name))
+		if name == "" {
+			continue
+		}
+		if _, ok := seenFallback[name]; !ok {
+			fallback = append(fallback, name)
+			seenFallback[name] = struct{}{}
+		}
+		if strings.EqualFold(strings.TrimSpace(tag.Kind), "genre") {
+			if _, ok := seenPreferred[name]; ok {
+				continue
+			}
+			preferred = append(preferred, name)
+			seenPreferred[name] = struct{}{}
+		}
+	}
+	if len(preferred) > 0 {
+		return preferred
+	}
+	return fallback
+}
+
+func relatedItemIDSet(items []database.CatalogItem, currentID uint) map[uint]struct{} {
+	ids := make(map[uint]struct{}, len(items)+1)
+	ids[currentID] = struct{}{}
+	for _, item := range items {
+		ids[item.ID] = struct{}{}
+	}
+	return ids
+}
+
 func (s *Service) buildCatalogEpisodeDetailsForParent(ctx context.Context, parentID uint) ([]CatalogEpisodeDetail, error) {
 	byParent, err := s.buildCatalogEpisodeDetailsByParent(ctx, []uint{parentID})
 	if err != nil {
@@ -509,8 +1124,37 @@ func (s *Service) loadCatalogAssetsByItem(ctx context.Context, itemIDs []uint) (
 		return nil, err
 	}
 	fileIDsByAsset := make(map[uint][]uint, len(assetIDs))
+	assetFilesByAsset := make(map[uint][]database.AssetFile, len(assetIDs))
+	fileIDSet := make(map[uint]struct{}, len(assetFileRows))
+	fileIDs := make([]uint, 0, len(assetFileRows))
 	for _, row := range assetFileRows {
 		fileIDsByAsset[row.AssetID] = append(fileIDsByAsset[row.AssetID], row.FileID)
+		assetFilesByAsset[row.AssetID] = append(assetFilesByAsset[row.AssetID], row)
+		if _, ok := fileIDSet[row.FileID]; ok {
+			continue
+		}
+		fileIDSet[row.FileID] = struct{}{}
+		fileIDs = append(fileIDs, row.FileID)
+	}
+
+	inventoryFilesByID := make(map[uint]database.InventoryFile, len(fileIDs))
+	streamsByFileID := make(map[uint][]database.MediaStream, len(fileIDs))
+	if len(fileIDs) > 0 {
+		var inventoryFiles []database.InventoryFile
+		if err := s.db.WithContext(ctx).Where("id IN ?", fileIDs).Order("id asc").Find(&inventoryFiles).Error; err != nil {
+			return nil, err
+		}
+		for _, file := range inventoryFiles {
+			inventoryFilesByID[file.ID] = file
+		}
+
+		var streams []database.MediaStream
+		if err := s.db.WithContext(ctx).Where("file_id IN ?", fileIDs).Order("file_id asc, stream_index asc").Find(&streams).Error; err != nil {
+			return nil, err
+		}
+		for _, stream := range streams {
+			streamsByFileID[stream.FileID] = append(streamsByFileID[stream.FileID], stream)
+		}
 	}
 
 	for itemID, itemLinks := range linksByItem {
@@ -524,7 +1168,8 @@ func (s *Service) loadCatalogAssetsByItem(ctx context.Context, itemIDs []uint) (
 			if !ok {
 				continue
 			}
-			assetDetails = append(assetDetails, BuildCatalogAssetDetail(CatalogAssetDetailInput{Asset: asset, Links: linksByAsset[link.AssetID], FileIDs: fileIDsByAsset[link.AssetID]}))
+			fileSummaries, streamSummaries := buildCatalogAssetFileAndStreamSummaries(assetFilesByAsset[link.AssetID], inventoryFilesByID, streamsByFileID)
+			assetDetails = append(assetDetails, BuildCatalogAssetDetail(CatalogAssetDetailInput{Asset: asset, Links: linksByAsset[link.AssetID], FileIDs: fileIDsByAsset[link.AssetID], Files: fileSummaries, Streams: streamSummaries}))
 			seenAssets[link.AssetID] = struct{}{}
 		}
 		sort.SliceStable(assetDetails, func(i, j int) bool {
@@ -536,4 +1181,90 @@ func (s *Service) loadCatalogAssetsByItem(ctx context.Context, itemIDs []uint) (
 		result[itemID] = assetDetails
 	}
 	return result, nil
+}
+
+func buildCatalogAssetFileAndStreamSummaries(assetFiles []database.AssetFile, inventoryFilesByID map[uint]database.InventoryFile, streamsByFileID map[uint][]database.MediaStream) ([]CatalogAssetFileSummary, []CatalogMediaStreamSummary) {
+	if len(assetFiles) == 0 {
+		return []CatalogAssetFileSummary{}, []CatalogMediaStreamSummary{}
+	}
+	fileSummaries := make([]CatalogAssetFileSummary, 0, len(assetFiles))
+	streamSummaries := make([]CatalogMediaStreamSummary, 0)
+	for _, assetFile := range assetFiles {
+		file := inventoryFilesByID[assetFile.FileID]
+		fileSummaries = append(fileSummaries, CatalogAssetFileSummary{
+			FileID:          assetFile.FileID,
+			Role:            strings.TrimSpace(assetFile.Role),
+			PartIndex:       assetFile.PartIndex,
+			StorageProvider: strings.TrimSpace(file.StorageProvider),
+			StoragePath:     strings.TrimSpace(file.StoragePath),
+			StableIdentity:  strings.TrimSpace(file.StableIdentityKey),
+			SizeBytes:       file.SizeBytes,
+			Container:       strings.TrimSpace(file.Container),
+			Status:          normalizeAvailabilityStatus(file.Status),
+			ModifiedAt:      file.ModifiedAt,
+		})
+		for _, stream := range streamsByFileID[assetFile.FileID] {
+			streamSummaries = append(streamSummaries, buildCatalogMediaStreamSummary(stream))
+		}
+	}
+	return fileSummaries, streamSummaries
+}
+
+func buildCatalogMediaStreamSummary(stream database.MediaStream) CatalogMediaStreamSummary {
+	defaultDisposition, forcedDisposition, externalDisposition, hearingImpairedDisposition := catalogMediaStreamDispositionFlags(stream.DispositionJSON)
+	return CatalogMediaStreamSummary{
+		FileID:          stream.FileID,
+		StreamIndex:     stream.StreamIndex,
+		StreamType:      strings.TrimSpace(stream.StreamType),
+		Codec:           strings.TrimSpace(stream.Codec),
+		Profile:         strings.TrimSpace(stream.Profile),
+		Level:           stream.Level,
+		Language:        strings.TrimSpace(stream.Language),
+		Title:           strings.TrimSpace(stream.Title),
+		Width:           stream.Width,
+		Height:          stream.Height,
+		AvgFrameRate:    strings.TrimSpace(stream.AvgFrameRate),
+		RFrameRate:      strings.TrimSpace(stream.RFrameRate),
+		FieldOrder:      strings.TrimSpace(stream.FieldOrder),
+		ColorSpace:      strings.TrimSpace(stream.ColorSpace),
+		BitDepth:        stream.BitDepth,
+		PixelFormat:     strings.TrimSpace(stream.PixelFormat),
+		ReferenceFrames: stream.ReferenceFrames,
+		Channels:        stream.Channels,
+		ChannelLayout:   strings.TrimSpace(stream.ChannelLayout),
+		SampleRate:      stream.SampleRate,
+		BitRate:         stream.BitRate,
+		DurationSeconds: stream.DurationSeconds,
+		Default:         defaultDisposition,
+		Forced:          forcedDisposition,
+		HearingImpaired: hearingImpairedDisposition,
+		External:        externalDisposition,
+	}
+}
+
+func catalogMediaStreamDispositionFlags(raw string) (bool, bool, bool, bool) {
+	decoded, ok := decodeCatalogJSONValue(raw)
+	if !ok {
+		return false, false, false, false
+	}
+	values, ok := decoded.(map[string]any)
+	if !ok {
+		return false, false, false, false
+	}
+	return catalogJSONBool(values["default"]), catalogJSONBool(values["forced"]), catalogJSONBool(values["external"]), catalogJSONBool(values["hearing_impaired"])
+}
+
+func catalogJSONBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case float64:
+		return typed != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "1", "true", "yes":
+			return true
+		}
+	}
+	return false
 }

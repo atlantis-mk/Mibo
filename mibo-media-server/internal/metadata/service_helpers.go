@@ -100,7 +100,7 @@ func extractCast(detail detailResponse, cfg config.TMDBConfig, max int) []librar
 		if name == "" {
 			continue
 		}
-		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Character), AvatarURL: imageURL(cfg, member.ProfilePath)})
+		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Character), AvatarURL: imageURL(cfg, member.ProfilePath), TMDBPersonID: intPointerIfPositive(member.ID)})
 	}
 	return result
 }
@@ -114,7 +114,7 @@ func extractDirectors(detail detailResponse, cfg config.TMDBConfig) []library.Pe
 				if name == "" {
 					continue
 				}
-				result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Job), AvatarURL: imageURL(cfg, member.ProfilePath)})
+				result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Job), AvatarURL: imageURL(cfg, member.ProfilePath), TMDBPersonID: intPointerIfPositive(member.ID)})
 				if len(result) == 4 {
 					return result
 				}
@@ -130,6 +130,64 @@ func extractDirectors(detail detailResponse, cfg config.TMDBConfig) []library.Pe
 		result = append(result, library.PersonDetail{Name: name, Role: "Creator"})
 	}
 	return result
+}
+
+func extractEpisodeCast(episode seasonEpisodeResponse, cfg config.TMDBConfig, max int) []library.PersonDetail {
+	limit := len(episode.GuestStars)
+	if max > 0 && limit > max {
+		limit = max
+	}
+	result := make([]library.PersonDetail, 0, limit)
+	for i := 0; i < limit; i++ {
+		member := episode.GuestStars[i]
+		name := strings.TrimSpace(member.Name)
+		if name == "" {
+			continue
+		}
+		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Character), AvatarURL: imageURL(cfg, member.ProfilePath), TMDBPersonID: intPointerIfPositive(member.ID)})
+	}
+	return result
+}
+
+func extractEpisodeDirectors(episode seasonEpisodeResponse, cfg config.TMDBConfig) []library.PersonDetail {
+	result := make([]library.PersonDetail, 0, 2)
+	for _, member := range episode.Crew {
+		if member.Job != "Director" && member.Department != "Directing" {
+			continue
+		}
+		name := strings.TrimSpace(member.Name)
+		if name == "" {
+			continue
+		}
+		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Job), AvatarURL: imageURL(cfg, member.ProfilePath), TMDBPersonID: intPointerIfPositive(member.ID)})
+		if len(result) == 4 {
+			return result
+		}
+	}
+	return result
+}
+
+func intPointerIfPositive(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	result := value
+	return &result
+}
+
+func parseProviderDate(input string) *time.Time {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return nil
+	}
+	for _, layout := range []string{"2006-01-02", time.RFC3339} {
+		parsed, err := time.Parse(layout, trimmed)
+		if err == nil {
+			parsed = parsed.UTC()
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func runtimeFromDetail(detail detailResponse) *int {

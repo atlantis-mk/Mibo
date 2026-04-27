@@ -158,6 +158,76 @@ func TestCatalogDiscoveryRouteFallsBackToCatalogWhenLegacySearchEmpty(t *testing
 	}
 }
 
+func TestCatalogDiscoveryRouteSupportsPagingSortDirectionAndFilters(t *testing.T) {
+	router, _, authSvc, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	authHeader := createAuthHeader(t, ctx, authSvc)
+	year := 2024
+	rating := 8.0
+	for idx := 1; idx <= 55; idx++ {
+		title := fmt.Sprintf("Movie %03d", idx)
+		if _, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: title, Path: "/library/" + title + ".mkv", SortKey: title, Year: &year, CommunityRating: &rating, AvailabilityStatus: catalog.AvailabilityAvailable}); err != nil {
+			t.Fatalf("create catalog item %d: %v", idx, err)
+		}
+	}
+	if _, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID + 100, Type: catalog.ItemTypeMovie, Title: "Outside Library", Path: "/other/outside.mkv", SortKey: "Outside Library", Year: &year, CommunityRating: &rating, AvailabilityStatus: catalog.AvailabilityAvailable}); err != nil {
+		t.Fatalf("create outside catalog item: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/discovery?scope=library&library_id=%d&type=movie&year=2024&min_rating=7&sort=title&sort_direction=desc&limit=10&offset=50", libraryID), nil)
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data struct {
+			Items         []catalog.CatalogListItem `json:"items"`
+			Total         int64                     `json:"total"`
+			Limit         int                       `json:"limit"`
+			Offset        int                       `json:"offset"`
+			HasMore       bool                      `json:"has_more"`
+			SortDirection string                    `json:"sort_direction"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Data.Total != 55 || response.Data.Limit != 10 || response.Data.Offset != 50 || response.Data.HasMore {
+		t.Fatalf("unexpected page metadata: %#v", response.Data)
+	}
+	if len(response.Data.Items) != 5 {
+		t.Fatalf("expected final page with 5 items, got %#v", response.Data.Items)
+	}
+	if response.Data.Items[0].Title != "Movie 005" || response.Data.Items[4].Title != "Movie 001" {
+		t.Fatalf("expected title descending final page, got %#v", response.Data.Items)
+	}
+	for _, item := range response.Data.Items {
+		if item.LibraryID != libraryID || item.Type != catalog.ItemTypeMovie || item.Year == nil || *item.Year != year {
+			t.Fatalf("expected filtered library movie year results, got %#v", item)
+		}
+	}
+	if response.Data.SortDirection != "desc" {
+		t.Fatalf("expected desc sort direction, got %q", response.Data.SortDirection)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/discovery?scope=library&library_id=%d&type=movie&sort=title&sort_direction=asc&limit=2", libraryID), nil)
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ascending request, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode ascending response: %v", err)
+	}
+	if len(response.Data.Items) != 2 || response.Data.Items[0].Title != "Movie 001" || response.Data.Items[1].Title != "Movie 002" {
+		t.Fatalf("expected title ascending first page, got %#v", response.Data.Items)
+	}
+}
+
 func TestCatalogRecentlyAddedRouteFallsBackWhenLegacyEmpty(t *testing.T) {
 	router, _, _, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
 	ctx := context.Background()
@@ -242,6 +312,14 @@ func TestCatalogItemAndGovernanceRoutes(t *testing.T) {
 	if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: series.ID, Provider: "tmdb", ProviderType: "tv", ExternalID: "tv:777", IsPrimary: true}); err != nil {
 		t.Fatalf("set external id: %v", err)
 	}
+	actor := database.Person{Name: "Actor A", SortName: "actor a", AvatarURL: "https://example.com/actor-a.jpg"}
+	director := database.Person{Name: "Director A", SortName: "director a", AvatarURL: "https://example.com/director-a.jpg"}
+	if err := db.WithContext(ctx).Create([]*database.Person{&actor, &director}).Error; err != nil {
+		t.Fatalf("create people: %v", err)
+	}
+	if err := db.WithContext(ctx).Create([]database.ItemPerson{{ItemID: series.ID, PersonID: actor.ID, Role: "cast", Character: "Lead", SortOrder: 0}, {ItemID: series.ID, PersonID: director.ID, Role: "director", Character: "Director", SortOrder: 0}}).Error; err != nil {
+		t.Fatalf("link people: %v", err)
+	}
 
 	detailRecorder := httptest.NewRecorder()
 	detailRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/items/%d", series.ID), nil)
@@ -257,6 +335,12 @@ func TestCatalogItemAndGovernanceRoutes(t *testing.T) {
 	}
 	if len(detailResponse.Data.Seasons) != 1 || len(detailResponse.Data.Seasons[0].Episodes) != 1 {
 		t.Fatalf("unexpected item detail payload: %#v", detailResponse.Data)
+	}
+	if len(detailResponse.Data.Cast) != 1 || detailResponse.Data.Cast[0].ID != actor.ID || detailResponse.Data.Cast[0].Name != "Actor A" || detailResponse.Data.Cast[0].Role != "Lead" || detailResponse.Data.Cast[0].AvatarURL != "https://example.com/actor-a.jpg" {
+		t.Fatalf("unexpected cast payload: %#v", detailResponse.Data.Cast)
+	}
+	if len(detailResponse.Data.Directors) != 1 || detailResponse.Data.Directors[0].ID != director.ID || detailResponse.Data.Directors[0].Name != "Director A" || detailResponse.Data.Directors[0].Role != "Director" || detailResponse.Data.Directors[0].AvatarURL != "https://example.com/director-a.jpg" {
+		t.Fatalf("unexpected directors payload: %#v", detailResponse.Data.Directors)
 	}
 
 	seasonsRecorder := httptest.NewRecorder()
@@ -302,6 +386,110 @@ func TestCatalogItemAndGovernanceRoutes(t *testing.T) {
 	}
 }
 
+func TestCatalogPersonRouteRefreshesTMDBProfile(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/person/321":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 321, "name": "Actor A", "biography": "Refreshed biography.", "birthday": "1988-05-04", "place_of_birth": "Seoul", "known_for_department": "Acting", "profile_path": "/actor-a.jpg", "imdb_id": "nm0000321"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	router, db, authSvc, _, settingsSvc, _, libraryID := newCatalogRouteHarness(t, tmdb)
+	ctx := context.Background()
+	authHeader := createAuthHeader(t, ctx, authSvc)
+	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
+		t.Fatalf("update metadata settings: %v", err)
+	}
+
+	tmdbPersonID := 321
+	person := database.Person{Name: "Actor A", SortName: "Actor A", TMDBPersonID: &tmdbPersonID}
+	if err := db.WithContext(ctx).Create(&person).Error; err != nil {
+		t.Fatalf("create person: %v", err)
+	}
+	related := database.CatalogItem{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: "Related Movie", SortKey: "Related Movie", AvailabilityStatus: catalog.AvailabilityAvailable, GovernanceStatus: catalog.GovernanceMatched}
+	if err := db.WithContext(ctx).Create(&related).Error; err != nil {
+		t.Fatalf("create related item: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.ItemImage{ItemID: related.ID, ImageType: "backdrop", URL: "/related-backdrop.jpg", IsSelected: true}).Error; err != nil {
+		t.Fatalf("create related image: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.ItemPerson{ItemID: related.ID, PersonID: person.ID, Role: "cast", Character: "Lead", SortOrder: 0}).Error; err != nil {
+		t.Fatalf("link person to related item: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/people/%d", person.ID), nil)
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for person detail, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data catalog.CatalogPersonPageDetail `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode person detail response: %v", err)
+	}
+	if response.Data.ID != person.ID || response.Data.Biography != "Refreshed biography." || response.Data.AvatarURL != tmdb.URL+"/images/actor-a.jpg" {
+		t.Fatalf("unexpected refreshed person payload: %#v", response.Data)
+	}
+	if len(response.Data.ExternalIdentities) != 2 || response.Data.ExternalIdentities[0].Provider != "tmdb" || response.Data.ExternalIdentities[0].ProviderType != "person" || response.Data.ExternalIdentities[0].ExternalID != "321" {
+		t.Fatalf("unexpected person external identities: %#v", response.Data.ExternalIdentities)
+	}
+	if len(response.Data.RelatedItems) != 1 || len(response.Data.RelatedItems[0].SelectedImages) != 1 || !strings.HasSuffix(response.Data.RelatedItems[0].SelectedImages[0].URL, "/related-backdrop.jpg") {
+		t.Fatalf("unexpected related items payload: %#v", response.Data.RelatedItems)
+	}
+}
+
+func TestCatalogPersonRouteSupportsSparseFallbackAndNotFound(t *testing.T) {
+	router, db, authSvc, _, _, _, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	authHeader := createAuthHeader(t, ctx, authSvc)
+
+	person := database.Person{Name: "Actor A", SortName: "Actor A"}
+	if err := db.WithContext(ctx).Create(&person).Error; err != nil {
+		t.Fatalf("create person: %v", err)
+	}
+	related := database.CatalogItem{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: "Local Movie", SortKey: "Local Movie", AvailabilityStatus: catalog.AvailabilityAvailable, GovernanceStatus: catalog.GovernanceMatched}
+	if err := db.WithContext(ctx).Create(&related).Error; err != nil {
+		t.Fatalf("create related item: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.ItemPerson{ItemID: related.ID, PersonID: person.ID, Role: "cast", Character: "Lead", SortOrder: 0}).Error; err != nil {
+		t.Fatalf("link person to local item: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/people/%d", person.ID), nil)
+	request.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for sparse person detail, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Data catalog.CatalogPersonPageDetail `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode sparse person detail response: %v", err)
+	}
+	if response.Data.Name != "Actor A" || response.Data.Biography != "" || len(response.Data.ExternalIdentities) != 0 || len(response.Data.RelatedItems) != 1 || response.Data.RelatedItems[0].ID != related.ID {
+		t.Fatalf("unexpected sparse person payload: %#v", response.Data)
+	}
+
+	notFoundRecorder := httptest.NewRecorder()
+	notFoundRequest := httptest.NewRequest(http.MethodGet, "/api/v1/people/999999", nil)
+	notFoundRequest.Header.Set("Authorization", authHeader)
+	router.ServeHTTP(notFoundRecorder, notFoundRequest)
+	if notFoundRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing person detail, got %d body=%s", notFoundRecorder.Code, notFoundRecorder.Body.String())
+	}
+}
+
 func TestCatalogGovernanceAssetLinkCorrectionPreservesWorkspaceState(t *testing.T) {
 	router, db, authSvc, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
 	ctx := context.Background()
@@ -315,6 +503,11 @@ func TestCatalogGovernanceAssetLinkCorrectionPreservesWorkspaceState(t *testing.
 	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", Path: "/library/ShowA/Season1", SortKey: "Show A S01", IndexNumber: &seasonNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityMissing})
 	if err != nil {
 		t.Fatalf("create season: %v", err)
+	}
+	episodeNumber := 1
+	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 1", Path: "/library/ShowA/Season1/Episode1.mkv", SortKey: "Show A S01E01", IndexNumber: &episodeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
 	}
 	if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: series.ID, FieldKey: "title", Value: "Locked Show A", Lock: true, LockReason: "editor"}); err != nil {
 		t.Fatalf("lock title: %v", err)
@@ -373,6 +566,70 @@ func TestCatalogGovernanceAssetLinkCorrectionPreservesWorkspaceState(t *testing.
 	}
 	if len(unlinkResponse.Data.FieldStates) == 0 || len(unlinkResponse.Data.SelectedImages) != 1 {
 		t.Fatalf("expected unlink to preserve unrelated workspace state, got %#v", unlinkResponse.Data)
+	}
+
+	segmentStart := 120.0
+	segmentEnd := 1500.0
+	moveRecorder := httptest.NewRecorder()
+	moveRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/items/%d/governance/assets/%d/links", series.ID, asset.ID), strings.NewReader(fmt.Sprintf(`{"target_item_id":%d,"source_item_id":%d,"mode":"move","segment_index":1,"start_seconds":%.1f,"end_seconds":%.1f}`, episode.ID, season.ID, segmentStart, segmentEnd)))
+	moveRequest.Header.Set("Authorization", authHeader)
+	moveRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(moveRecorder, moveRequest)
+	if moveRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for governance asset move, got %d body=%s", moveRecorder.Code, moveRecorder.Body.String())
+	}
+	remainingLinks = nil
+	if err := db.WithContext(ctx).Where("asset_id = ?", asset.ID).Order("item_id asc, segment_index asc").Find(&remainingLinks).Error; err != nil {
+		t.Fatalf("load moved asset links: %v", err)
+	}
+	if len(remainingLinks) != 1 || remainingLinks[0].ItemID != episode.ID || remainingLinks[0].SegmentIndex != 1 || remainingLinks[0].StartSeconds == nil || *remainingLinks[0].StartSeconds != segmentStart || remainingLinks[0].EndSeconds == nil || *remainingLinks[0].EndSeconds != segmentEnd {
+		t.Fatalf("expected moved segmented episode link, got %#v", remainingLinks)
+	}
+}
+
+func TestCatalogGovernanceEpisodeNumberingCorrection(t *testing.T) {
+	router, _, authSvc, _, _, catalogSvc, libraryID := newCatalogRouteHarness(t, nil)
+	ctx := context.Background()
+	authHeader := createAuthHeader(t, ctx, authSvc)
+
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeSeries, Title: "Show A", Path: "/library/ShowA", SortKey: "Show A"})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonOne := 1
+	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", Path: "/library/ShowA/Season1", SortKey: "Show A S01", IndexNumber: &seasonOne, ParentIndexNumber: &seasonOne})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episodeOne := 1
+	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryID, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 1", Path: "/library/ShowA/Season1/Episode1.mkv", SortKey: "Show A S01E01", IndexNumber: &episodeOne, ParentIndexNumber: &seasonOne})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/items/%d/governance/episode-numbering", episode.ID), strings.NewReader(`{"season_number":2,"episode_number":4}`))
+	request.Header.Set("Authorization", authHeader)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for episode numbering correction, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Data catalog.CatalogGovernanceWorkspace `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode correction response: %v", err)
+	}
+	if response.Data.ItemID != episode.ID {
+		t.Fatalf("expected episode workspace, got %#v", response.Data)
+	}
+	detail, err := catalogSvc.GetItemDetail(ctx, episode.ID)
+	if err != nil {
+		t.Fatalf("load corrected detail: %v", err)
+	}
+	if detail.EpisodeContext == nil || detail.EpisodeContext.Season == nil || detail.EpisodeContext.Season.Number == nil || *detail.EpisodeContext.Season.Number != 2 || detail.EpisodeContext.EpisodeNumber == nil || *detail.EpisodeContext.EpisodeNumber != 4 {
+		t.Fatalf("unexpected corrected episode context: %#v", detail.EpisodeContext)
 	}
 }
 
@@ -487,7 +744,7 @@ func TestCatalogMetadataRoutesSearchApplyAndRefetch(t *testing.T) {
 		case "/search/movie":
 			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 101, "title": "Movie A", "original_title": "Movie A", "release_date": "2024-02-02"}}})
 		case "/movie/101":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "title": "Movie A", "original_title": "Movie A", "overview": "Movie overview", "release_date": "2024-02-02", "runtime": 121, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "title": "Movie A", "original_title": "Movie A", "overview": "Movie overview", "release_date": "2024-02-02", "runtime": 121, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{{"name": "Actor A", "character": "Lead", "profile_path": "/actor-a.jpg"}}, "crew": []map[string]any{{"name": "Director A", "job": "Director", "department": "Directing", "profile_path": "/director-a.jpg"}}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -530,6 +787,24 @@ func TestCatalogMetadataRoutesSearchApplyAndRefetch(t *testing.T) {
 	router.ServeHTTP(applyRecorder, applyRequest)
 	if applyRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 for metadata apply, got %d body=%s", applyRecorder.Code, applyRecorder.Body.String())
+	}
+	detailRecorder := httptest.NewRecorder()
+	detailRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/items/%d", item.ID), nil)
+	router.ServeHTTP(detailRecorder, detailRequest)
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for metadata detail after apply, got %d body=%s", detailRecorder.Code, detailRecorder.Body.String())
+	}
+	var detailResponse struct {
+		Data catalog.CatalogItemDetail `json:"data"`
+	}
+	if err := json.Unmarshal(detailRecorder.Body.Bytes(), &detailResponse); err != nil {
+		t.Fatalf("decode detail response: %v", err)
+	}
+	if len(detailResponse.Data.Cast) != 1 || detailResponse.Data.Cast[0].Name != "Actor A" || detailResponse.Data.Cast[0].Role != "Lead" || detailResponse.Data.Cast[0].AvatarURL != tmdb.URL+"/images/actor-a.jpg" {
+		t.Fatalf("unexpected cast after apply: %#v", detailResponse.Data.Cast)
+	}
+	if len(detailResponse.Data.Directors) != 1 || detailResponse.Data.Directors[0].Name != "Director A" || detailResponse.Data.Directors[0].Role != "Director" || detailResponse.Data.Directors[0].AvatarURL != tmdb.URL+"/images/director-a.jpg" {
+		t.Fatalf("unexpected directors after apply: %#v", detailResponse.Data.Directors)
 	}
 
 	refetchRecorder := httptest.NewRecorder()
@@ -790,6 +1065,7 @@ func newCatalogRouteHarness(t *testing.T, tmdb *httptest.Server) (http.Handler, 
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	catalogSvc.SetPersonProfileRefresher(metadataSvc)
 	router := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playback.NewService(db, registry), progress.NewService(db, searchSvc), searchSvc, metadataSvc, settingsSvc, catalogSvc)
 
 	ctx := context.Background()

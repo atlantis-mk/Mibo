@@ -55,6 +55,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	playbackSvc := playback.NewService(db, registry)
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	catalogSvc.SetPersonProfileRefresher(metadataSvc)
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
 	progressSvc := progress.NewService(db, searchSvc)
 	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, catalogSvc, searchSvc, scheduleSvc, listenerSvc)

@@ -12,39 +12,55 @@ import (
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/library"
 	"gorm.io/gorm"
 )
 
 func (s *Service) MatchCatalogItem(ctx context.Context, itemID uint) error {
+	_, err := s.MatchCatalogItemWithResult(ctx, itemID)
+	return err
+}
+
+func (s *Service) MatchCatalogItemWithResult(ctx context.Context, itemID uint) (catalog.CatalogMetadataOperationResult, error) {
 	tmdbCfg, err := s.tmdbConfig(ctx)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 	if strings.TrimSpace(tmdbCfg.APIKey) == "" {
-		return fmt.Errorf("tmdb 未配置，无法匹配 catalog 元数据")
+		return catalog.CatalogMetadataOperationResult{}, fmt.Errorf("tmdb 未配置，无法匹配 catalog 元数据")
 	}
 
+	origin, err := s.loadCatalogMetadataOrigin(ctx, itemID)
+	if err != nil {
+		return catalog.CatalogMetadataOperationResult{}, err
+	}
 	target, err := s.resolveCatalogMatchTarget(ctx, itemID)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 
 	mediaType := catalogTMDBMediaType(target.Type)
 	searchItem := catalogItemToSearchItem(target)
 	searchMatch, err := s.searchBestMatch(ctx, tmdbCfg, searchItem, mediaType)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 	if searchMatch == nil {
-		return s.applyCatalogGovernanceStatus(ctx, target.ID, catalog.GovernanceUnmatched)
+		if err := s.applyCatalogGovernanceStatus(ctx, target.ID, catalog.GovernanceUnmatched); err != nil {
+			return catalog.CatalogMetadataOperationResult{}, err
+		}
+		return s.buildCatalogMetadataOperationResult(ctx, origin, target, "match")
 	}
 
 	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, searchMatch.result.ID)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 
-	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, searchMatch.confidence, false)
+	if err := s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, searchMatch.confidence, false); err != nil {
+		return catalog.CatalogMetadataOperationResult{}, err
+	}
+	return s.buildCatalogMetadataOperationResult(ctx, origin, target, "match")
 }
 
 func (s *Service) CatalogMatchingConfigured(ctx context.Context) (bool, error) {
@@ -118,34 +134,52 @@ func (s *Service) ApplyCatalogCandidate(ctx context.Context, itemID uint, input 
 }
 
 func (s *Service) RefetchCatalogItem(ctx context.Context, itemID uint) error {
+	_, err := s.RefetchCatalogItemWithResult(ctx, itemID)
+	return err
+}
+
+func (s *Service) RefetchCatalogItemWithResult(ctx context.Context, itemID uint) (catalog.CatalogMetadataOperationResult, error) {
 	tmdbCfg, err := s.tmdbConfig(ctx)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 	if strings.TrimSpace(tmdbCfg.APIKey) == "" {
-		return fmt.Errorf("tmdb 未配置，无法重抓 catalog 元数据")
+		return catalog.CatalogMetadataOperationResult{}, fmt.Errorf("tmdb 未配置，无法重抓 catalog 元数据")
 	}
 
+	origin, err := s.loadCatalogMetadataOrigin(ctx, itemID)
+	if err != nil {
+		return catalog.CatalogMetadataOperationResult{}, err
+	}
 	target, err := s.resolveCatalogMatchTarget(ctx, itemID)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 
 	mediaType := catalogTMDBMediaType(target.Type)
 	externalID, confidence, err := s.loadCatalogTMDBIdentity(ctx, target.ID, mediaType)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 	_, tmdbID, err := parseExternalID(externalID)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
 
 	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, tmdbID)
 	if err != nil {
-		return err
+		return catalog.CatalogMetadataOperationResult{}, err
 	}
-	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, confidence, false)
+	if err := s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, confidence, false); err != nil {
+		return catalog.CatalogMetadataOperationResult{}, err
+	}
+	return s.buildCatalogMetadataOperationResult(ctx, origin, target, "refetch")
+}
+
+func (s *Service) loadCatalogMetadataOrigin(ctx context.Context, itemID uint) (database.CatalogItem, error) {
+	var item database.CatalogItem
+	err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", itemID).First(&item).Error
+	return item, err
 }
 
 func (s *Service) resolveCatalogMatchTarget(ctx context.Context, itemID uint) (database.CatalogItem, error) {
@@ -182,6 +216,70 @@ func (s *Service) loadCatalogTMDBIdentity(ctx context.Context, itemID uint, medi
 		confidence = *identity.Confidence
 	}
 	return strings.TrimSpace(identity.ExternalID), confidence, nil
+}
+
+func (s *Service) loadCatalogTMDBIdentityOptional(ctx context.Context, itemID uint, mediaType string) (string, bool, error) {
+	var identity database.CatalogExternalID
+	if err := s.db.WithContext(ctx).
+		Where("item_id = ? AND provider = ? AND provider_type = ?", itemID, "tmdb", mediaType).
+		Order("is_primary desc, id asc").
+		First(&identity).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return strings.TrimSpace(identity.ExternalID), true, nil
+}
+
+func (s *Service) buildCatalogMetadataOperationResult(ctx context.Context, origin database.CatalogItem, target database.CatalogItem, action string) (catalog.CatalogMetadataOperationResult, error) {
+	result := catalog.CatalogMetadataOperationResult{
+		OriginItemID: origin.ID,
+		TargetItemID: target.ID,
+		TargetType:   target.Type,
+		Action:       action,
+	}
+	if origin.ID == 0 || origin.ID == target.ID || origin.Type != catalog.ItemTypeEpisode {
+		return result, nil
+	}
+	result.SeasonNumber = origin.ParentIndexNumber
+	result.EpisodeNumber = origin.IndexNumber
+	if origin.RootID == nil || *origin.RootID != target.ID || origin.ParentIndexNumber == nil || origin.IndexNumber == nil {
+		result.DescendantStatus = "hierarchy_mismatch"
+		result.Message = "Origin episode lacks complete series, season, or episode hierarchy context."
+		return result, nil
+	}
+
+	var slot database.CatalogItem
+	err := s.db.WithContext(ctx).
+		Where("root_id = ? AND type = ? AND parent_index_number = ? AND index_number = ? AND deleted_at IS NULL", target.ID, catalog.ItemTypeEpisode, *origin.ParentIndexNumber, *origin.IndexNumber).
+		Order("id asc").
+		First(&slot).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return catalog.CatalogMetadataOperationResult{}, err
+	}
+	if err == nil {
+		result.DescendantItemID = &slot.ID
+		if slot.ID != origin.ID {
+			result.DescendantStatus = "hierarchy_mismatch"
+			result.Message = "Provider slot resolved to a different catalog episode descendant."
+			return result, nil
+		}
+	}
+
+	externalID, ok, err := s.loadCatalogTMDBIdentityOptional(ctx, origin.ID, "tv_episode")
+	if err != nil {
+		return catalog.CatalogMetadataOperationResult{}, err
+	}
+	if !ok {
+		result.DescendantStatus = "provider_slot_missing"
+		result.Message = "Provider hierarchy did not return a matching episode slot for the opened episode."
+		return result, nil
+	}
+	result.ProviderExternalID = externalID
+	result.DescendantStatus = "identity_retained"
+	result.Message = "Opened episode retained a provider descendant identity after metadata sync."
+	return result, nil
 }
 
 func (s *Service) applyCatalogDetail(ctx context.Context, item database.CatalogItem, tmdbCfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64, forceSelectImages bool) error {
@@ -267,6 +365,12 @@ func (s *Service) applyCatalogDetail(ctx context.Context, item database.CatalogI
 		return err
 	}
 	if err := s.syncCatalogDetailImages(ctx, item.ID, tmdbCfg, detail, forceSelectImages, &source.ID); err != nil {
+		return err
+	}
+	if err := s.syncCatalogPeople(ctx, item.ID, extractCast(detail, tmdbCfg, 8), extractDirectors(detail, tmdbCfg), &source.ID); err != nil {
+		return err
+	}
+	if err := catalogSvc.RefreshItemProjection(ctx, item.ID); err != nil {
 		return err
 	}
 	if mediaType == "tv" && item.Type == catalog.ItemTypeSeries {
@@ -358,6 +462,11 @@ func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem dat
 			if err := s.applyCatalogHierarchyFields(ctx, catalogSvc, episodeItem.ID, episode.Name, episode.Overview, parseYear(releaseDate), runtimeSeconds, governanceStatus); err != nil {
 				return err
 			}
+			if airDate := parseProviderDate(releaseDate); airDate != nil {
+				if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: episodeItem.ID, FieldKey: "first_air_date", Value: *airDate}); err != nil {
+					return err
+				}
+			}
 			episodeSource, err := s.syncCatalogHierarchyIdentity(ctx, episodeItem.ID, "tv_episode", episode.ID, confidence, map[string]any{
 				"media_type":     "tv_episode",
 				"external_id":    tmdbExternalID(episode.ID),
@@ -366,12 +475,17 @@ func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem dat
 				"episode_number": episode.EpisodeNumber,
 				"matched_title":  strings.TrimSpace(episode.Name),
 				"air_date":       releaseDate,
+				"runtime":        episode.Runtime,
+				"overview":       strings.TrimSpace(episode.Overview),
 				"still_path":     strings.TrimSpace(episode.StillPath),
 			})
 			if err != nil {
 				return err
 			}
 			if err := s.upsertCatalogImageCandidate(ctx, episodeItem.ID, "still", imageURL(tmdbCfg, episode.StillPath), "", 0, true, forceSelectImages, &episodeSource.ID); err != nil {
+				return err
+			}
+			if err := s.syncCatalogPeople(ctx, episodeItem.ID, extractEpisodeCast(episode, tmdbCfg, 12), extractEpisodeDirectors(episode, tmdbCfg), &episodeSource.ID); err != nil {
 				return err
 			}
 			availability, err := s.resolveCatalogLeafAvailability(ctx, episodeItem.ID, releaseDate)
@@ -439,6 +553,29 @@ func (s *Service) findOrCreateCatalogEpisodeItem(ctx context.Context, catalogSvc
 		var zero database.CatalogItem
 		return zero, err
 	}
+	if seasonItem.RootID != nil && *seasonItem.RootID > 0 {
+		err = s.db.WithContext(ctx).
+			Where("root_id = ? AND type = ? AND parent_index_number = ? AND index_number = ? AND deleted_at IS NULL", *seasonItem.RootID, catalog.ItemTypeEpisode, seasonNumber, episodeNumber).
+			Order("id asc").
+			First(&episode).Error
+		if err == nil {
+			updates := map[string]any{"parent_id": seasonItem.ID}
+			if episode.RootID == nil || *episode.RootID == 0 {
+				updates["root_id"] = *seasonItem.RootID
+			}
+			if err := s.db.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", episode.ID).Updates(updates).Error; err != nil {
+				return database.CatalogItem{}, err
+			}
+			episode.ParentID = &seasonItem.ID
+			if episode.RootID == nil || *episode.RootID == 0 {
+				episode.RootID = seasonItem.RootID
+			}
+			return episode, nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return database.CatalogItem{}, err
+		}
+	}
 	seasonNumberCopy := seasonNumber
 	episodeNumberCopy := episodeNumber
 	episodePath := strings.TrimRight(seasonItem.Path, "/") + fmt.Sprintf("/Episode %02d", episodeNumber)
@@ -458,6 +595,96 @@ func (s *Service) findOrCreateCatalogEpisodeItem(ctx context.Context, catalogSvc
 		AvailabilityStatus: availability,
 		GovernanceStatus:   governanceOrPending(""),
 	})
+}
+
+func (s *Service) syncCatalogPeople(ctx context.Context, itemID uint, cast []library.PersonDetail, directors []library.PersonDetail, sourceID *uint) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).Where("item_id = ?", itemID).Delete(&database.ItemPerson{}).Error; err != nil {
+			return err
+		}
+
+		rows, err := s.buildCatalogItemPeopleRows(ctx, tx, itemID, cast, directors, sourceID)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		return tx.WithContext(ctx).Create(&rows).Error
+	})
+}
+
+func (s *Service) buildCatalogItemPeopleRows(ctx context.Context, tx *gorm.DB, itemID uint, cast []library.PersonDetail, directors []library.PersonDetail, sourceID *uint) ([]database.ItemPerson, error) {
+	rows := make([]database.ItemPerson, 0, len(cast)+len(directors))
+	seen := make(map[string]struct{}, len(cast)+len(directors))
+
+	appendRows := func(relationRole string, people []library.PersonDetail) error {
+		sortOrder := 0
+		for _, person := range people {
+			name := strings.TrimSpace(person.Name)
+			if name == "" {
+				continue
+			}
+			key := relationRole + "\x00" + name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+
+			record := database.Person{}
+			err := loadCatalogPersonRecord(ctx, tx, name, person.TMDBPersonID, &record)
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				record = database.Person{Name: name, SortName: strings.ToLower(name), AvatarURL: strings.TrimSpace(person.AvatarURL), TMDBPersonID: person.TMDBPersonID}
+				if err := tx.WithContext(ctx).Create(&record).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			} else {
+				updates := map[string]any{}
+				if avatarURL := strings.TrimSpace(person.AvatarURL); avatarURL != "" && strings.TrimSpace(record.AvatarURL) != avatarURL {
+					updates["avatar_url"] = avatarURL
+				}
+				if person.TMDBPersonID != nil && *person.TMDBPersonID > 0 && (record.TMDBPersonID == nil || *record.TMDBPersonID != *person.TMDBPersonID) {
+					updates["tmdb_person_id"] = *person.TMDBPersonID
+				}
+				if len(updates) > 0 {
+					if err := tx.WithContext(ctx).Model(&database.Person{}).Where("id = ?", record.ID).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+			}
+
+			rows = append(rows, database.ItemPerson{
+				ItemID:    itemID,
+				PersonID:  record.ID,
+				Role:      relationRole,
+				Character: strings.TrimSpace(person.Role),
+				SortOrder: sortOrder,
+				SourceID:  sourceID,
+			})
+			sortOrder += 1
+		}
+		return nil
+	}
+
+	if err := appendRows("cast", cast); err != nil {
+		return nil, err
+	}
+	if err := appendRows("director", directors); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func loadCatalogPersonRecord(ctx context.Context, tx *gorm.DB, name string, tmdbPersonID *int, record *database.Person) error {
+	if tmdbPersonID != nil && *tmdbPersonID > 0 {
+		err := tx.WithContext(ctx).Where("tmdb_person_id = ?", *tmdbPersonID).First(record).Error
+		if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+	return tx.WithContext(ctx).Where("name = ?", name).First(record).Error
 }
 
 func (s *Service) applyCatalogHierarchyFields(ctx context.Context, catalogSvc *catalog.Service, itemID uint, title string, overview string, year *int, runtimeSeconds *int, governanceStatus string) error {

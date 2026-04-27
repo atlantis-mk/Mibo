@@ -254,7 +254,7 @@ export function CandidateSearchCard({
           {activeCandidates.length ? (
             activeCandidates.map((candidate) => (
               <CandidateCard
-                key={candidate.external_id}
+                key={metadataCandidateKey(candidate)}
                 candidate={candidate}
                 onPreview={() => onPreview(candidate)}
               />
@@ -270,6 +270,10 @@ export function CandidateSearchCard({
       </CardContent>
     </Card>
   )
+}
+
+function metadataCandidateKey(candidate: MetadataSearchCandidate) {
+  return `${candidate.provider.trim().toLowerCase()}-${candidate.external_id.trim()}`
 }
 
 export function MetadataSummaryCard({
@@ -474,7 +478,7 @@ export function SourceEvidenceCard({
         {sourceEvidence.length ? (
           sourceEvidence.map((source, index) => (
             <div
-              key={`${source.source_name}-${source.external_id ?? index}`}
+              key={catalogSourceEvidenceKey(source, index)}
               className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3"
             >
               <div className="flex flex-wrap items-center gap-2">
@@ -506,6 +510,22 @@ export function SourceEvidenceCard({
       </CardContent>
     </Card>
   )
+}
+
+function catalogSourceEvidenceKey(
+  source: CatalogSourceEvidence,
+  index: number,
+) {
+  return [
+    source.source_type,
+    source.source_name,
+    source.external_id || 'no-external-id',
+    source.language || 'no-language',
+    source.fetched_at,
+    index,
+  ]
+    .map((part) => String(part).trim())
+    .join('-')
 }
 
 export function ImageCandidatesCard({

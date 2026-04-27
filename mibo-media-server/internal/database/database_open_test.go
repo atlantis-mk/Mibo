@@ -15,6 +15,7 @@ func TestDatabaseOpenFreshCatalogDatabaseMigratesLegacyAndCatalogTables(t *testi
 
 	assertTablesExist(t, db, requiredFreshStartupModels())
 	assertCatalogIndexesExist(t, db)
+	assertMediaStreamTechnicalColumnsExist(t, db)
 }
 
 func TestDatabaseOpenMigratesLegacyOnlyCatalogDatabase(t *testing.T) {
@@ -25,6 +26,7 @@ func TestDatabaseOpenMigratesLegacyOnlyCatalogDatabase(t *testing.T) {
 	assertTablesExist(t, db, requiredFreshStartupModels())
 	assertLegacyRowsPreserved(t, db)
 	assertCatalogIndexesExist(t, db)
+	assertMediaStreamTechnicalColumnsExist(t, db)
 }
 
 func TestDatabaseOpenCatalogMigrationIsIdempotent(t *testing.T) {
@@ -38,6 +40,7 @@ func TestDatabaseOpenCatalogMigrationIsIdempotent(t *testing.T) {
 	assertTablesExist(t, second, requiredFreshStartupModels())
 	assertLegacyRowsPreserved(t, second)
 	assertCatalogIndexesExist(t, second)
+	assertMediaStreamTechnicalColumnsExist(t, second)
 }
 
 func newCatalogDatabasePath(t *testing.T) string {
@@ -196,6 +199,30 @@ func assertCatalogIndexesExist(t *testing.T, db *gorm.DB) {
 	for _, index := range requiredIndexes {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("expected index %q to exist for %T", index.name, index.model)
+		}
+	}
+}
+
+func assertMediaStreamTechnicalColumnsExist(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	requiredColumns := []string{
+		"profile",
+		"level",
+		"avg_frame_rate",
+		"r_frame_rate",
+		"field_order",
+		"color_space",
+		"bit_depth",
+		"pixel_format",
+		"reference_frames",
+		"channel_layout",
+		"sample_rate",
+		"bit_rate",
+	}
+	for _, column := range requiredColumns {
+		if !db.Migrator().HasColumn(&MediaStream{}, column) {
+			t.Fatalf("expected media_streams.%s column to exist", column)
 		}
 	}
 }

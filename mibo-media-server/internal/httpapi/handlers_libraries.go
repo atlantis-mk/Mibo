@@ -135,8 +135,21 @@ func normalizeBrowseTypeFilter(value string) library.BrowseTypeFilter {
 		return library.BrowseTypeFilterMovie
 	case string(library.BrowseTypeFilterShow):
 		return library.BrowseTypeFilterShow
+	case string(library.BrowseTypeFilterEpisode):
+		return library.BrowseTypeFilterEpisode
 	default:
 		return library.BrowseTypeFilterAll
+	}
+}
+
+func normalizeSortDirection(value string) library.SortDirection {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(library.SortDirectionAsc):
+		return library.SortDirectionAsc
+	case string(library.SortDirectionDesc):
+		return library.SortDirectionDesc
+	default:
+		return ""
 	}
 }
 

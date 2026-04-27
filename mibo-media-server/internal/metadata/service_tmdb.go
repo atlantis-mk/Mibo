@@ -65,6 +65,16 @@ func (s *Service) fetchDetail(ctx context.Context, cfg config.TMDBConfig, mediaT
 	return detail, nil
 }
 
+func (s *Service) fetchPersonDetail(ctx context.Context, cfg config.TMDBConfig, id int) (personDetailResponse, error) {
+	params := url.Values{}
+	params.Set("language", cfg.Language)
+	var detail personDetailResponse
+	if err := s.request(ctx, cfg, path.Join("person", strconv.Itoa(id)), params, &detail); err != nil {
+		return personDetailResponse{}, err
+	}
+	return detail, nil
+}
+
 func (s *Service) fetchTVSeason(ctx context.Context, cfg config.TMDBConfig, seriesTMDBID int, seasonNumber int) (seasonDetailResponse, error) {
 	params := url.Values{}
 	params.Set("language", cfg.Language)
