@@ -9,6 +9,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
@@ -68,10 +69,14 @@ type PlaybackCheck struct {
 }
 
 type Track struct {
-	Codec    string `json:"codec"`
-	Language string `json:"language"`
-	Title    string `json:"title"`
-	Channels int    `json:"channels,omitempty"`
+	Codec     string `json:"codec"`
+	Language  string `json:"language"`
+	Title     string `json:"title"`
+	Channels  int    `json:"channels,omitempty"`
+	FileID    uint   `json:"file_id,omitempty"`
+	URL       string `json:"url,omitempty"`
+	External  bool   `json:"external,omitempty"`
+	Available *bool  `json:"available,omitempty"`
 }
 
 func NewService(db *gorm.DB, registry *providers.Registry) *Service {
@@ -89,6 +94,7 @@ func (s *Service) GetPlaybackSource(ctx context.Context, req PlaybackRequest) (P
 type catalogPlaybackCandidate struct {
 	Asset   database.MediaAsset
 	File    database.InventoryFile
+	Files   map[uint]database.InventoryFile
 	Streams []database.MediaStream
 }
 
@@ -150,6 +156,7 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 		return PlaybackSource{}, fmt.Errorf("load inventory file link: %w", err)
 	}
 	pseudoFile, audioTracks, subtitleTracks := inventoryCandidateMediaInfo(selected)
+	subtitleTracks = s.enrichExternalSubtitleTracks(ctx, subtitleTracks)
 	checks := append([]PlaybackCheck{}, fileLink.Checks...)
 	checks = append(checks, buildMediaInfoCheck(pseudoFile))
 	directDecision := assessDirectPlay(pseudoFile, req.ClientProfile)
@@ -289,19 +296,26 @@ func (s *Service) loadCatalogPlaybackCandidates(ctx context.Context, itemID uint
 	}
 	var assetFiles []database.AssetFile
 	if err := s.db.WithContext(ctx).
-		Where("asset_id IN ? AND role = ?", assetIDs, "source").
-		Order("part_index asc, id asc").
+		Where("asset_id IN ? AND role IN ?", assetIDs, []string{inventory.FileRoleSource, inventory.FileRoleSubtitle}).
+		Order("asset_id asc, role asc, part_index asc, id asc").
 		Find(&assetFiles).Error; err != nil {
 		return nil, err
 	}
 	fileIDs := make([]uint, 0, len(assetFiles))
 	firstFileByAsset := make(map[uint]uint, len(assetFiles))
+	fileIDsByAsset := make(map[uint][]uint, len(assetFiles))
+	fileIDSet := make(map[uint]struct{}, len(assetFiles))
 	for _, link := range assetFiles {
-		if _, ok := firstFileByAsset[link.AssetID]; ok {
-			continue
+		if link.Role == inventory.FileRoleSource {
+			if _, ok := firstFileByAsset[link.AssetID]; !ok {
+				firstFileByAsset[link.AssetID] = link.FileID
+			}
 		}
-		firstFileByAsset[link.AssetID] = link.FileID
-		fileIDs = append(fileIDs, link.FileID)
+		fileIDsByAsset[link.AssetID] = append(fileIDsByAsset[link.AssetID], link.FileID)
+		if _, ok := fileIDSet[link.FileID]; !ok {
+			fileIDSet[link.FileID] = struct{}{}
+			fileIDs = append(fileIDs, link.FileID)
+		}
 	}
 	var files []database.InventoryFile
 	if err := s.db.WithContext(ctx).Where("id IN ? AND deleted_at IS NULL", fileIDs).Find(&files).Error; err != nil {
@@ -335,7 +349,17 @@ func (s *Service) loadCatalogPlaybackCandidates(ctx context.Context, itemID uint
 		if !ok {
 			continue
 		}
-		result = append(result, catalogPlaybackCandidate{Asset: asset, File: file, Streams: streamsByFile[file.ID]})
+		candidateFiles := make(map[uint]database.InventoryFile)
+		candidateStreams := make([]database.MediaStream, 0)
+		for _, linkedFileID := range fileIDsByAsset[assetID] {
+			linkedFile, ok := fileByID[linkedFileID]
+			if !ok {
+				continue
+			}
+			candidateFiles[linkedFileID] = linkedFile
+			candidateStreams = append(candidateStreams, streamsByFile[linkedFileID]...)
+		}
+		result = append(result, catalogPlaybackCandidate{Asset: asset, File: file, Files: candidateFiles, Streams: candidateStreams})
 	}
 	sort.SliceStable(result, func(i, j int) bool {
 		left := catalogPlaybackRank(result[i])
@@ -398,10 +422,67 @@ func inventoryCandidateMediaInfo(candidate catalogPlaybackCandidate) (mediaInfo,
 		case "audio":
 			audioTracks = append(audioTracks, Track{Codec: strings.TrimSpace(stream.Codec), Language: strings.TrimSpace(stream.Language), Title: strings.TrimSpace(stream.Title), Channels: intValue(stream.Channels)})
 		case "subtitle":
-			subtitleTracks = append(subtitleTracks, Track{Codec: strings.TrimSpace(stream.Codec), Language: strings.TrimSpace(stream.Language), Title: strings.TrimSpace(stream.Title), Channels: intValue(stream.Channels)})
+			subtitleTracks = append(subtitleTracks, buildSubtitleTrack(candidate, stream))
 		}
 	}
 	return pseudo, audioTracks, subtitleTracks
+}
+
+func buildSubtitleTrack(candidate catalogPlaybackCandidate, stream database.MediaStream) Track {
+	track := Track{Codec: strings.TrimSpace(stream.Codec), Language: strings.TrimSpace(stream.Language), Title: strings.TrimSpace(stream.Title), Channels: intValue(stream.Channels)}
+	if !playbackStreamDispositionBool(stream.DispositionJSON, "external") {
+		return track
+	}
+	file, ok := candidate.Files[stream.FileID]
+	if !ok {
+		available := false
+		track.FileID = stream.FileID
+		track.External = true
+		track.Available = &available
+		return track
+	}
+	available := strings.TrimSpace(file.Status) == inventory.FileStatusAvailable && file.DeletedAt == nil
+	track.FileID = stream.FileID
+	track.External = true
+	track.Available = &available
+	if available {
+		track.URL = fmt.Sprintf("/api/v1/inventory-files/%d/stream", stream.FileID)
+	}
+	return track
+}
+
+func (s *Service) enrichExternalSubtitleTracks(ctx context.Context, tracks []Track) []Track {
+	for i := range tracks {
+		if !tracks[i].External || tracks[i].FileID == 0 {
+			continue
+		}
+		link, err := s.GetInventoryFileLink(ctx, tracks[i].FileID)
+		available := err == nil && link.Playable
+		tracks[i].Available = &available
+		if available {
+			tracks[i].URL = link.URL
+		} else {
+			tracks[i].URL = ""
+		}
+	}
+	return tracks
+}
+
+func playbackStreamDispositionBool(raw string, key string) bool {
+	var values map[string]any
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return false
+	}
+	switch value := values[key].(type) {
+	case bool:
+		return value
+	case float64:
+		return value != 0
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true") || strings.TrimSpace(value) == "1"
+	default:
+		return false
+	}
 }
 
 func intValue(value *int) int {

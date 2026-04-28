@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +271,68 @@ func TestCatalogPlaybackReturnsUnplayableForSeriesWithoutLocalEpisodes(t *testin
 	}
 	if source.Playable || source.Decision.Kind != "unplayable" || !hasDecisionReasonCode(source.Decision.Reasons, "series_has_no_playable_episode") {
 		fixture.t.Fatalf("expected unplayable series decision, got %#v", source)
+	}
+}
+
+func TestCatalogPlaybackIncludesExternalSidecarSubtitleTrack(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Movie A", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		fixture.t.Fatalf("create catalog item: %v", err)
+	}
+	asset, videoFile := createPlayablePlaybackAsset(t, fixture, item.ID, "movie-a.mp4")
+	subtitlePath := filepath.Join(fixture.rootPath, "movie-a.srt")
+	if err := os.WriteFile(subtitlePath, []byte("subtitle"), 0o644); err != nil {
+		fixture.t.Fatalf("write subtitle file: %v", err)
+	}
+	subtitleFile := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: subtitlePath, Container: "srt", Status: "available"}
+	if err := fixture.db.WithContext(context.Background()).Create(&subtitleFile).Error; err != nil {
+		fixture.t.Fatalf("create subtitle inventory file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetFile{AssetID: asset.ID, FileID: subtitleFile.ID, Role: "subtitle"}).Error; err != nil {
+		fixture.t.Fatalf("link subtitle asset file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.MediaStream{FileID: subtitleFile.ID, StreamIndex: 0, StreamType: "subtitle", Codec: "srt", Title: "Movie A", DispositionJSON: `{"external":true,"managed_by":"scanner"}`}).Error; err != nil {
+		fixture.t.Fatalf("create subtitle stream: %v", err)
+	}
+
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: item.ID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get playback source: %v", err)
+	}
+	if source.FileID != videoFile.ID || len(source.SubtitleTracks) != 1 {
+		fixture.t.Fatalf("unexpected playback source subtitle tracks: %#v", source)
+	}
+	track := source.SubtitleTracks[0]
+	if !track.External || track.FileID != subtitleFile.ID || track.Available == nil || !*track.Available || !strings.HasPrefix(track.URL, "/api/v1/inventory-files/") || strings.Contains(track.URL, "sign") || strings.Contains(track.URL, fixture.rootPath) {
+		fixture.t.Fatalf("expected safe external subtitle track, got %#v", track)
+	}
+}
+
+func TestCatalogPlaybackIgnoresUnavailableSidecarSubtitleFailure(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Movie A", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		fixture.t.Fatalf("create catalog item: %v", err)
+	}
+	asset, _ := createPlayablePlaybackAsset(t, fixture, item.ID, "movie-a.mp4")
+	subtitleFile := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: filepath.Join(fixture.rootPath, "missing.srt"), Container: "srt", Status: "missing"}
+	if err := fixture.db.WithContext(context.Background()).Create(&subtitleFile).Error; err != nil {
+		fixture.t.Fatalf("create subtitle inventory file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetFile{AssetID: asset.ID, FileID: subtitleFile.ID, Role: "subtitle"}).Error; err != nil {
+		fixture.t.Fatalf("link subtitle asset file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.MediaStream{FileID: subtitleFile.ID, StreamIndex: 0, StreamType: "subtitle", Codec: "srt", DispositionJSON: `{"external":true,"managed_by":"scanner"}`}).Error; err != nil {
+		fixture.t.Fatalf("create subtitle stream: %v", err)
+	}
+
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: item.ID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get playback source: %v", err)
+	}
+	if !source.Playable || len(source.SubtitleTracks) != 1 || source.SubtitleTracks[0].Available == nil || *source.SubtitleTracks[0].Available || source.SubtitleTracks[0].URL != "" {
+		fixture.t.Fatalf("expected source playback to survive unavailable subtitle, got %#v", source)
 	}
 }
 

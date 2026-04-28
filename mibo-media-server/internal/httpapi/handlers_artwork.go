@@ -20,7 +20,11 @@ func (r *Router) handleGetCatalogItemArtwork(w http.ResponseWriter, req *http.Re
 		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("artwork kind must be poster or backdrop"))
 		return
 	}
-	artworkPath := filepath.Join(r.generatedArtworkRootPath(), "catalog", strconvFormatUint(itemID), kind+".jpg")
+	artworkPath, ok := r.generatedArtworkPath(itemID, kind)
+	if !ok {
+		writeError(req.Context(), w, http.StatusNotFound, os.ErrNotExist)
+		return
+	}
 	r.serveGeneratedArtwork(w, req, artworkPath)
 }
 
@@ -29,7 +33,6 @@ func (r *Router) serveGeneratedArtwork(w http.ResponseWriter, req *http.Request,
 		writeError(req.Context(), w, http.StatusNotFound, err)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
 	http.ServeFile(w, req, artworkPath)
 }
 
@@ -60,4 +63,15 @@ func (r *Router) generatedArtworkRootPath() string {
 		return trimmed
 	}
 	return filepath.Join("tmp", "artwork")
+}
+
+func (r *Router) generatedArtworkPath(itemID uint, kind string) (string, bool) {
+	basePath := filepath.Join(r.generatedArtworkRootPath(), "catalog", strconvFormatUint(itemID), kind)
+	for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
+		candidate := basePath + ext
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
 }

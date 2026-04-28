@@ -123,12 +123,15 @@ function PeopleRail({
         </div>
       </div>
 
-      <div className="relative px-0 sm:px-12">
+      <div className="relative left-1/2 w-screen -translate-x-1/2">
         <Swiper
           modules={[FreeMode]}
           freeMode
+          simulateTouch
+          grabCursor
           slidesPerView="auto"
           spaceBetween={18}
+          slidesOffsetBefore={40}
           onSwiper={(instance) => {
             setSwiper(instance)
             updateNavigation(instance)
@@ -172,6 +175,7 @@ function PersonCard({ person }: { person: CatalogPersonDetail }) {
           <img
             src={person.avatar_url}
             alt={person.name}
+            draggable={false}
             className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
           />
         ) : (

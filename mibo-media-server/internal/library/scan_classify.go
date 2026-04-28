@@ -20,8 +20,8 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 	isTVLibrary := isTVLibraryType(libraryType)
 	pathSeriesTitle := tvSeriesTitleFromPath(libraryRoot, object.Path)
 	shouldTryTVPath := isTVLibrary || pathSeriesTitle != "" || tvSeasonFromPath(libraryRoot, object.Path) != nil
-	if season, episodeNumbers, ok := parseMultiEpisodeRange(rawTitle); ok {
-		seriesTitle := cleanTitle(strings.TrimSpace(strings.TrimSuffix(rawTitle, path.Ext(rawTitle))))
+	if seriesPrefix, season, episodeNumbers, ok := parseMultiEpisodeRange(rawTitle); ok {
+		seriesTitle := cleanTitle(seriesPrefix)
 		if pathSeriesTitle != "" {
 			seriesTitle = pathSeriesTitle
 		}
@@ -54,7 +54,7 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 	return classifiedMedia{Type: "movie", Title: title, OriginalTitle: rawTitle, Year: year, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
 }
 
-func parseMultiEpisodeRange(input string) (*int, []int, bool) {
+func parseMultiEpisodeRange(input string) (string, *int, []int, bool) {
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`(?i)^(.*?)[\s._-]+s(\d{1,2})e(\d{1,2})-e?(\d{1,2})(?:[\s._-]+.*)?$`),
 		regexp.MustCompile(`(?i)^(.*?)[\s._-]+s(\d{1,2})e(\d{1,2})e(\d{1,2})(?:[\s._-]+.*)?$`),
@@ -80,9 +80,9 @@ func parseMultiEpisodeRange(input string) (*int, []int, bool) {
 		for episode := startEpisode; episode <= endEpisode; episode++ {
 			episodeNumbers = append(episodeNumbers, episode)
 		}
-		return &season, episodeNumbers, true
+		return strings.TrimSpace(match[1]), &season, episodeNumbers, true
 	}
-	return nil, nil, false
+	return "", nil, nil, false
 }
 
 func isVideoFile(itemPath string) bool {

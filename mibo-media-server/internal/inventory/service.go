@@ -30,6 +30,12 @@ const (
 	FileStatusAvailable = "available"
 	FileStatusMissing   = "missing"
 	FileRoleSource      = "source"
+	FileRoleSubtitle    = "subtitle"
+
+	MediaStreamTypeSubtitle                 = "subtitle"
+	MediaStreamDispositionExternalScanner   = "scanner"
+	MediaStreamDispositionManagedByScanner  = "scanner"
+	MediaStreamDispositionExternalAvailable = true
 )
 
 type Service struct {

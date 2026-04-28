@@ -45,6 +45,24 @@ func TestClassifyMediaFileParsesMultiEpisodeRange(t *testing.T) {
 	}
 }
 
+func TestClassifyMediaFileCleansMultiEpisodePromoTail(t *testing.T) {
+	t.Parallel()
+
+	classified := classifyMediaFile("shows", "/library", storage.Object{Path: "/library/黑袍纠察队/Season 5/黑袍纠察队.The.Boys.S05E01-02.6v电影 地址发布页 www.6v123.net 收藏不迷路.mkv"})
+	if classified.Type != "episode" {
+		t.Fatalf("expected episode classification, got %#v", classified)
+	}
+	if classified.SeriesTitle != "黑袍纠察队" {
+		t.Fatalf("expected series title from folder fallback, got %q", classified.SeriesTitle)
+	}
+	if classified.Title != "黑袍纠察队 S05E01-E02" {
+		t.Fatalf("expected clean multi-episode title, got %q", classified.Title)
+	}
+	if !reflect.DeepEqual(classified.EpisodeNumbers, []int{1, 2}) {
+		t.Fatalf("expected ordered episode range [1 2], got %#v", classified.EpisodeNumbers)
+	}
+}
+
 func TestClassifyMediaFileInfersEpisodeFromSeasonFolder(t *testing.T) {
 	t.Parallel()
 

@@ -251,6 +251,58 @@ func TestProbeInventoryFileGeneratesCatalogFallbackArtworkWithoutRemoteImages(t 
 	}
 }
 
+func TestProbeInventoryFileUsesSiblingArtworkBeforeFrameExtraction(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeFixture(t)
+	artworkRoot := filepath.Join(t.TempDir(), "artwork")
+	fixture.cfg.FFmpeg = config.FFmpegConfig{Enabled: true, Path: writeFailingInventoryFakeFFmpeg(t), Timeout: time.Second, ArtworkRootPath: artworkRoot}
+
+	posterSource := filepath.Join(filepath.Dir(fixture.file.StoragePath), "cover.jpg")
+	backdropSource := filepath.Join(filepath.Dir(fixture.file.StoragePath), "background.png")
+	if err := os.WriteFile(posterSource, []byte("local-poster"), 0o644); err != nil {
+		t.Fatalf("write local poster: %v", err)
+	}
+	if err := os.WriteFile(backdropSource, []byte("local-backdrop"), 0o644); err != nil {
+		t.Fatalf("write local backdrop: %v", err)
+	}
+
+	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe, fixture.cfg.FFmpeg)
+	if err := service.ProbeInventoryFile(ctx, fixture.file.ID); err != nil {
+		t.Fatalf("probe inventory file: %v", err)
+	}
+
+	var images []database.ItemImage
+	if err := fixture.db.WithContext(ctx).Where("item_id = ?", fixture.item.ID).Order("image_type asc").Find(&images).Error; err != nil {
+		t.Fatalf("load local catalog images: %v", err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("expected local poster and backdrop, got %#v", images)
+	}
+	for _, image := range images {
+		if !image.IsSelected || !strings.HasPrefix(image.URL, "/api/v1/items/") {
+			t.Fatalf("expected selected local catalog artwork url, got %#v", image)
+		}
+	}
+
+	itemID := strings.TrimSpace(strconv.FormatUint(uint64(fixture.item.ID), 10))
+	posterBytes, err := os.ReadFile(filepath.Join(artworkRoot, "catalog", itemID, "poster.jpg"))
+	if err != nil {
+		t.Fatalf("read copied poster: %v", err)
+	}
+	if string(posterBytes) != "local-poster" {
+		t.Fatalf("unexpected poster bytes: %q", string(posterBytes))
+	}
+	backdropBytes, err := os.ReadFile(filepath.Join(artworkRoot, "catalog", itemID, "backdrop.png"))
+	if err != nil {
+		t.Fatalf("read copied backdrop: %v", err)
+	}
+	if string(backdropBytes) != "local-backdrop" {
+		t.Fatalf("unexpected backdrop bytes: %q", string(backdropBytes))
+	}
+}
+
 func TestProbeInventoryFileSkipsCatalogFallbackArtworkWhenRemoteImagesExist(t *testing.T) {
 	t.Parallel()
 
@@ -267,6 +319,14 @@ func TestProbeInventoryFileSkipsCatalogFallbackArtworkWhenRemoteImagesExist(t *t
 	}).Error; err != nil {
 		t.Fatalf("seed remote artwork: %v", err)
 	}
+	if err := fixture.db.WithContext(ctx).Create(&database.ItemImage{
+		ItemID:     fixture.item.ID,
+		ImageType:  "backdrop",
+		URL:        "https://image.tmdb.org/t/p/original/backdrop.jpg",
+		IsSelected: true,
+	}).Error; err != nil {
+		t.Fatalf("seed remote backdrop: %v", err)
+	}
 
 	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe, fixture.cfg.FFmpeg)
 	if err := service.ProbeInventoryFile(ctx, fixture.file.ID); err != nil {
@@ -277,7 +337,7 @@ func TestProbeInventoryFileSkipsCatalogFallbackArtworkWhenRemoteImagesExist(t *t
 	if err := fixture.db.WithContext(ctx).Where("item_id = ?", fixture.item.ID).Order("id asc").Find(&images).Error; err != nil {
 		t.Fatalf("load artwork rows: %v", err)
 	}
-	if len(images) != 1 || images[0].URL != "https://image.tmdb.org/t/p/original/poster.jpg" {
+	if len(images) != 2 || images[0].URL != "https://image.tmdb.org/t/p/original/poster.jpg" || images[1].URL != "https://image.tmdb.org/t/p/original/backdrop.jpg" {
 		t.Fatalf("expected remote artwork to remain untouched, got %#v", images)
 	}
 	itemID := strings.TrimSpace(strconv.FormatUint(uint64(fixture.item.ID), 10))
@@ -436,6 +496,16 @@ func writeInventoryFakeFFmpeg(t *testing.T) string {
 	content := "#!/bin/sh\nout=\"\"\nfor arg in \"$@\"; do\n  out=\"$arg\"\ndone\nmkdir -p \"$(dirname \"$out\")\"\nprintf 'fake-artwork' > \"$out\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake ffmpeg: %v", err)
+	}
+	return path
+}
+
+func writeFailingInventoryFakeFFmpeg(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	content := "#!/bin/sh\nprintf 'ffmpeg should not run' >&2\nexit 1\n"
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write failing fake ffmpeg: %v", err)
 	}
 	return path
 }

@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +110,60 @@ func TestCatalogQueryAPIsReturnDetailAndGovernanceWorkspace(t *testing.T) {
 	}
 	if workspace.ItemID != series.ID || len(workspace.SourceEvidence) != 1 || len(workspace.FieldStates) != 1 || len(workspace.SelectedImages) != 1 || len(workspace.RecommendedChildren) != 1 {
 		t.Fatalf("unexpected governance workspace: %#v", workspace)
+	}
+}
+
+func TestGovernanceWorkspaceSurfacesSanitizedProviderDiagnostics(t *testing.T) {
+	svc, ctx := newTestService(t)
+	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Movie A", AvailabilityStatus: AvailabilityAvailable, GovernanceStatus: GovernanceNeedsReview})
+	if err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: 1, AssetType: "main", Status: AvailabilityAvailable, ProbeStatus: "ready"}
+	if err := svc.db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: item.ID, Role: "primary", SegmentIndex: 0}).Error; err != nil {
+		t.Fatalf("link asset item: %v", err)
+	}
+	modifiedAt := time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC)
+	file := database.InventoryFile{
+		LibraryID:         1,
+		StorageProvider:   "openlist",
+		StoragePath:       "/Movies/Movie A.mkv",
+		StableIdentityKey: "openlist:movie-a",
+		HashesJSON:        `{"sha1":"abc","md5":"def"}`,
+		Container:         "mkv",
+		Status:            AvailabilityAvailable,
+		ModifiedAt:        &modifiedAt,
+	}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: "source", PartIndex: 0}).Error; err != nil {
+		t.Fatalf("link asset file: %v", err)
+	}
+
+	workspace, err := svc.GetGovernanceWorkspace(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("get governance workspace: %v", err)
+	}
+	if len(workspace.Assets) != 1 || len(workspace.Assets[0].Files) != 1 {
+		t.Fatalf("unexpected workspace assets: %#v", workspace.Assets)
+	}
+	diagnostics := workspace.Assets[0].Files[0].ProviderDiagnostics
+	if diagnostics == nil || diagnostics.StorageProvider != "openlist" || len(diagnostics.AvailableHashKeys) != 2 || diagnostics.AvailableHashKeys[0] != "md5" || diagnostics.AvailableHashKeys[1] != "sha1" {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	encoded, err := json.Marshal(workspace)
+	if err != nil {
+		t.Fatalf("marshal workspace: %v", err)
+	}
+	encodedText := string(encoded)
+	for _, forbidden := range []string{"sign", "mount_details", "raw_url", "secret"} {
+		if strings.Contains(encodedText, forbidden) {
+			t.Fatalf("governance workspace exposed sensitive metadata %q in %s", forbidden, encodedText)
+		}
 	}
 }
 
@@ -310,13 +366,25 @@ func TestGetEpisodeItemDetailIncludesContextShelfProgressAndStreams(t *testing.T
 	if err != nil {
 		t.Fatalf("create episode two: %v", err)
 	}
+	episodeThreeNumber := 3
+	missingSourceEpisode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 3", Path: "/shows/ShowA/Season 1/ShowA.S01E03.mkv", SortKey: "Show A S01E03", IndexNumber: &episodeThreeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create missing-source episode: %v", err)
+	}
 	if err := svc.db.WithContext(ctx).Create([]database.ItemImage{
 		{ItemID: series.ID, ImageType: "backdrop", URL: "https://example.com/series.jpg", IsSelected: true},
 		{ItemID: season.ID, ImageType: "poster", URL: "https://example.com/season.jpg", IsSelected: true},
 		{ItemID: episodeOne.ID, ImageType: "still", URL: "https://example.com/e1.jpg", IsSelected: true},
 		{ItemID: episodeTwo.ID, ImageType: "still", URL: "https://example.com/e2.jpg", IsSelected: true},
+		{ItemID: missingSourceEpisode.ID, ImageType: "still", URL: "https://example.com/e3.jpg", IsSelected: true},
 	}).Error; err != nil {
 		t.Fatalf("create images: %v", err)
+	}
+
+	episodeOneAsset := createPlayableCatalogAsset(t, svc, ctx, episodeOne.ID)
+	episodeOneAsset.DisplayName = "720p"
+	if err := svc.db.WithContext(ctx).Save(&episodeOneAsset).Error; err != nil {
+		t.Fatalf("update episode one asset: %v", err)
 	}
 
 	asset := database.MediaAsset{LibraryID: 1, AssetType: "main", DisplayName: "1080p", Status: AvailabilityAvailable, ProbeStatus: "ready"}
@@ -374,6 +442,11 @@ func TestGetEpisodeItemDetailIncludesContextShelfProgressAndStreams(t *testing.T
 	if !detail.SameSeasonEpisodes[1].Current || detail.SameSeasonEpisodes[1].Label != "S1:E2" || detail.SameSeasonEpisodes[1].Progress != nil {
 		t.Fatalf("unexpected current episode shelf state: %#v", detail.SameSeasonEpisodes[1])
 	}
+	for _, shelfItem := range detail.SameSeasonEpisodes {
+		if shelfItem.ID == missingSourceEpisode.ID {
+			t.Fatalf("expected missing-source episode to be hidden from same-season shelf: %#v", detail.SameSeasonEpisodes)
+		}
+	}
 	if len(detail.Assets) != 1 || len(detail.Assets[0].Files) != 1 || detail.Assets[0].Files[0].FileID != file.ID || detail.Assets[0].Files[0].Container != "mkv" {
 		t.Fatalf("unexpected asset file summaries: %#v", detail.Assets)
 	}
@@ -415,6 +488,44 @@ func TestGetEpisodeItemDetailAllowsIncompleteHierarchy(t *testing.T) {
 	}
 	if len(detail.SameSeasonEpisodes) != 0 {
 		t.Fatalf("expected no same-season shelf for loose episode, got %#v", detail.SameSeasonEpisodes)
+	}
+}
+
+func TestGetItemDetailIncludesExternalSidecarSubtitleSummary(t *testing.T) {
+	svc, ctx := newTestService(t)
+	movie, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Movie A", Path: "/movies/Movie A.mkv", SortKey: "Movie A", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create movie: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: 1, AssetType: "main", Status: AvailabilityAvailable, ProbeStatus: "ready"}
+	if err := svc.db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: movie.ID, Role: "primary", SegmentIndex: 0}).Error; err != nil {
+		t.Fatalf("link asset item: %v", err)
+	}
+	videoFile := database.InventoryFile{LibraryID: 1, StorageProvider: "local", StoragePath: "/movies/Movie A.mkv", Container: "mkv", Status: AvailabilityAvailable}
+	subtitleFile := database.InventoryFile{LibraryID: 1, StorageProvider: "local", StoragePath: "/movies/Movie A.srt", Container: "srt", Status: AvailabilityAvailable}
+	if err := svc.db.WithContext(ctx).Create([]*database.InventoryFile{&videoFile, &subtitleFile}).Error; err != nil {
+		t.Fatalf("create inventory files: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create([]database.AssetFile{{AssetID: asset.ID, FileID: videoFile.ID, Role: "source"}, {AssetID: asset.ID, FileID: subtitleFile.ID, Role: "subtitle"}}).Error; err != nil {
+		t.Fatalf("link asset files: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.MediaStream{FileID: subtitleFile.ID, StreamIndex: 0, StreamType: "subtitle", Codec: "srt", Title: "Movie A", DispositionJSON: `{"external":true,"managed_by":"scanner"}`}).Error; err != nil {
+		t.Fatalf("create subtitle stream: %v", err)
+	}
+
+	detail, err := svc.GetItemDetail(ctx, movie.ID)
+	if err != nil {
+		t.Fatalf("get item detail: %v", err)
+	}
+	if len(detail.Assets) != 1 || len(detail.Assets[0].Files) != 2 || len(detail.Assets[0].Streams) != 1 {
+		t.Fatalf("unexpected asset detail: %#v", detail.Assets)
+	}
+	stream := detail.Assets[0].Streams[0]
+	if stream.FileID != subtitleFile.ID || !stream.External || stream.Available == nil || !*stream.Available || !strings.HasPrefix(stream.URL, "/api/v1/inventory-files/") || strings.Contains(stream.URL, "sign") {
+		t.Fatalf("expected safe available external subtitle summary, got %#v", stream)
 	}
 }
 

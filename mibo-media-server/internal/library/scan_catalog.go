@@ -15,6 +15,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type catalogScanWriteResult struct {
@@ -49,6 +50,9 @@ func (s *Service) writeCatalogScanMovie(ctx context.Context, library database.Li
 		}
 		asset, err := createOrReuseCatalogScanAsset(ctx, tx, inventorySvc, library.ID, file.ID, artifact, inventory.AssetTypeMain)
 		if err != nil {
+			return err
+		}
+		if err := bindCatalogScanSubtitleSidecars(ctx, tx, inventorySvc, library.ID, asset.ID, artifact); err != nil {
 			return err
 		}
 		item, err := findOrCreateCatalogMovieItem(ctx, tx, catalogSvc, library.ID, asset.ID, artifact)
@@ -164,6 +168,9 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 		assetType, role := catalogScanAssetDisposition(ctx, tx, file.ID, episodeItems)
 		asset, err := createOrReuseCatalogScanAsset(ctx, tx, inventorySvc, library.ID, file.ID, artifact, assetType)
 		if err != nil {
+			return err
+		}
+		if err := bindCatalogScanSubtitleSidecars(ctx, tx, inventorySvc, library.ID, asset.ID, artifact); err != nil {
 			return err
 		}
 		for idx, episodeItem := range episodeItems {
@@ -324,6 +331,144 @@ func reuseInventoryFileByStableIdentity(ctx context.Context, db *gorm.DB, librar
 		return database.InventoryFile{}, false, err
 	}
 	return file, true, nil
+}
+
+func bindCatalogScanSubtitleSidecars(ctx context.Context, tx *gorm.DB, inventorySvc *inventory.Service, libraryID uint, assetID uint, artifact catalogScanArtifact) error {
+	currentFileIDs := make([]uint, 0, len(artifact.SubtitleSidecars))
+	for _, sidecar := range artifact.SubtitleSidecars {
+		file, err := upsertCatalogScanSubtitleFile(ctx, inventorySvc, libraryID, artifact, sidecar)
+		if err != nil {
+			return err
+		}
+		currentFileIDs = append(currentFileIDs, file.ID)
+		if _, err := inventorySvc.LinkAssetToFile(ctx, inventory.LinkAssetFileInput{AssetID: assetID, FileID: file.ID, Role: inventory.FileRoleSubtitle}); err != nil {
+			return err
+		}
+		if err := upsertCatalogScanSubtitleStream(ctx, tx, file.ID, artifact.SourcePath, sidecar); err != nil {
+			return err
+		}
+	}
+	return reconcileCatalogScanSubtitleSidecars(ctx, tx, assetID, currentFileIDs)
+}
+
+func upsertCatalogScanSubtitleFile(ctx context.Context, inventorySvc *inventory.Service, libraryID uint, artifact catalogScanArtifact, sidecar catalogScanSidecar) (database.InventoryFile, error) {
+	storageProvider := strings.TrimSpace(artifact.StorageProvider)
+	if storageProvider == "" {
+		storageProvider = "local"
+	}
+	container := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(sidecar.Extension)), ".")
+	if container == "" {
+		container = strings.TrimPrefix(strings.ToLower(path.Ext(strings.TrimSpace(sidecar.Path))), ".")
+	}
+	return inventorySvc.UpsertFile(ctx, inventory.UpsertFileInput{
+		LibraryID:         libraryID,
+		StorageProvider:   storageProvider,
+		StoragePath:       strings.TrimSpace(sidecar.Path),
+		StableIdentityKey: strings.TrimSpace(sidecar.StableIdentityKey),
+		SizeBytes:         sidecar.SizeBytes,
+		ModifiedAt:        sidecar.ModifiedAt,
+		Container:         container,
+		Status:            inventory.FileStatusAvailable,
+	})
+}
+
+func upsertCatalogScanSubtitleStream(ctx context.Context, tx *gorm.DB, fileID uint, sourcePath string, sidecar catalogScanSidecar) error {
+	codec, title, language := subtitleSidecarStreamMetadata(sourcePath, sidecar)
+	dispositionJSON, err := json.Marshal(map[string]any{
+		"default":          false,
+		"forced":           false,
+		"hearing_impaired": false,
+		"external":         inventory.MediaStreamDispositionExternalAvailable,
+		"external_source":  inventory.MediaStreamDispositionExternalScanner,
+		"managed_by":       inventory.MediaStreamDispositionManagedByScanner,
+	})
+	if err != nil {
+		return err
+	}
+	stream := database.MediaStream{FileID: fileID, StreamIndex: 0, StreamType: inventory.MediaStreamTypeSubtitle, Codec: codec, Language: language, Title: title, DispositionJSON: string(dispositionJSON)}
+	return tx.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "file_id"}, {Name: "stream_index"}},
+		DoUpdates: clause.AssignmentColumns([]string{"stream_type", "codec", "language", "title", "disposition_json", "updated_at"}),
+	}).Create(&stream).Error
+}
+
+func reconcileCatalogScanSubtitleSidecars(ctx context.Context, tx *gorm.DB, assetID uint, currentFileIDs []uint) error {
+	var staleLinks []database.AssetFile
+	query := tx.WithContext(ctx).Where("asset_id = ? AND role = ?", assetID, inventory.FileRoleSubtitle)
+	if len(currentFileIDs) > 0 {
+		query = query.Where("file_id NOT IN ?", currentFileIDs)
+	}
+	if err := query.Find(&staleLinks).Error; err != nil {
+		return err
+	}
+	if len(staleLinks) == 0 {
+		return nil
+	}
+	staleFileIDs := make([]uint, 0, len(staleLinks))
+	for _, link := range staleLinks {
+		staleFileIDs = append(staleFileIDs, link.FileID)
+	}
+	if err := tx.WithContext(ctx).Where("asset_id = ? AND role = ? AND file_id IN ?", assetID, inventory.FileRoleSubtitle, staleFileIDs).Delete(&database.AssetFile{}).Error; err != nil {
+		return err
+	}
+	return tx.WithContext(ctx).Where("file_id IN ? AND stream_type = ?", staleFileIDs, inventory.MediaStreamTypeSubtitle).Delete(&database.MediaStream{}).Error
+}
+
+func subtitleSidecarStreamMetadata(sourcePath string, sidecar catalogScanSidecar) (string, string, string) {
+	extension := strings.ToLower(strings.TrimSpace(sidecar.Extension))
+	codec := strings.TrimPrefix(extension, ".")
+	if codec == "" {
+		codec = strings.TrimPrefix(strings.ToLower(path.Ext(strings.TrimSpace(sidecar.Path))), ".")
+	}
+	title := strings.TrimSuffix(path.Base(strings.TrimSpace(sidecar.Path)), path.Ext(strings.TrimSpace(sidecar.Path)))
+	if strings.TrimSpace(title) == "" {
+		title = "External subtitle"
+	}
+	language := subtitleLanguageFromFilename(sourcePath, sidecar.Path)
+	return codec, title, language
+}
+
+func subtitleLanguageFromFilename(sourcePath string, subtitlePath string) string {
+	subtitleBase := strings.TrimSuffix(path.Base(strings.TrimSpace(subtitlePath)), path.Ext(strings.TrimSpace(subtitlePath)))
+	sourceBase := strings.TrimSuffix(path.Base(strings.TrimSpace(sourcePath)), path.Ext(strings.TrimSpace(sourcePath)))
+	candidate := strings.TrimPrefix(strings.TrimPrefix(subtitleBase, sourceBase), ".")
+	if candidate == subtitleBase || strings.TrimSpace(candidate) == "" {
+		parts := strings.FieldsFunc(subtitleBase, func(r rune) bool { return r == '.' || r == '_' || r == '-' || unicode.IsSpace(r) })
+		if len(parts) == 0 {
+			return ""
+		}
+		candidate = parts[len(parts)-1]
+	}
+	switch strings.ToLower(strings.TrimSpace(candidate)) {
+	case "en", "eng", "english":
+		return "eng"
+	case "zh", "zho", "chi", "chs", "cht", "cn", "sc", "tc", "chinese":
+		return "zho"
+	case "ja", "jpn", "jp", "japanese":
+		return "jpn"
+	case "ko", "kor", "kr", "korean":
+		return "kor"
+	case "fr", "fra", "fre", "french":
+		return "fra"
+	case "de", "deu", "ger", "german":
+		return "deu"
+	case "es", "spa", "spanish":
+		return "spa"
+	default:
+		if len(candidate) == 3 && isASCIIAlpha(candidate) {
+			return strings.ToLower(candidate)
+		}
+		return ""
+	}
+}
+
+func isASCIIAlpha(value string) bool {
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func createOrReuseCatalogScanAsset(ctx context.Context, tx *gorm.DB, inventorySvc *inventory.Service, libraryID uint, fileID uint, artifact catalogScanArtifact, assetType string) (database.MediaAsset, error) {
@@ -589,11 +734,23 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 		"hashes_json":         strings.TrimSpace(artifact.HashesJSON),
 		"detected_title":      strings.TrimSpace(artifact.Title),
 	}
+	if strings.TrimSpace(artifact.ObjectType) != "" {
+		payload["object_type"] = strings.TrimSpace(artifact.ObjectType)
+	}
+	if len(artifact.ProviderMeta) > 0 {
+		payload["provider_metadata"] = artifact.ProviderMeta
+	}
 	if strings.TrimSpace(artifact.NormalizationVersion) != "" {
 		payload["normalization_version"] = strings.TrimSpace(artifact.NormalizationVersion)
 	}
 	if len(artifact.RemovedTokens) > 0 {
 		payload["removed_tokens"] = artifact.RemovedTokens
+	}
+	if len(artifact.SubtitleSidecars) > 0 {
+		payload["subtitle_sidecars"] = sidecarEvidencePayload(artifact.SubtitleSidecars)
+	}
+	if len(artifact.MetadataSidecars) > 0 {
+		payload["metadata_sidecars"] = metadataSidecarEvidencePayload(artifact.MetadataSidecars)
 	}
 	if strings.TrimSpace(artifact.SeriesTitle) != "" {
 		payload["series_title"] = strings.TrimSpace(artifact.SeriesTitle)
@@ -609,6 +766,65 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 		return "{}"
 	}
 	return string(encoded)
+}
+
+func sidecarEvidencePayload(sidecars []catalogScanSidecar) []map[string]any {
+	items := make([]map[string]any, 0, len(sidecars))
+	for _, sidecar := range sidecars {
+		item := map[string]any{
+			"path":               strings.TrimSpace(sidecar.Path),
+			"extension":          strings.TrimSpace(sidecar.Extension),
+			"association_source": strings.TrimSpace(sidecar.AssociationSource),
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func metadataSidecarEvidencePayload(sidecars []catalogScanMetadataSidecar) []map[string]any {
+	items := make([]map[string]any, 0, len(sidecars))
+	for _, sidecar := range sidecars {
+		item := map[string]any{
+			"path":               strings.TrimSpace(sidecar.Path),
+			"extension":          strings.TrimSpace(sidecar.Extension),
+			"association_source": strings.TrimSpace(sidecar.AssociationSource),
+			"parse_status":       strings.TrimSpace(sidecar.ParseStatus),
+		}
+		if hints := metadataHintsPayload(sidecar.Hints); len(hints) > 0 {
+			item["hints"] = hints
+		}
+		if len(sidecar.ExternalIDs) > 0 {
+			item["external_ids"] = sidecar.ExternalIDs
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func metadataHintsPayload(hints catalogScanMetadataHints) map[string]any {
+	payload := make(map[string]any)
+	if strings.TrimSpace(hints.Title) != "" {
+		payload["title"] = strings.TrimSpace(hints.Title)
+	}
+	if strings.TrimSpace(hints.OriginalTitle) != "" {
+		payload["original_title"] = strings.TrimSpace(hints.OriginalTitle)
+	}
+	if hints.Year != nil {
+		payload["year"] = *hints.Year
+	}
+	if strings.TrimSpace(hints.MediaType) != "" {
+		payload["media_type"] = strings.TrimSpace(hints.MediaType)
+	}
+	if strings.TrimSpace(hints.SeriesTitle) != "" {
+		payload["series_title"] = strings.TrimSpace(hints.SeriesTitle)
+	}
+	if hints.SeasonNumber != nil {
+		payload["season_number"] = *hints.SeasonNumber
+	}
+	if hints.EpisodeNumber != nil {
+		payload["episode_number"] = *hints.EpisodeNumber
+	}
+	return payload
 }
 
 func defaultCatalogTitle(title string, fallbackPath string) string {

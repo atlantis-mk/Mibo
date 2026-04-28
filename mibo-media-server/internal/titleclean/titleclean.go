@@ -7,7 +7,7 @@ import (
 	"unicode"
 )
 
-const NormalizationVersion = "titleclean-v1"
+const NormalizationVersion = "titleclean-v2"
 
 type NormalizeInput struct {
 	RawTitle string
@@ -28,6 +28,7 @@ type RemovedToken struct {
 var (
 	yearTokenPattern         = regexp.MustCompile(`^(?:19|20)\d{2}$`)
 	episodeCodePattern       = regexp.MustCompile(`(?i)^s\d{1,2}e\d{1,3}(?:e\d{1,3})?$`)
+	multiEpisodeRangePattern = regexp.MustCompile(`(?i)^(.*?)([\s._-]+s\d{1,2}e\d{1,3}(?:-e?\d{1,3}|e\d{1,3})(?:[\s._-]+.*)?)$`)
 	bracketedWebsitePattern  = regexp.MustCompile(`(?i)[\[【(]\s*((?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+[^\]】)]*)\s*[\]】)]`)
 	standaloneWebsitePattern = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.(?:com|net|org|cn|tv|io)\b`)
 )
@@ -39,7 +40,13 @@ func Normalize(input NormalizeInput) NormalizeResult {
 		return result
 	}
 
-	withoutWebsites, websiteTokens := removeWebsiteTokens(raw)
+	cleanableRaw := raw
+	if prefix, removed, ok := stripMultiEpisodeRange(raw); ok {
+		cleanableRaw = prefix
+		result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: removed, Reason: "episode_range"})
+	}
+
+	withoutWebsites, websiteTokens := removeWebsiteTokens(cleanableRaw)
 	for _, token := range websiteTokens {
 		result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token, Reason: "website"})
 	}
@@ -88,6 +95,19 @@ func Normalize(input NormalizeInput) NormalizeResult {
 	}
 	result.Title = title
 	return result
+}
+
+func stripMultiEpisodeRange(input string) (string, string, bool) {
+	match := multiEpisodeRangePattern.FindStringSubmatch(strings.TrimSpace(input))
+	if len(match) < 3 {
+		return input, "", false
+	}
+	prefix := strings.TrimSpace(match[1])
+	removed := strings.TrimSpace(match[2])
+	if prefix == "" || removed == "" {
+		return input, "", false
+	}
+	return prefix, strings.TrimLeft(removed, " ._-"), true
 }
 
 func removeWebsiteTokens(input string) (string, []string) {

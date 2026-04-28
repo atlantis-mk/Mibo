@@ -18,6 +18,7 @@ func TestNormalize(t *testing.T) {
 		{name: "bracketed watermark", raw: "[www.example.com]Some.Movie.2023.HD1080P", title: "Some Movie", year: 2023},
 		{name: "dense technical release", raw: "Dune.Part.Two.2024.2160p.UHD.BluRay.REMUX.HEVC.TrueHD.Atmos-GROUP", title: "Dune Part Two", year: 2024},
 		{name: "release group", raw: "Some.Movie.2024-GROUP", title: "Some Movie", year: 2024},
+		{name: "multi episode promo tail", raw: "黑袍纠察队.The.Boys.S05E01-02.6v电影 地址发布页 www.6v123.net 收藏不迷路", title: "黑袍纠察队 The Boys"},
 		{name: "empty fallback", raw: "2024.2160p.WEB-DL.x265", title: "2024.2160p.WEB-DL.x265", year: 2024},
 	}
 

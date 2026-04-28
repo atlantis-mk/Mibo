@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
@@ -407,6 +409,296 @@ func TestRunSyncLibraryDeduplicatesScannerMetadataSourcesOnRescan(t *testing.T) 
 
 	assertTableCount(t, ctx, db, &database.CatalogItem{}, 1)
 	assertTableCount(t, ctx, db, &database.MetadataSource{}, 1)
+}
+
+func TestRunSyncLibraryRecordsSubtitleSidecarEvidence(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Movie A")
+	moviePath := filepath.Join(movieDir, "Movie A.mkv")
+	mustWriteFixtureFile(t, moviePath)
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.srt"), "1\n00:00:01,000 --> 00:00:02,000\nMovie A\n")
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.ass"), "[Script Info]\nTitle: Movie A\n")
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.txt"), "ignored")
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	payload := scannerEvidencePayloadForSingleSource(t, ctx, db)
+	subtitles, ok := payload["subtitle_sidecars"].([]any)
+	if !ok || len(subtitles) != 2 {
+		t.Fatalf("expected two subtitle sidecars, got %#v", payload["subtitle_sidecars"])
+	}
+	for _, raw := range subtitles {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected subtitle sidecar payload: %#v", raw)
+		}
+		if item["association_source"] != "basename" {
+			t.Fatalf("expected basename association, got %#v", item)
+		}
+		if _, hasContent := item["content"]; hasContent {
+			t.Fatalf("subtitle evidence must not include content: %#v", item)
+		}
+	}
+}
+
+func TestRunSyncLibraryBindsMovieSubtitleSidecars(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Movie A")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie A.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.srt"), "subtitle dialogue must not affect scan classification")
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.ass"), "[Script Info]\nTitle: Ignored")
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	assertTableCount(t, ctx, db, &database.InventoryFile{}, 3)
+	assertTableCount(t, ctx, db, &database.AssetFile{}, 3)
+	assertTableCount(t, ctx, db, &database.MediaStream{}, 2)
+
+	var subtitleLinks []database.AssetFile
+	if err := db.WithContext(ctx).Where("role = ?", inventory.FileRoleSubtitle).Order("id asc").Find(&subtitleLinks).Error; err != nil {
+		t.Fatalf("load subtitle links: %v", err)
+	}
+	if len(subtitleLinks) != 2 {
+		t.Fatalf("expected two subtitle asset links, got %#v", subtitleLinks)
+	}
+	var subtitleFiles []database.InventoryFile
+	if err := db.WithContext(ctx).Where("container IN ?", []string{"ass", "srt"}).Find(&subtitleFiles).Error; err != nil {
+		t.Fatalf("load subtitle files: %v", err)
+	}
+	for _, file := range subtitleFiles {
+		if file.Status != inventory.FileStatusAvailable {
+			t.Fatalf("expected scanned subtitle inventory to remain available after cleanup, got %#v", file)
+		}
+	}
+	var streams []database.MediaStream
+	if err := db.WithContext(ctx).Where("stream_type = ?", inventory.MediaStreamTypeSubtitle).Order("codec asc").Find(&streams).Error; err != nil {
+		t.Fatalf("load subtitle streams: %v", err)
+	}
+	if len(streams) != 2 || streams[0].Codec != "ass" || streams[1].Codec != "srt" {
+		t.Fatalf("expected ass and srt subtitle streams, got %#v", streams)
+	}
+	for _, stream := range streams {
+		if !strings.Contains(stream.DispositionJSON, `"external":true`) || !strings.Contains(stream.DispositionJSON, `"managed_by":"scanner"`) {
+			t.Fatalf("expected scanner-managed external disposition, got %#v", stream)
+		}
+	}
+}
+
+func TestRunSyncLibraryBindsEpisodeSubtitleSidecar(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	episodeDir := filepath.Join(showsRoot, "Show One", "Season 1")
+	mustWriteFixtureFile(t, filepath.Join(episodeDir, "Show.One.S01E02.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(episodeDir, "Show.One.S01E02.ass"), "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Ignored")
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	var episode database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).First(&episode).Error; err != nil {
+		t.Fatalf("load episode: %v", err)
+	}
+	if episode.IndexNumber == nil || *episode.IndexNumber != 2 {
+		t.Fatalf("subtitle content must not change episode classification, got %#v", episode)
+	}
+	var stream database.MediaStream
+	if err := db.WithContext(ctx).Where("stream_type = ? AND codec = ?", inventory.MediaStreamTypeSubtitle, "ass").First(&stream).Error; err != nil {
+		t.Fatalf("load episode subtitle stream: %v", err)
+	}
+	if !strings.Contains(stream.DispositionJSON, `"external":true`) {
+		t.Fatalf("expected external episode subtitle stream, got %#v", stream)
+	}
+}
+
+func TestRunSyncLibraryReconcilesSubtitleSidecarsOnRescan(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Movie A")
+	subtitlePath := filepath.Join(movieDir, "Movie A.srt")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie A.mkv"))
+	mustWriteFixtureTextFile(t, subtitlePath, "subtitle")
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run initial sync: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run idempotent rescan: %v", err)
+	}
+	assertRawTableCount(t, db, "asset_files", "role = ?", 1, inventory.FileRoleSubtitle)
+	assertRawTableCount(t, db, "media_streams", "stream_type = ?", 1, inventory.MediaStreamTypeSubtitle)
+
+	if err := os.Remove(subtitlePath); err != nil {
+		t.Fatalf("remove subtitle: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run stale subtitle rescan: %v", err)
+	}
+	assertRawTableCount(t, db, "asset_files", "role = ?", 0, inventory.FileRoleSubtitle)
+	assertRawTableCount(t, db, "media_streams", "stream_type = ?", 0, inventory.MediaStreamTypeSubtitle)
+}
+
+func TestRunSyncLibraryUsesJSONSidecarMovieHints(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Noisy Folder")
+	moviePath := filepath.Join(movieDir, "video.mkv")
+	mustWriteFixtureFile(t, moviePath)
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "video.json"), `{"title":"Sidecar Movie","original_title":"Original Sidecar Movie","year":2026,"external_ids":{"tmdb":"12345"}}`)
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&item).Error; err != nil {
+		t.Fatalf("load catalog item: %v", err)
+	}
+	if item.Title != "Sidecar Movie" || item.OriginalTitle != "Original Sidecar Movie" || item.Year == nil || *item.Year != 2026 {
+		t.Fatalf("expected JSON sidecar hints on movie item, got %#v", item)
+	}
+
+	payload := scannerEvidencePayloadForSingleSource(t, ctx, db)
+	metadata := metadataSidecarsFromPayload(t, payload)
+	if len(metadata) != 1 || metadata[0]["parse_status"] != "parsed" {
+		t.Fatalf("expected parsed metadata sidecar, got %#v", metadata)
+	}
+	hints, ok := metadata[0]["hints"].(map[string]any)
+	if !ok || hints["title"] != "Sidecar Movie" {
+		t.Fatalf("expected metadata hints in evidence, got %#v", metadata[0])
+	}
+}
+
+func TestRunSyncLibraryUsesNFOSidecarEpisodeHints(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	episodeDir := filepath.Join(showsRoot, "Downloads")
+	episodePath := filepath.Join(episodeDir, "file.mkv")
+	mustWriteFixtureFile(t, episodePath)
+	mustWriteFixtureTextFile(t, filepath.Join(episodeDir, "file.nfo"), `<episodedetails><title>Pilot</title><showtitle>Sidecar Show</showtitle><season>1</season><episode>2</episode></episodedetails>`)
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	var items []database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("type asc, id asc").Find(&items).Error; err != nil {
+		t.Fatalf("load catalog items: %v", err)
+	}
+	var episode database.CatalogItem
+	for _, item := range items {
+		if item.Type == catalog.ItemTypeEpisode {
+			episode = item
+			break
+		}
+	}
+	if episode.ID == 0 || episode.Title != "Pilot" || episode.IndexNumber == nil || *episode.IndexNumber != 2 || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 {
+		t.Fatalf("expected NFO sidecar episode hints, got items=%#v episode=%#v", items, episode)
+	}
+
+	payload := scannerEvidencePayloadForItem(t, ctx, db, episode.ID)
+	metadata := metadataSidecarsFromPayload(t, payload)
+	if len(metadata) != 1 || metadata[0]["parse_status"] != "parsed" {
+		t.Fatalf("expected parsed NFO sidecar evidence, got %#v", metadata)
+	}
+}
+
+func TestRunSyncLibrarySidecarFailuresAreNonFatal(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	malformedDir := filepath.Join(moviesRoot, "Malformed")
+	oversizedDir := filepath.Join(moviesRoot, "Oversized")
+	mustWriteFixtureFile(t, filepath.Join(malformedDir, "Malformed.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(malformedDir, "Malformed.json"), `{not-json`)
+	mustWriteFixtureFile(t, filepath.Join(oversizedDir, "Oversized.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(oversizedDir, "Oversized.json"), strings.Repeat("x", maxSidecarMetadataBytes+1))
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+	assertTableCount(t, ctx, db, &database.CatalogItem{}, 2)
+
+	var sources []database.MetadataSource
+	if err := db.WithContext(ctx).Order("id asc").Find(&sources).Error; err != nil {
+		t.Fatalf("load metadata sources: %v", err)
+	}
+	statuses := make(map[string]bool)
+	for _, source := range sources {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(source.PayloadJSON), &payload); err != nil {
+			t.Fatalf("decode evidence payload: %v", err)
+		}
+		for _, sidecar := range metadataSidecarsFromPayload(t, payload) {
+			statuses[fmt.Sprint(sidecar["parse_status"])] = true
+		}
+	}
+	if !statuses["malformed"] || !statuses["skipped"] {
+		t.Fatalf("expected malformed and skipped sidecar statuses, got %#v", statuses)
+	}
+}
+
+func TestRunSyncLibrarySkipsAmbiguousFolderMetadataSidecar(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Double Feature")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie A.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie B.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "metadata.json"), `{"title":"Wrong Shared Title","year":2026}`)
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	var items []database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("title asc").Find(&items).Error; err != nil {
+		t.Fatalf("load items: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected two movie items, got %#v", items)
+	}
+	for _, item := range items {
+		if item.Title == "Wrong Shared Title" {
+			t.Fatalf("ambiguous folder metadata should not apply, got %#v", items)
+		}
+	}
 }
 
 func TestRunSyncLibraryMarksAncestorAvailabilityMissingWhenEpisodesDeleted(t *testing.T) {
@@ -837,6 +1129,63 @@ func mustWriteFixtureFile(t *testing.T, filePath string) {
 	if err := os.WriteFile(filePath, []byte("fixture"), 0o644); err != nil {
 		t.Fatalf("write fixture file %s: %v", filePath, err)
 	}
+}
+
+func mustWriteFixtureTextFile(t *testing.T, filePath string, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("mkdir fixture dir %s: %v", filepath.Dir(filePath), err)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture file %s: %v", filePath, err)
+	}
+}
+
+func scannerEvidencePayloadForSingleSource(t *testing.T, ctx context.Context, db *gorm.DB) map[string]any {
+	t.Helper()
+
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).First(&source).Error; err != nil {
+		t.Fatalf("load metadata source: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(source.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode evidence payload: %v", err)
+	}
+	return payload
+}
+
+func scannerEvidencePayloadForItem(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint) map[string]any {
+	t.Helper()
+
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ?", itemID).First(&source).Error; err != nil {
+		t.Fatalf("load metadata source: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(source.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode evidence payload: %v", err)
+	}
+	return payload
+}
+
+func metadataSidecarsFromPayload(t *testing.T, payload map[string]any) []map[string]any {
+	t.Helper()
+
+	rawItems, ok := payload["metadata_sidecars"].([]any)
+	if !ok {
+		return nil
+	}
+	items := make([]map[string]any, 0, len(rawItems))
+	for _, raw := range rawItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected metadata sidecar payload: %#v", raw)
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func assertCatalogCounts(t *testing.T, ctx context.Context, db *gorm.DB, itemCount int64, fileCount int64, assetCount int64, assetItemCount int64, assetFileCount int64, metadataSourceCount int64) {

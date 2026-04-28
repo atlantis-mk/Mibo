@@ -140,16 +140,23 @@ type CatalogEpisodeShelfItem struct {
 }
 
 type CatalogAssetFileSummary struct {
-	FileID          uint       `json:"file_id"`
-	Role            string     `json:"role"`
-	PartIndex       int        `json:"part_index"`
-	StorageProvider string     `json:"storage_provider"`
-	StoragePath     string     `json:"storage_path,omitempty"`
-	StableIdentity  string     `json:"stable_identity_key,omitempty"`
-	SizeBytes       int64      `json:"size_bytes"`
-	Container       string     `json:"container,omitempty"`
-	Status          string     `json:"status"`
-	ModifiedAt      *time.Time `json:"modified_at,omitempty"`
+	FileID              uint                        `json:"file_id"`
+	Role                string                      `json:"role"`
+	PartIndex           int                         `json:"part_index"`
+	StorageProvider     string                      `json:"storage_provider"`
+	StoragePath         string                      `json:"storage_path,omitempty"`
+	StableIdentity      string                      `json:"stable_identity_key,omitempty"`
+	SizeBytes           int64                       `json:"size_bytes"`
+	Container           string                      `json:"container,omitempty"`
+	Status              string                      `json:"status"`
+	ModifiedAt          *time.Time                  `json:"modified_at,omitempty"`
+	ProviderDiagnostics *CatalogProviderDiagnostics `json:"provider_diagnostics,omitempty"`
+}
+
+type CatalogProviderDiagnostics struct {
+	StorageProvider    string   `json:"storage_provider,omitempty"`
+	AvailableHashKeys  []string `json:"available_hash_keys,omitempty"`
+	MetadataIndicators []string `json:"metadata_indicators,omitempty"`
 }
 
 type CatalogMediaStreamSummary struct {
@@ -179,6 +186,8 @@ type CatalogMediaStreamSummary struct {
 	Forced          bool     `json:"forced,omitempty"`
 	HearingImpaired bool     `json:"hearing_impaired,omitempty"`
 	External        bool     `json:"external,omitempty"`
+	URL             string   `json:"url,omitempty"`
+	Available       *bool    `json:"available,omitempty"`
 }
 
 type CatalogListItem struct {
@@ -884,7 +893,7 @@ func projectCatalogSourceSummary(raw string) any {
 		return nil
 	}
 
-	const scalarSummaryKeys = "title,name,original_title,overview,release_date,first_air_date,last_air_date,runtime,status,media_type,external_id,matched_title,air_date,poster_path,still_path,series_tmdb_id,storage_path,stable_identity_key,provider_name,detected_title,series_title,season_number,episode_number"
+	const scalarSummaryKeys = "title,name,original_title,overview,release_date,first_air_date,last_air_date,runtime,status,media_type,external_id,matched_title,air_date,poster_path,still_path,series_tmdb_id,storage_path,stable_identity_key,provider_name,object_type,detected_title,series_title,season_number,episode_number"
 	summary := make(map[string]any)
 	for _, key := range strings.Split(scalarSummaryKeys, ",") {
 		value, exists := payload[key]

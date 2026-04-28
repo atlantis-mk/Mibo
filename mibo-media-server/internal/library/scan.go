@@ -85,11 +85,41 @@ type catalogScanArtifact struct {
 	StableIdentityKey    string
 	ProviderName         string
 	HashesJSON           string
+	ObjectType           string
+	ProviderMeta         map[string]string
 	SizeBytes            int64
 	ModifiedAt           *time.Time
 	Container            string
 	NormalizationVersion string
 	RemovedTokens        []titleclean.RemovedToken
+	SubtitleSidecars     []catalogScanSidecar
+	MetadataSidecars     []catalogScanMetadataSidecar
+}
+
+type catalogScanSidecar struct {
+	Path              string
+	Extension         string
+	AssociationSource string
+	SizeBytes         int64
+	ModifiedAt        *time.Time
+	StableIdentityKey string
+}
+
+type catalogScanMetadataSidecar struct {
+	catalogScanSidecar
+	ParseStatus string
+	Hints       catalogScanMetadataHints
+	ExternalIDs map[string]string
+}
+
+type catalogScanMetadataHints struct {
+	Title         string
+	OriginalTitle string
+	Year          *int
+	MediaType     string
+	SeriesTitle   string
+	SeasonNumber  *int
+	EpisodeNumber *int
 }
 
 type SyncResult struct {

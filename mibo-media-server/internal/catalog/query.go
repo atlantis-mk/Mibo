@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -459,6 +460,17 @@ func (s *Service) buildSameSeasonEpisodeShelf(ctx context.Context, seasonID *uin
 	if seasonID == nil || *seasonID == 0 {
 		return []CatalogEpisodeShelfItem{}, nil
 	}
+	season, err := s.loadCatalogItem(ctx, *seasonID)
+	if err != nil {
+		return nil, err
+	}
+	if season.Type != ItemTypeSeason || season.ParentID == nil || *season.ParentID == 0 {
+		return []CatalogEpisodeShelfItem{}, nil
+	}
+	playableEpisodeIDs, err := seriesplayback.LoadPlayableEpisodeIDs(ctx, s.db, *season.ParentID)
+	if err != nil {
+		return nil, err
+	}
 	episodes, err := s.buildCatalogEpisodeDetailsForParent(ctx, *seasonID)
 	if err != nil {
 		return nil, err
@@ -470,6 +482,9 @@ func (s *Service) buildSameSeasonEpisodeShelf(ctx context.Context, seasonID *uin
 	episodeIDs := make([]uint, 0, len(episodes))
 	durationsByItem := make(map[uint]*int, len(episodes))
 	for _, episode := range episodes {
+		if _, ok := playableEpisodeIDs[episode.ID]; !ok {
+			continue
+		}
 		episodeIDs = append(episodeIDs, episode.ID)
 		durationsByItem[episode.ID] = episode.RuntimeSeconds
 	}
@@ -483,6 +498,9 @@ func (s *Service) buildSameSeasonEpisodeShelf(ctx context.Context, seasonID *uin
 
 	shelf := make([]CatalogEpisodeShelfItem, 0, len(episodes))
 	for _, episode := range episodes {
+		if _, ok := playableEpisodeIDs[episode.ID]; !ok {
+			continue
+		}
 		shelf = append(shelf, BuildCatalogEpisodeShelfItem(CatalogEpisodeShelfItemInput{
 			Episode:       episode,
 			CurrentItemID: currentItemID,
@@ -1145,27 +1163,71 @@ func buildCatalogAssetFileAndStreamSummaries(assetFiles []database.AssetFile, in
 	for _, assetFile := range assetFiles {
 		file := inventoryFilesByID[assetFile.FileID]
 		fileSummaries = append(fileSummaries, CatalogAssetFileSummary{
-			FileID:          assetFile.FileID,
-			Role:            strings.TrimSpace(assetFile.Role),
-			PartIndex:       assetFile.PartIndex,
-			StorageProvider: strings.TrimSpace(file.StorageProvider),
-			StoragePath:     strings.TrimSpace(file.StoragePath),
-			StableIdentity:  strings.TrimSpace(file.StableIdentityKey),
-			SizeBytes:       file.SizeBytes,
-			Container:       strings.TrimSpace(file.Container),
-			Status:          normalizeAvailabilityStatus(file.Status),
-			ModifiedAt:      file.ModifiedAt,
+			FileID:              assetFile.FileID,
+			Role:                strings.TrimSpace(assetFile.Role),
+			PartIndex:           assetFile.PartIndex,
+			StorageProvider:     strings.TrimSpace(file.StorageProvider),
+			StoragePath:         strings.TrimSpace(file.StoragePath),
+			StableIdentity:      strings.TrimSpace(file.StableIdentityKey),
+			SizeBytes:           file.SizeBytes,
+			Container:           strings.TrimSpace(file.Container),
+			Status:              normalizeAvailabilityStatus(file.Status),
+			ModifiedAt:          file.ModifiedAt,
+			ProviderDiagnostics: buildCatalogProviderDiagnostics(file),
 		})
 		for _, stream := range streamsByFileID[assetFile.FileID] {
-			streamSummaries = append(streamSummaries, buildCatalogMediaStreamSummary(stream))
+			streamSummaries = append(streamSummaries, buildCatalogMediaStreamSummary(stream, file))
 		}
 	}
 	return fileSummaries, streamSummaries
 }
 
-func buildCatalogMediaStreamSummary(stream database.MediaStream) CatalogMediaStreamSummary {
+func buildCatalogProviderDiagnostics(file database.InventoryFile) *CatalogProviderDiagnostics {
+	storageProvider := strings.TrimSpace(file.StorageProvider)
+	hashKeys := catalogHashKeys(file.HashesJSON)
+	if storageProvider == "" && len(hashKeys) == 0 {
+		return nil
+	}
+	diagnostics := &CatalogProviderDiagnostics{
+		StorageProvider:   storageProvider,
+		AvailableHashKeys: hashKeys,
+	}
+	if strings.TrimSpace(file.StableIdentityKey) != "" {
+		diagnostics.MetadataIndicators = append(diagnostics.MetadataIndicators, "stable_identity")
+	}
+	if strings.TrimSpace(file.HashesJSON) != "" {
+		diagnostics.MetadataIndicators = append(diagnostics.MetadataIndicators, "hash_info")
+	}
+	if file.ModifiedAt != nil {
+		diagnostics.MetadataIndicators = append(diagnostics.MetadataIndicators, "modified")
+	}
+	return diagnostics
+}
+
+func catalogHashKeys(raw string) []string {
+	decoded, ok := decodeCatalogJSONValue(raw)
+	if !ok {
+		return nil
+	}
+	values, ok := decoded.(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" || !isCatalogScalarJSONValue(value) {
+			continue
+		}
+		keys = append(keys, trimmedKey)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func buildCatalogMediaStreamSummary(stream database.MediaStream, file database.InventoryFile) CatalogMediaStreamSummary {
 	defaultDisposition, forcedDisposition, externalDisposition, hearingImpairedDisposition := catalogMediaStreamDispositionFlags(stream.DispositionJSON)
-	return CatalogMediaStreamSummary{
+	summary := CatalogMediaStreamSummary{
 		FileID:          stream.FileID,
 		StreamIndex:     stream.StreamIndex,
 		StreamType:      strings.TrimSpace(stream.StreamType),
@@ -1193,6 +1255,14 @@ func buildCatalogMediaStreamSummary(stream database.MediaStream) CatalogMediaStr
 		HearingImpaired: hearingImpairedDisposition,
 		External:        externalDisposition,
 	}
+	if externalDisposition && strings.EqualFold(strings.TrimSpace(stream.StreamType), "subtitle") {
+		available := normalizeAvailabilityStatus(file.Status) == AvailabilityAvailable && file.DeletedAt == nil
+		summary.Available = &available
+		if available {
+			summary.URL = fmt.Sprintf("/api/v1/inventory-files/%d/stream", stream.FileID)
+		}
+	}
+	return summary
 }
 
 func catalogMediaStreamDispositionFlags(raw string) (bool, bool, bool, bool) {

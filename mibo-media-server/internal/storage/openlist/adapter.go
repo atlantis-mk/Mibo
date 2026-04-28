@@ -25,6 +25,26 @@ type Adapter struct {
 	tokenMu  sync.Mutex
 }
 
+type openListObject struct {
+	Name         string            `json:"name"`
+	IsDir        bool              `json:"is_dir"`
+	Size         int64             `json:"size"`
+	Created      *time.Time        `json:"created"`
+	Modified     *time.Time        `json:"modified"`
+	RawURL       string            `json:"raw_url"`
+	ThumbnailURL string            `json:"thumb"`
+	Provider     string            `json:"provider"`
+	HashInfo     map[string]string `json:"hash_info"`
+	ObjectType   json.RawMessage   `json:"type"`
+	Sign         string            `json:"sign"`
+	Related      []openListObject  `json:"related"`
+	MountDetails *json.RawMessage  `json:"mount_details"`
+	Readme       *json.RawMessage  `json:"readme"`
+	Header       *json.RawMessage  `json:"header"`
+	CanWrite     *json.RawMessage  `json:"write"`
+	Upload       *json.RawMessage  `json:"upload"`
+}
+
 func New(cfg config.OpenListConfig) *Adapter {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: cfg.InsecureSkip}
@@ -59,14 +79,8 @@ func (a *Adapter) List(ctx context.Context, req storage.ListRequest) ([]storage.
 	}
 
 	var response struct {
-		Provider string `json:"provider"`
-		Content []struct {
-			Name     string            `json:"name"`
-			IsDir    bool              `json:"is_dir"`
-			Size     int64             `json:"size"`
-			Modified *time.Time        `json:"modified"`
-			HashInfo map[string]string `json:"hash_info"`
-		} `json:"content"`
+		Provider string           `json:"provider"`
+		Content  []openListObject `json:"content"`
 	}
 
 	if err := a.post(ctx, "/api/fs/list", request, &response); err != nil {
@@ -75,15 +89,7 @@ func (a *Adapter) List(ctx context.Context, req storage.ListRequest) ([]storage.
 
 	objects := make([]storage.Object, 0, len(response.Content))
 	for _, item := range response.Content {
-		objects = append(objects, storage.Object{
-			Name:     item.Name,
-			Path:     joinPath(req.Path, item.Name),
-			IsDir:    item.IsDir,
-			Size:     item.Size,
-			Modified: item.Modified,
-			Provider: strings.TrimSpace(response.Provider),
-			HashInfo: cloneHashInfo(item.HashInfo),
-		})
+		objects = append(objects, mapOpenListObject(item, joinPath(req.Path, item.Name), response.Provider, ""))
 	}
 
 	return objects, nil
@@ -92,30 +98,14 @@ func (a *Adapter) List(ctx context.Context, req storage.ListRequest) ([]storage.
 func (a *Adapter) Get(ctx context.Context, req storage.GetRequest) (storage.Object, error) {
 	request := map[string]any{"path": normalizePath(req.Path)}
 
-	var response struct {
-		Name     string            `json:"name"`
-		IsDir    bool              `json:"is_dir"`
-		Size     int64             `json:"size"`
-		Modified *time.Time        `json:"modified"`
-		RawURL   string            `json:"raw_url"`
-		Provider string            `json:"provider"`
-		HashInfo map[string]string `json:"hash_info"`
-	}
+	var response openListObject
 
 	if err := a.post(ctx, "/api/fs/get", request, &response); err != nil {
 		return storage.Object{}, err
 	}
 
-	return storage.Object{
-		Name:     response.Name,
-		Path:     normalizePath(req.Path),
-		IsDir:    response.IsDir,
-		Size:     response.Size,
-		Modified: response.Modified,
-		RawURL:   response.RawURL,
-		Provider: strings.TrimSpace(response.Provider),
-		HashInfo: cloneHashInfo(response.HashInfo),
-	}, nil
+	objectPath := normalizePath(req.Path)
+	return mapOpenListObject(response, objectPath, response.Provider, relatedParentPath(objectPath)), nil
 }
 
 func (a *Adapter) Link(ctx context.Context, req storage.LinkRequest) (storage.LinkResult, error) {
@@ -311,4 +301,80 @@ func cloneHashInfo(input map[string]string) map[string]string {
 		return nil
 	}
 	return cloned
+}
+
+func mapOpenListObject(input openListObject, objectPath string, fallbackProvider string, relatedParent string) storage.Object {
+	provider := strings.TrimSpace(input.Provider)
+	if provider == "" {
+		provider = strings.TrimSpace(fallbackProvider)
+	}
+	object := storage.Object{
+		Name:         input.Name,
+		Path:         normalizePath(objectPath),
+		IsDir:        input.IsDir,
+		Size:         input.Size,
+		Created:      input.Created,
+		Modified:     input.Modified,
+		RawURL:       strings.TrimSpace(input.RawURL),
+		ThumbnailURL: strings.TrimSpace(input.ThumbnailURL),
+		Provider:     provider,
+		HashInfo:     cloneHashInfo(input.HashInfo),
+		ObjectType:   openListObjectType(input.ObjectType),
+		Sign:         strings.TrimSpace(input.Sign),
+		ProviderMeta: openListProviderMeta(input),
+	}
+	if relatedParent != "" && len(input.Related) > 0 {
+		object.Related = make([]storage.Object, 0, len(input.Related))
+		for _, related := range input.Related {
+			relatedPath := joinPath(relatedParent, related.Name)
+			object.Related = append(object.Related, mapOpenListObject(related, relatedPath, provider, ""))
+		}
+	}
+	return object
+}
+
+func openListObjectType(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	return trimmed
+}
+
+func openListProviderMeta(input openListObject) map[string]string {
+	meta := make(map[string]string)
+	if strings.TrimSpace(input.Sign) != "" {
+		meta["has_sign"] = "true"
+	}
+	if input.MountDetails != nil {
+		meta["has_mount_details"] = "true"
+	}
+	if input.Readme != nil {
+		meta["has_readme"] = "true"
+	}
+	if input.Header != nil {
+		meta["has_header"] = "true"
+	}
+	if input.CanWrite != nil {
+		meta["has_write_flag"] = "true"
+	}
+	if input.Upload != nil {
+		meta["has_upload_metadata"] = "true"
+	}
+	if len(input.Related) > 0 {
+		meta["has_related"] = "true"
+	}
+	return storage.CloneStringMap(meta)
+}
+
+func relatedParentPath(objectPath string) string {
+	parent := path.Dir(normalizePath(objectPath))
+	if parent == "." {
+		return "/"
+	}
+	return normalizePath(parent)
 }

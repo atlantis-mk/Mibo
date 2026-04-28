@@ -1,4 +1,6 @@
 OpenList/
+!mibo-media-server/internal/storage/openlist/
+!mibo-media-server/internal/storage/openlist/**
 .idea/
 .vscode/
 demo-media/

@@ -121,6 +121,7 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 	if err != nil {
 		return fmt.Errorf("list directory %s: %w", dirPath, err)
 	}
+	sidecars := buildSidecarIndex(provider.Name(), objects)
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Path < objects[j].Path })
 	for _, object := range objects {
 		if object.IsDir {
@@ -136,6 +137,14 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 		seenFiles[object.Path] = struct{}{}
 		classified := classifyMediaFile(library.Type, library.RootPath, object)
 		artifact, itemPaths := catalogScanArtifactFromObject(provider.Name(), object, classified)
+		artifact = s.applyCatalogScanSidecars(ctx, provider, artifact, sidecars.matchesForVideo(object.Path))
+		for _, sidecar := range artifact.SubtitleSidecars {
+			if strings.TrimSpace(sidecar.Path) != "" {
+				seenFiles[sidecar.Path] = struct{}{}
+				result.InventoryFilesSeen++
+			}
+		}
+		itemPaths = catalogScanItemPaths(artifact)
 		for _, itemPath := range itemPaths {
 			seenItems[itemPath] = struct{}{}
 		}
@@ -175,6 +184,8 @@ func catalogScanArtifactFromObject(storageProvider string, object storage.Object
 		StableIdentityKey:    strings.TrimSpace(object.StableIdentity),
 		ProviderName:         strings.TrimSpace(object.Provider),
 		HashesJSON:           encodeHashInfo(object.HashInfo),
+		ObjectType:           strings.TrimSpace(object.ObjectType),
+		ProviderMeta:         object.SanitizedProviderMeta(),
 		SizeBytes:            object.Size,
 		ModifiedAt:           object.Modified,
 		Container:            strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), "."),
@@ -192,24 +203,35 @@ func catalogScanArtifactFromObject(storageProvider string, object storage.Object
 		if len(episodeNumbers) == 0 && classified.EpisodeNumber != nil {
 			episodeNumbers = append(episodeNumbers, *classified.EpisodeNumber)
 		}
-		itemPaths := make([]string, 0, len(episodeNumbers)+2)
+		for _, episodeNumber := range episodeNumbers {
+			itemPath := canonicalEpisodeItemPath(artifact.SeasonPath, episodeNumber)
+			artifact.EpisodeSlots = append(artifact.EpisodeSlots, catalogEpisodeSlot{EpisodeNumber: episodeNumber, ItemPath: itemPath})
+		}
+		return artifact, catalogScanItemPaths(artifact)
+	}
+
+	artifact.ItemType = catalog.ItemTypeMovie
+	artifact.ItemPath = classified.SourcePath
+	return artifact, catalogScanItemPaths(artifact)
+}
+
+func catalogScanItemPaths(artifact catalogScanArtifact) []string {
+	if artifact.ItemType == catalog.ItemTypeEpisode {
+		itemPaths := make([]string, 0, len(artifact.EpisodeSlots)+2)
 		if artifact.SeriesPath != "" {
 			itemPaths = append(itemPaths, artifact.SeriesPath)
 		}
 		if artifact.SeasonPath != "" {
 			itemPaths = append(itemPaths, artifact.SeasonPath)
 		}
-		for _, episodeNumber := range episodeNumbers {
-			itemPath := canonicalEpisodeItemPath(artifact.SeasonPath, episodeNumber)
-			artifact.EpisodeSlots = append(artifact.EpisodeSlots, catalogEpisodeSlot{EpisodeNumber: episodeNumber, ItemPath: itemPath})
-			itemPaths = append(itemPaths, itemPath)
+		for _, slot := range artifact.EpisodeSlots {
+			if slot.ItemPath != "" {
+				itemPaths = append(itemPaths, slot.ItemPath)
+			}
 		}
-		return artifact, itemPaths
+		return itemPaths
 	}
-
-	artifact.ItemType = catalog.ItemTypeMovie
-	artifact.ItemPath = classified.SourcePath
-	return artifact, []string{artifact.ItemPath}
+	return []string{artifact.ItemPath}
 }
 
 func encodeHashInfo(hashInfo map[string]string) string {
