@@ -136,10 +136,7 @@ func deleteLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) erro
 	if err := tx.WithContext(ctx).First(&record, libraryID).Error; err != nil {
 		return err
 	}
-	if err := tx.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&database.InventoryFile{}).Error; err != nil {
-		return err
-	}
-	if err := tx.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&database.CatalogItem{}).Error; err != nil {
+	if err := deleteLibraryDependentRecords(ctx, tx, libraryID); err != nil {
 		return err
 	}
 	result := tx.WithContext(ctx).Where("id = ?", libraryID).Delete(&database.Library{})
@@ -148,6 +145,99 @@ func deleteLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) erro
 	}
 	if result.RowsAffected == 0 {
 		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID uint) error {
+	queries := []string{
+		`DELETE FROM job_active_intents WHERE job_id IN (SELECT id FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
+		`DELETE FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE library_id = ?)`,
+		`DELETE FROM media_streams WHERE file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
+		`DELETE FROM asset_files WHERE asset_id IN (SELECT id FROM media_assets WHERE library_id = ?) OR file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
+		`DELETE FROM asset_items WHERE asset_id IN (SELECT id FROM media_assets WHERE library_id = ?) OR item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM user_item_data WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?) OR asset_id IN (SELECT id FROM media_assets WHERE library_id = ?)`,
+		`DELETE FROM catalog_external_ids WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM metadata_field_states WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM metadata_sources WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM item_images WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM item_people WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM item_tags WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM item_rollups WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM catalog_search_documents WHERE library_id = ? OR item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+	}
+	args := [][]any{
+		{libraryID, libraryID, libraryID, libraryID},
+		{libraryID, libraryID, libraryID, libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID, libraryID},
+		{libraryID, libraryID},
+		{libraryID, libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID, libraryID},
+	}
+	for i, query := range queries {
+		if err := tx.WithContext(ctx).Exec(query, args[i]...).Error; err != nil {
+			return err
+		}
+	}
+	if err := deleteLegacyLibraryRecords(ctx, tx, libraryID); err != nil {
+		return err
+	}
+
+	modelDeletes := []struct {
+		model any
+		where string
+		args  []any
+	}{
+		{&database.Schedule{}, "library_id = ?", []any{libraryID}},
+		{&database.MediaAsset{}, "library_id = ?", []any{libraryID}},
+		{&database.InventoryFile{}, "library_id = ?", []any{libraryID}},
+		{&database.CatalogItem{}, "library_id = ?", []any{libraryID}},
+	}
+	for _, deletion := range modelDeletes {
+		if err := tx.WithContext(ctx).Unscoped().Where(deletion.where, deletion.args...).Delete(deletion.model).Error; err != nil {
+			return err
+		}
+	}
+
+	cleanupQueries := []string{
+		`DELETE FROM media_streams WHERE file_id NOT IN (SELECT id FROM inventory_files)`,
+		`DELETE FROM people WHERE id NOT IN (SELECT DISTINCT person_id FROM item_people)`,
+		`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM item_tags)`,
+	}
+	for _, query := range cleanupQueries {
+		if err := tx.WithContext(ctx).Exec(query).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func deleteLegacyLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) error {
+	if tx.Migrator().HasTable("playback_progresses") && tx.Migrator().HasTable("media_items") && tx.Migrator().HasTable("media_files") {
+		if err := tx.WithContext(ctx).Exec(`DELETE FROM playback_progresses WHERE media_item_id IN (SELECT id FROM media_items WHERE library_id = ?) OR media_file_id IN (SELECT id FROM media_files WHERE library_id = ?)`, libraryID, libraryID).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("media_files") {
+		if err := tx.WithContext(ctx).Exec(`DELETE FROM media_files WHERE library_id = ?`, libraryID).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("media_items") {
+		if err := tx.WithContext(ctx).Exec(`DELETE FROM media_items WHERE library_id = ?`, libraryID).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }

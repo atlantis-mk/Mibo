@@ -11,6 +11,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 func (s *Service) QueueLibraryScan(ctx context.Context, libraryID uint) (database.Job, error) {
@@ -164,19 +165,21 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 
 func catalogScanArtifactFromObject(storageProvider string, object storage.Object, classified classifiedMedia) (catalogScanArtifact, []string) {
 	artifact := catalogScanArtifact{
-		SourcePath:        object.Path,
-		Title:             classified.Title,
-		OriginalTitle:     classified.OriginalTitle,
-		SeriesTitle:       classified.SeriesTitle,
-		Year:              classified.Year,
-		SeasonNumber:      classified.SeasonNumber,
-		StorageProvider:   strings.TrimSpace(storageProvider),
-		StableIdentityKey: strings.TrimSpace(object.StableIdentity),
-		ProviderName:      strings.TrimSpace(object.Provider),
-		HashesJSON:        encodeHashInfo(object.HashInfo),
-		SizeBytes:         object.Size,
-		ModifiedAt:        object.Modified,
-		Container:         strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), "."),
+		SourcePath:           object.Path,
+		Title:                classified.Title,
+		OriginalTitle:        classified.OriginalTitle,
+		SeriesTitle:          classified.SeriesTitle,
+		Year:                 classified.Year,
+		SeasonNumber:         classified.SeasonNumber,
+		StorageProvider:      strings.TrimSpace(storageProvider),
+		StableIdentityKey:    strings.TrimSpace(object.StableIdentity),
+		ProviderName:         strings.TrimSpace(object.Provider),
+		HashesJSON:           encodeHashInfo(object.HashInfo),
+		SizeBytes:            object.Size,
+		ModifiedAt:           object.Modified,
+		Container:            strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), "."),
+		NormalizationVersion: classified.NormalizationVersion,
+		RemovedTokens:        append([]titleclean.RemovedToken(nil), classified.RemovedTokens...),
 	}
 
 	if classified.Type == "episode" {

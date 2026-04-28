@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ func TestCatalogQueryAPIsReturnDetailAndGovernanceWorkspace(t *testing.T) {
 	if err := svc.db.WithContext(ctx).Create(&database.ItemImage{ItemID: series.ID, ImageType: "poster", URL: "https://example.com/poster.jpg", IsSelected: true}).Error; err != nil {
 		t.Fatalf("create image: %v", err)
 	}
+	createPlayableCatalogAsset(t, svc, ctx, episode.ID)
 	related, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "Related Show", Path: "/shows/Related", SortKey: "Related Show", AvailabilityStatus: AvailabilityAvailable})
 	if err != nil {
 		t.Fatalf("create related item: %v", err)
@@ -105,6 +108,128 @@ func TestCatalogQueryAPIsReturnDetailAndGovernanceWorkspace(t *testing.T) {
 	}
 	if workspace.ItemID != series.ID || len(workspace.SourceEvidence) != 1 || len(workspace.FieldStates) != 1 || len(workspace.SelectedImages) != 1 || len(workspace.RecommendedChildren) != 1 {
 		t.Fatalf("unexpected governance workspace: %#v", workspace)
+	}
+}
+
+func TestSeriesPlaybackTargetSelectsProgressFallbackAndNoLocal(t *testing.T) {
+	svc, ctx := newTestService(t)
+	series, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "Show A", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonNumber := 1
+	season, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episodeOneNumber := 1
+	episodeOne, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 1", IndexNumber: &episodeOneNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create episode one: %v", err)
+	}
+	episodeTwoNumber := 2
+	episodeTwo, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 2", IndexNumber: &episodeTwoNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create episode two: %v", err)
+	}
+	assetOne := createPlayableCatalogAsset(t, svc, ctx, episodeOne.ID)
+	assetTwo := createPlayableCatalogAsset(t, svc, ctx, episodeTwo.ID)
+	lastPlayed := time.Now().UTC()
+	if err := svc.db.WithContext(ctx).Create(&database.UserItemData{UserID: 7, ItemID: episodeTwo.ID, AssetID: &assetTwo.ID, PositionSeconds: 300, LastPlayedAt: &lastPlayed}).Error; err != nil {
+		t.Fatalf("create progress: %v", err)
+	}
+
+	detail, err := svc.GetItemDetailForUser(ctx, series.ID, uintPtr(7))
+	if err != nil {
+		t.Fatalf("get series detail with progress: %v", err)
+	}
+	if detail.SeriesPlaybackTarget == nil || detail.SeriesPlaybackTarget.EpisodeItemID != episodeTwo.ID || detail.SeriesPlaybackTarget.AssetID == nil || *detail.SeriesPlaybackTarget.AssetID != assetTwo.ID || detail.SeriesPlaybackTarget.SelectionReason != "continue" {
+		t.Fatalf("unexpected continue target: %#v", detail.SeriesPlaybackTarget)
+	}
+
+	if err := svc.db.WithContext(ctx).Where("user_id = ? AND item_id = ?", 7, episodeTwo.ID).Delete(&database.UserItemData{}).Error; err != nil {
+		t.Fatalf("delete progress: %v", err)
+	}
+	detail, err = svc.GetItemDetailForUser(ctx, series.ID, uintPtr(7))
+	if err != nil {
+		t.Fatalf("get series detail without progress: %v", err)
+	}
+	if detail.SeriesPlaybackTarget == nil || detail.SeriesPlaybackTarget.EpisodeItemID != episodeOne.ID || detail.SeriesPlaybackTarget.AssetID == nil || *detail.SeriesPlaybackTarget.AssetID != assetOne.ID || detail.SeriesPlaybackTarget.SelectionReason != "first_available" {
+		t.Fatalf("unexpected first local target: %#v", detail.SeriesPlaybackTarget)
+	}
+
+	missingSeries, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "Missing Show", AvailabilityStatus: AvailabilityMissing})
+	if err != nil {
+		t.Fatalf("create missing series: %v", err)
+	}
+	missingSeason, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &missingSeries.ID, Title: "Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityMissing})
+	if err != nil {
+		t.Fatalf("create missing season: %v", err)
+	}
+	if _, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &missingSeason.ID, Title: "Missing Episode", IndexNumber: &episodeOneNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityMissing}); err != nil {
+		t.Fatalf("create missing episode: %v", err)
+	}
+	detail, err = svc.GetItemDetailForUser(ctx, missingSeries.ID, uintPtr(7))
+	if err != nil {
+		t.Fatalf("get missing series detail: %v", err)
+	}
+	if detail.SeriesPlaybackTarget != nil {
+		t.Fatalf("expected no playback target for missing series, got %#v", detail.SeriesPlaybackTarget)
+	}
+}
+
+func TestSeriesSeasonsDefaultToLocalPlayableWhileOperationalReadsStayComplete(t *testing.T) {
+	svc, ctx := newTestService(t)
+	series, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "Mixed Show", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonOneNumber := 1
+	seasonOne, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", IndexNumber: &seasonOneNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create season one: %v", err)
+	}
+	seasonTwoNumber := 2
+	seasonTwo, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &series.ID, Title: "Season 2", IndexNumber: &seasonTwoNumber, AvailabilityStatus: AvailabilityUnaired})
+	if err != nil {
+		t.Fatalf("create season two: %v", err)
+	}
+	episodeOneNumber := 1
+	localEpisode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &seasonOne.ID, Title: "Local Episode", IndexNumber: &episodeOneNumber, ParentIndexNumber: &seasonOneNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create local episode: %v", err)
+	}
+	createPlayableCatalogAsset(t, svc, ctx, localEpisode.ID)
+	episodeTwoNumber := 2
+	missingEpisode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &seasonOne.ID, Title: "Missing Episode", IndexNumber: &episodeTwoNumber, ParentIndexNumber: &seasonOneNumber, AvailabilityStatus: AvailabilityMissing})
+	if err != nil {
+		t.Fatalf("create missing episode: %v", err)
+	}
+	unairedEpisode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &seasonTwo.ID, Title: "Unaired Episode", IndexNumber: &episodeOneNumber, ParentIndexNumber: &seasonTwoNumber, AvailabilityStatus: AvailabilityUnaired})
+	if err != nil {
+		t.Fatalf("create unaired episode: %v", err)
+	}
+
+	seasons, err := svc.ListSeriesSeasons(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("list series seasons: %v", err)
+	}
+	if len(seasons) != 1 || seasons[0].ID != seasonOne.ID || len(seasons[0].Episodes) != 1 || seasons[0].Episodes[0].ID != localEpisode.ID {
+		t.Fatalf("unexpected local-only seasons: %#v", seasons)
+	}
+	missingEpisodes, err := svc.ListSeriesMissingEpisodes(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("list missing episodes: %v", err)
+	}
+	if len(missingEpisodes) != 1 || missingEpisodes[0].ID != missingEpisode.ID {
+		t.Fatalf("unexpected missing episodes: %#v", missingEpisodes)
+	}
+	unairedEpisodes, err := svc.ListSeriesEpisodes(ctx, series.ID, nil, AvailabilityUnaired)
+	if err != nil {
+		t.Fatalf("list unaired episodes: %v", err)
+	}
+	if len(unairedEpisodes) != 1 || unairedEpisodes[0].ID != unairedEpisode.ID {
+		t.Fatalf("unexpected unaired episodes: %#v", unairedEpisodes)
 	}
 }
 
@@ -303,6 +428,19 @@ func TestUserItemFavoritesAndContinueWatching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create show: %v", err)
 	}
+	seasonNumber := 1
+	season, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &show.ID, Title: "Season 1", Path: "/shows/watching/season-1", SortKey: "Watching Show S01", IndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episodeNumber := 2
+	episode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 2", Path: "/shows/watching/season-1/e02.mkv", SortKey: "Watching Show S01E02", IndexNumber: &episodeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.ItemImage{ItemID: show.ID, ImageType: "poster", URL: "https://example.com/show-poster.jpg", IsSelected: true}).Error; err != nil {
+		t.Fatalf("create show poster: %v", err)
+	}
 
 	const userID uint = 7
 	favorite, err := svc.SetFavorite(ctx, userID, movie.ID, true)
@@ -322,15 +460,24 @@ func TestUserItemFavoritesAndContinueWatching(t *testing.T) {
 	}
 
 	lastPlayed := time.Now().UTC()
-	if err := svc.db.WithContext(ctx).Create(&database.UserItemData{UserID: userID, ItemID: show.ID, PositionSeconds: 120, LastPlayedAt: &lastPlayed}).Error; err != nil {
+	if err := svc.db.WithContext(ctx).Create(&database.UserItemData{UserID: userID, ItemID: episode.ID, PositionSeconds: 120, LastPlayedAt: &lastPlayed}).Error; err != nil {
 		t.Fatalf("create progress: %v", err)
 	}
 	continueWatching, err := svc.ListContinueWatching(ctx, userID, 10)
 	if err != nil {
 		t.Fatalf("list continue watching: %v", err)
 	}
-	if len(continueWatching) != 1 || continueWatching[0].Item.ID != show.ID || continueWatching[0].PositionSeconds != 120 {
+	if len(continueWatching) != 1 || continueWatching[0].Item.ID != episode.ID || continueWatching[0].PositionSeconds != 120 {
 		t.Fatalf("unexpected continue watching: %#v", continueWatching)
+	}
+	if continueWatching[0].PlayItem == nil || continueWatching[0].PlayItem.ID != episode.ID {
+		t.Fatalf("expected episode play item, got %#v", continueWatching[0].PlayItem)
+	}
+	if continueWatching[0].DisplayItem == nil || continueWatching[0].DisplayItem.ID != show.ID || continueWatching[0].DisplayItem.Type != ItemTypeSeries {
+		t.Fatalf("expected series display item, got %#v", continueWatching[0].DisplayItem)
+	}
+	if len(continueWatching[0].DisplayItem.SelectedImages) != 1 || continueWatching[0].DisplayItem.SelectedImages[0].URL != "https://example.com/show-poster.jpg" {
+		t.Fatalf("expected series poster on display item, got %#v", continueWatching[0].DisplayItem.SelectedImages)
 	}
 
 	if _, err := svc.SetFavorite(ctx, userID, movie.ID, false); err != nil {
@@ -351,4 +498,23 @@ func intPtr(value int) *int {
 
 func uintPtr(value uint) *uint {
 	return &value
+}
+
+func createPlayableCatalogAsset(t *testing.T, svc *Service, ctx context.Context, itemID uint) database.MediaAsset {
+	t.Helper()
+	asset := database.MediaAsset{LibraryID: 1, AssetType: "main", Status: AvailabilityAvailable, ProbeStatus: "ready"}
+	if err := svc.db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: itemID, Role: "primary", SegmentIndex: 0}).Error; err != nil {
+		t.Fatalf("link asset item: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: 1, StorageProvider: "local", StoragePath: "/test/playable-" + fmt.Sprint(itemID) + ".mkv", Container: "mkv", Status: AvailabilityAvailable}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: "source", PartIndex: 0}).Error; err != nil {
+		t.Fatalf("link asset file: %v", err)
+	}
+	return asset
 }

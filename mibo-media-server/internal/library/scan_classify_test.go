@@ -1,10 +1,12 @@
 package library
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 func TestClassifyMediaFileParsesMultiEpisodeRange(t *testing.T) {
@@ -103,6 +105,61 @@ func TestClassifyMediaFileStripsMovieReleaseNoise(t *testing.T) {
 	}
 	if classified.Year == nil || *classified.Year != 2024 {
 		t.Fatalf("expected release year 2024, got %#v", classified.Year)
+	}
+}
+
+func TestClassifyMediaFileStripsWebsiteWatermarkAndTechnicalNoise(t *testing.T) {
+	t.Parallel()
+
+	classified := classifyMediaFile("movies", "/library", storage.Object{Path: "/library/[www.example.com]Some.Movie.2023.HD1080P.mkv"})
+	if classified.Type != "movie" {
+		t.Fatalf("expected movie classification, got %#v", classified)
+	}
+	if classified.Title != "Some Movie" {
+		t.Fatalf("expected website watermark and quality noise to be removed, got %q", classified.Title)
+	}
+	if classified.Year == nil || *classified.Year != 2023 {
+		t.Fatalf("expected extracted year 2023, got %#v", classified.Year)
+	}
+	if classified.NormalizationVersion != titleclean.NormalizationVersion || len(classified.RemovedTokens) == 0 {
+		t.Fatalf("expected normalization evidence, got version=%q tokens=%#v", classified.NormalizationVersion, classified.RemovedTokens)
+	}
+}
+
+func TestClassifyMediaFileStripsNoisyTVFilename(t *testing.T) {
+	t.Parallel()
+
+	classified := classifyMediaFile("shows", "/library", storage.Object{Path: "/library/Show Name/Season 1/Show.Name.S01E02.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-GROUP.mkv"})
+	if classified.Type != "episode" {
+		t.Fatalf("expected episode classification, got %#v", classified)
+	}
+	if classified.SeriesTitle != "Show Name" || classified.Title != "Show Name S01E02" {
+		t.Fatalf("expected normalized noisy episode title, got title=%q series=%q", classified.Title, classified.SeriesTitle)
+	}
+	if classified.SeasonNumber == nil || *classified.SeasonNumber != 1 || classified.EpisodeNumber == nil || *classified.EpisodeNumber != 2 {
+		t.Fatalf("expected S01E02 metadata, got season=%v episode=%v", classified.SeasonNumber, classified.EpisodeNumber)
+	}
+}
+
+func TestCatalogScanEvidencePayloadIncludesNormalizationEvidence(t *testing.T) {
+	t.Parallel()
+
+	payloadJSON := buildCatalogScanEvidencePayload(catalogScanArtifact{
+		SourcePath:           "/library/Movie.Name.2024.2160p.WEB-DL.x265.mkv",
+		Title:                "Movie Name",
+		NormalizationVersion: titleclean.NormalizationVersion,
+		RemovedTokens:        []titleclean.RemovedToken{{Value: "2024", Reason: "year"}, {Value: "2160p", Reason: "quality"}},
+	}, nil)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["normalization_version"] != titleclean.NormalizationVersion {
+		t.Fatalf("expected normalization version in payload, got %#v", payload)
+	}
+	removed, ok := payload["removed_tokens"].([]any)
+	if !ok || len(removed) != 2 {
+		t.Fatalf("expected removed tokens in payload, got %#v", payload["removed_tokens"])
 	}
 }
 

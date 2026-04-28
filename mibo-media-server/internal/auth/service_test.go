@@ -9,7 +9,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 )
 
-func TestRegisterCreatesRegularUser(t *testing.T) {
+func TestRegisterCreatesFirstUserAsAdmin(t *testing.T) {
 	t.Parallel()
 
 	db, err := database.Open(config.DatabaseConfig{
@@ -28,8 +28,8 @@ func TestRegisterCreatesRegularUser(t *testing.T) {
 	if user.Username != "alice" {
 		t.Fatalf("username = %q, want %q", user.Username, "alice")
 	}
-	if user.Role != "user" {
-		t.Fatalf("role = %q, want %q", user.Role, "user")
+	if user.Role != "admin" {
+		t.Fatalf("role = %q, want %q", user.Role, "admin")
 	}
 
 	login, err := svc.Login(context.Background(), "alice", "password123")
@@ -38,6 +38,30 @@ func TestRegisterCreatesRegularUser(t *testing.T) {
 	}
 	if login.User.ID != user.ID {
 		t.Fatalf("login user id = %d, want %d", login.User.ID, user.ID)
+	}
+}
+
+func TestRegisterCreatesAdditionalUsersAsRegularUsers(t *testing.T) {
+	t.Parallel()
+
+	db, err := database.Open(config.DatabaseConfig{
+		Driver: "sqlite",
+		DSN:    filepath.Join(t.TempDir(), "mibo.db"),
+	})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	svc := NewService(db)
+	if _, err := svc.Register(context.Background(), "admin", "password123"); err != nil {
+		t.Fatalf("register first user: %v", err)
+	}
+	user, err := svc.Register(context.Background(), "alice", "password123")
+	if err != nil {
+		t.Fatalf("register second user: %v", err)
+	}
+	if user.Role != "user" {
+		t.Fatalf("role = %q, want %q", user.Role, "user")
 	}
 }
 

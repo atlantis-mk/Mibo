@@ -181,12 +181,13 @@ function SeasonEpisodesRail({
         </div>
       </div>
 
-      <div className="relative px-0 sm:px-12">
+      <div className="relative left-1/2 w-screen -translate-x-1/2">
         <Swiper
           modules={[FreeMode]}
           freeMode
           slidesPerView="auto"
           spaceBetween={20}
+          slidesOffsetBefore={40}
           onSwiper={(instance) => {
             setSwiper(instance)
             updateNavigation(instance)
@@ -208,7 +209,7 @@ function SeasonEpisodesRail({
           ))}
         </Swiper>
 
-        <div className="mt-4 flex items-center justify-end gap-2 sm:hidden">
+        <div className="mt-4 flex items-center justify-end gap-2 px-6 sm:hidden">
           <RailArrowButton
             direction="prev"
             disabled={!canScrollPrev}
@@ -273,9 +274,6 @@ function EpisodeCard({
             .join('  ')}
         </div>
         <div className="text-xs text-muted-foreground">{statusLabel}</div>
-        {episode.current ? (
-          <div className="text-xs font-medium text-primary">当前正在查看</div>
-        ) : null}
         <p className="line-clamp-3 text-sm leading-6 text-muted-foreground">
           {episode.overview || '暂无剧情简介'}
         </p>

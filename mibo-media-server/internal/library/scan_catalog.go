@@ -428,6 +428,9 @@ func createOrReuseCatalogItem(ctx context.Context, tx *gorm.DB, catalogSvc *cata
 		"deleted_at":            nil,
 		"last_canonicalized_at": time.Now().UTC(),
 	}
+	if err := applyCatalogScanMetadataOverrides(ctx, tx, item, updates); err != nil {
+		return database.CatalogItem{}, err
+	}
 	if err := tx.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", item.ID).Updates(updates).Error; err != nil {
 		return database.CatalogItem{}, err
 	}
@@ -449,6 +452,9 @@ func findOrCreateCatalogMovieItem(ctx context.Context, tx *gorm.DB, catalogSvc *
 			"governance_status":     governanceStatusForScanUpdate(existing.GovernanceStatus, catalog.GovernancePending),
 			"last_canonicalized_at": time.Now().UTC(),
 			"deleted_at":            nil,
+		}
+		if err := applyCatalogScanMetadataOverrides(ctx, tx, existing, updates); err != nil {
+			return database.CatalogItem{}, err
 		}
 		if err := tx.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 			return database.CatalogItem{}, err
@@ -484,6 +490,71 @@ func findCatalogItemForAsset(ctx context.Context, tx *gorm.DB, assetID uint) (da
 	return item, err
 }
 
+func applyCatalogScanMetadataOverrides(ctx context.Context, tx *gorm.DB, item database.CatalogItem, updates map[string]any) error {
+	if item.ID == 0 || len(updates) == 0 {
+		return nil
+	}
+
+	if catalogScanShouldPreserveDescriptiveFields(item.GovernanceStatus) {
+		if _, ok := updates["title"]; ok {
+			updates["title"] = item.Title
+		}
+		if _, ok := updates["original_title"]; ok {
+			updates["original_title"] = item.OriginalTitle
+		}
+		if _, ok := updates["year"]; ok {
+			updates["year"] = item.Year
+		}
+	}
+
+	fieldKeys := make([]string, 0, 3)
+	if _, ok := updates["title"]; ok {
+		fieldKeys = append(fieldKeys, "title")
+	}
+	if _, ok := updates["original_title"]; ok {
+		fieldKeys = append(fieldKeys, "original_title")
+	}
+	if _, ok := updates["year"]; ok {
+		fieldKeys = append(fieldKeys, "year")
+	}
+	if len(fieldKeys) == 0 {
+		return nil
+	}
+
+	var states []database.MetadataFieldState
+	if err := tx.WithContext(ctx).
+		Where("item_id = ? AND field_key IN ?", item.ID, fieldKeys).
+		Find(&states).Error; err != nil {
+		return err
+	}
+	for _, state := range states {
+		switch state.FieldKey {
+		case "title", "original_title":
+			var value string
+			if err := json.Unmarshal([]byte(state.ValueJSON), &value); err != nil {
+				return fmt.Errorf("decode catalog field state %s for item %d: %w", state.FieldKey, item.ID, err)
+			}
+			updates[state.FieldKey] = value
+		case "year":
+			var value int
+			if err := json.Unmarshal([]byte(state.ValueJSON), &value); err != nil {
+				return fmt.Errorf("decode catalog field state %s for item %d: %w", state.FieldKey, item.ID, err)
+			}
+			updates["year"] = value
+		}
+	}
+	return nil
+}
+
+func catalogScanShouldPreserveDescriptiveFields(governanceStatus string) bool {
+	switch strings.TrimSpace(governanceStatus) {
+	case catalog.GovernanceMatched, catalog.GovernanceNeedsReview, catalog.GovernanceLocked, catalog.GovernanceManual:
+		return true
+	default:
+		return false
+	}
+}
+
 func recordCatalogScanMetadataSource(ctx context.Context, tx *gorm.DB, catalogSvc *catalog.Service, itemID uint, payloadJSON string) error {
 	now := time.Now().UTC()
 	var existing database.MetadataSource
@@ -517,6 +588,12 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 		"provider_name":       strings.TrimSpace(artifact.ProviderName),
 		"hashes_json":         strings.TrimSpace(artifact.HashesJSON),
 		"detected_title":      strings.TrimSpace(artifact.Title),
+	}
+	if strings.TrimSpace(artifact.NormalizationVersion) != "" {
+		payload["normalization_version"] = strings.TrimSpace(artifact.NormalizationVersion)
+	}
+	if len(artifact.RemovedTokens) > 0 {
+		payload["removed_tokens"] = artifact.RemovedTokens
 	}
 	if strings.TrimSpace(artifact.SeriesTitle) != "" {
 		payload["series_title"] = strings.TrimSpace(artifact.SeriesTitle)

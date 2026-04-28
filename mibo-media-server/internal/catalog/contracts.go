@@ -205,39 +205,48 @@ type CatalogListItem struct {
 }
 
 type CatalogItemDetail struct {
-	ID                 uint                         `json:"id"`
-	LibraryID          uint                         `json:"library_id"`
-	Type               string                       `json:"type"`
-	Title              string                       `json:"title"`
-	OriginalTitle      string                       `json:"original_title,omitempty"`
-	SortTitle          string                       `json:"sort_title,omitempty"`
-	Overview           string                       `json:"overview,omitempty"`
-	Year               *int                         `json:"year,omitempty"`
-	EndYear            *int                         `json:"end_year,omitempty"`
-	RuntimeSeconds     *int                         `json:"runtime_seconds,omitempty"`
-	CommunityRating    *float64                     `json:"community_rating,omitempty"`
-	OfficialRating     string                       `json:"official_rating,omitempty"`
-	SeriesStatus       string                       `json:"series_status,omitempty"`
-	AvailabilityStatus string                       `json:"availability_status"`
-	GovernanceStatus   string                       `json:"governance_status"`
-	ReleaseDate        *time.Time                   `json:"release_date,omitempty"`
-	FirstAirDate       *time.Time                   `json:"first_air_date,omitempty"`
-	LastAirDate        *time.Time                   `json:"last_air_date,omitempty"`
-	ChildSummary       *CatalogChildSummary         `json:"child_summary,omitempty"`
-	SelectedImages     []CatalogSelectedImage       `json:"selected_images,omitempty"`
-	ExternalIdentities []CatalogExternalIdentity    `json:"external_identities,omitempty"`
-	Tags               []CatalogTagDetail           `json:"tags"`
-	Genres             []string                     `json:"genres"`
-	SourceEvidence     []CatalogSourceEvidence      `json:"source_evidence"`
-	FieldStates        []CatalogFieldState          `json:"field_states"`
-	Cast               []CatalogPersonDetail        `json:"cast"`
-	Directors          []CatalogPersonDetail        `json:"directors"`
-	Seasons            []CatalogSeasonDetail        `json:"seasons"`
-	Episodes           []CatalogEpisodeDetail       `json:"episodes"`
-	EpisodeContext     *CatalogEpisodeParentContext `json:"episode_context,omitempty"`
-	SameSeasonEpisodes []CatalogEpisodeShelfItem    `json:"same_season_episodes"`
-	Assets             []CatalogAssetDetail         `json:"assets"`
-	RelatedItems       []CatalogListItem            `json:"related_items"`
+	ID                   uint                         `json:"id"`
+	LibraryID            uint                         `json:"library_id"`
+	Type                 string                       `json:"type"`
+	Title                string                       `json:"title"`
+	OriginalTitle        string                       `json:"original_title,omitempty"`
+	SortTitle            string                       `json:"sort_title,omitempty"`
+	Overview             string                       `json:"overview,omitempty"`
+	Year                 *int                         `json:"year,omitempty"`
+	EndYear              *int                         `json:"end_year,omitempty"`
+	RuntimeSeconds       *int                         `json:"runtime_seconds,omitempty"`
+	CommunityRating      *float64                     `json:"community_rating,omitempty"`
+	OfficialRating       string                       `json:"official_rating,omitempty"`
+	SeriesStatus         string                       `json:"series_status,omitempty"`
+	AvailabilityStatus   string                       `json:"availability_status"`
+	GovernanceStatus     string                       `json:"governance_status"`
+	ReleaseDate          *time.Time                   `json:"release_date,omitempty"`
+	FirstAirDate         *time.Time                   `json:"first_air_date,omitempty"`
+	LastAirDate          *time.Time                   `json:"last_air_date,omitempty"`
+	ChildSummary         *CatalogChildSummary         `json:"child_summary,omitempty"`
+	SelectedImages       []CatalogSelectedImage       `json:"selected_images,omitempty"`
+	ExternalIdentities   []CatalogExternalIdentity    `json:"external_identities,omitempty"`
+	Tags                 []CatalogTagDetail           `json:"tags"`
+	Genres               []string                     `json:"genres"`
+	SourceEvidence       []CatalogSourceEvidence      `json:"source_evidence"`
+	FieldStates          []CatalogFieldState          `json:"field_states"`
+	Cast                 []CatalogPersonDetail        `json:"cast"`
+	Directors            []CatalogPersonDetail        `json:"directors"`
+	Seasons              []CatalogSeasonDetail        `json:"seasons"`
+	Episodes             []CatalogEpisodeDetail       `json:"episodes"`
+	EpisodeContext       *CatalogEpisodeParentContext `json:"episode_context,omitempty"`
+	SeriesPlaybackTarget *CatalogSeriesPlaybackTarget `json:"series_playback_target,omitempty"`
+	SameSeasonEpisodes   []CatalogEpisodeShelfItem    `json:"same_season_episodes"`
+	Assets               []CatalogAssetDetail         `json:"assets"`
+	RelatedItems         []CatalogListItem            `json:"related_items"`
+}
+
+type CatalogSeriesPlaybackTarget struct {
+	EpisodeItemID   uint   `json:"episode_item_id"`
+	AssetID         *uint  `json:"asset_id,omitempty"`
+	Title           string `json:"title"`
+	Label           string `json:"label,omitempty"`
+	SelectionReason string `json:"selection_reason"`
 }
 
 type CatalogSeasonDetail struct {
@@ -336,21 +345,22 @@ type CatalogListItemInput struct {
 }
 
 type CatalogItemDetailInput struct {
-	Item               database.CatalogItem
-	Rollup             *database.ItemRollup
-	Images             []database.ItemImage
-	ExternalIDs        []database.CatalogExternalID
-	Sources            []database.MetadataSource
-	FieldStates        []database.MetadataFieldState
-	Cast               []CatalogPersonDetail
-	Directors          []CatalogPersonDetail
-	Tags               []CatalogTagDetail
-	Seasons            []CatalogSeasonDetail
-	Episodes           []CatalogEpisodeDetail
-	EpisodeContext     *CatalogEpisodeParentContext
-	SameSeasonEpisodes []CatalogEpisodeShelfItem
-	Assets             []CatalogAssetDetail
-	Related            []CatalogListItem
+	Item                 database.CatalogItem
+	Rollup               *database.ItemRollup
+	Images               []database.ItemImage
+	ExternalIDs          []database.CatalogExternalID
+	Sources              []database.MetadataSource
+	FieldStates          []database.MetadataFieldState
+	Cast                 []CatalogPersonDetail
+	Directors            []CatalogPersonDetail
+	Tags                 []CatalogTagDetail
+	Seasons              []CatalogSeasonDetail
+	Episodes             []CatalogEpisodeDetail
+	EpisodeContext       *CatalogEpisodeParentContext
+	SeriesPlaybackTarget *CatalogSeriesPlaybackTarget
+	SameSeasonEpisodes   []CatalogEpisodeShelfItem
+	Assets               []CatalogAssetDetail
+	Related              []CatalogListItem
 }
 
 type CatalogSeasonDetailInput struct {
@@ -425,39 +435,40 @@ func BuildCatalogListItem(input CatalogListItemInput) CatalogListItem {
 func BuildCatalogItemDetail(input CatalogItemDetailInput) CatalogItemDetail {
 	item := input.Item
 	return CatalogItemDetail{
-		ID:                 item.ID,
-		LibraryID:          item.LibraryID,
-		Type:               normalizeCatalogType(item.Type),
-		Title:              strings.TrimSpace(item.Title),
-		OriginalTitle:      strings.TrimSpace(item.OriginalTitle),
-		SortTitle:          strings.TrimSpace(item.SortTitle),
-		Overview:           item.Overview,
-		Year:               item.Year,
-		EndYear:            item.EndYear,
-		RuntimeSeconds:     item.RuntimeSeconds,
-		CommunityRating:    item.CommunityRating,
-		OfficialRating:     strings.TrimSpace(item.OfficialRating),
-		SeriesStatus:       strings.TrimSpace(item.SeriesStatus),
-		AvailabilityStatus: normalizeAvailabilityStatus(item.AvailabilityStatus),
-		GovernanceStatus:   normalizeGovernanceStatus(item.GovernanceStatus),
-		ReleaseDate:        item.ReleaseDate,
-		FirstAirDate:       item.FirstAirDate,
-		LastAirDate:        item.LastAirDate,
-		ChildSummary:       buildCatalogChildSummary(input.Rollup),
-		SelectedImages:     buildCatalogSelectedImages(input.Images),
-		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
-		Tags:               ensureCatalogTagDetails(input.Tags),
-		Genres:             buildCatalogGenres(input.Tags),
-		SourceEvidence:     buildCatalogSourceEvidence(input.Sources),
-		FieldStates:        buildCatalogFieldStates(input.FieldStates),
-		Cast:               ensureCatalogPersonDetails(input.Cast),
-		Directors:          ensureCatalogPersonDetails(input.Directors),
-		Seasons:            ensureCatalogSeasonDetails(input.Seasons),
-		Episodes:           ensureCatalogEpisodeDetails(input.Episodes),
-		EpisodeContext:     input.EpisodeContext,
-		SameSeasonEpisodes: ensureCatalogEpisodeShelfItems(input.SameSeasonEpisodes),
-		Assets:             ensureCatalogAssetDetails(input.Assets),
-		RelatedItems:       ensureCatalogListItems(input.Related),
+		ID:                   item.ID,
+		LibraryID:            item.LibraryID,
+		Type:                 normalizeCatalogType(item.Type),
+		Title:                strings.TrimSpace(item.Title),
+		OriginalTitle:        strings.TrimSpace(item.OriginalTitle),
+		SortTitle:            strings.TrimSpace(item.SortTitle),
+		Overview:             item.Overview,
+		Year:                 item.Year,
+		EndYear:              item.EndYear,
+		RuntimeSeconds:       item.RuntimeSeconds,
+		CommunityRating:      item.CommunityRating,
+		OfficialRating:       strings.TrimSpace(item.OfficialRating),
+		SeriesStatus:         strings.TrimSpace(item.SeriesStatus),
+		AvailabilityStatus:   normalizeAvailabilityStatus(item.AvailabilityStatus),
+		GovernanceStatus:     normalizeGovernanceStatus(item.GovernanceStatus),
+		ReleaseDate:          item.ReleaseDate,
+		FirstAirDate:         item.FirstAirDate,
+		LastAirDate:          item.LastAirDate,
+		ChildSummary:         buildCatalogChildSummary(input.Rollup),
+		SelectedImages:       buildCatalogSelectedImages(input.Images),
+		ExternalIdentities:   buildCatalogExternalIdentities(input.ExternalIDs),
+		Tags:                 ensureCatalogTagDetails(input.Tags),
+		Genres:               buildCatalogGenres(input.Tags),
+		SourceEvidence:       buildCatalogSourceEvidence(input.Sources),
+		FieldStates:          buildCatalogFieldStates(input.FieldStates),
+		Cast:                 ensureCatalogPersonDetails(input.Cast),
+		Directors:            ensureCatalogPersonDetails(input.Directors),
+		Seasons:              ensureCatalogSeasonDetails(input.Seasons),
+		Episodes:             ensureCatalogEpisodeDetails(input.Episodes),
+		EpisodeContext:       input.EpisodeContext,
+		SeriesPlaybackTarget: input.SeriesPlaybackTarget,
+		SameSeasonEpisodes:   ensureCatalogEpisodeShelfItems(input.SameSeasonEpisodes),
+		Assets:               ensureCatalogAssetDetails(input.Assets),
+		RelatedItems:         ensureCatalogListItems(input.Related),
 	}
 }
 

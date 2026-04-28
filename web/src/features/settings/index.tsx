@@ -1,5 +1,10 @@
 import { Link, Outlet } from '@tanstack/react-router'
-import { ArrowLeftIcon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  CastIcon,
+  CircleUserRoundIcon,
+  SettingsIcon,
+} from 'lucide-react'
 
 import { AppTopBar } from '#/components/app-top-bar'
 import { Button } from '#/components/ui/button'
@@ -30,6 +35,37 @@ export default function SettingsLayout() {
                 媒体源、媒体库与系统偏好
               </div>
             </div>
+          </>
+        }
+        rightSlot={
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            >
+              <CastIcon className="size-4" />
+              <span className="sr-only">投屏</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            >
+              <CircleUserRoundIcon className="size-4" />
+              <span className="sr-only">用户</span>
+            </Button>
+            <Button
+              asChild
+              variant="ghost"
+              size="icon-sm"
+              className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            >
+              <Link to="/settings">
+                <SettingsIcon className="size-4" />
+                <span className="sr-only">系统设置</span>
+              </Link>
+            </Button>
           </>
         }
       />

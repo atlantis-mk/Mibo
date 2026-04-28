@@ -149,6 +149,16 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 				return err
 			}
 		}
+		if err := tx.Exec(`DELETE FROM media_streams WHERE file_id = ? AND NOT EXISTS (SELECT 1 FROM inventory_files WHERE id = ? AND deleted_at IS NULL)`, file.ID, file.ID).Error; err != nil {
+			return err
+		}
+		var fileCount int64
+		if err := tx.Model(&database.InventoryFile{}).Where("id = ? AND deleted_at IS NULL", file.ID).Count(&fileCount).Error; err != nil {
+			return err
+		}
+		if fileCount == 0 {
+			return gorm.ErrRecordNotFound
+		}
 
 		assetIDs, err := assetIDsForInventoryFile(tx, file.ID)
 		if err != nil {
@@ -295,16 +305,16 @@ func buildTechnicalSummaryJSON(parsed ffprobeOutput, updates map[string]any) (st
 	if videoCodec, ok := updates["video_codec"].(string); ok && strings.TrimSpace(videoCodec) != "" {
 		summary["video_codec"] = videoCodec
 	}
-	if durationSeconds, ok := updates["duration_seconds"].(*float64); ok {
+	if durationSeconds, ok := updates["duration_seconds"].(*float64); ok && durationSeconds != nil {
 		summary["duration_seconds"] = *durationSeconds
 	}
-	if bitRate, ok := updates["bit_rate"].(*int64); ok {
+	if bitRate, ok := updates["bit_rate"].(*int64); ok && bitRate != nil {
 		summary["bit_rate"] = *bitRate
 	}
-	if width, ok := updates["width"].(*int); ok {
+	if width, ok := updates["width"].(*int); ok && width != nil {
 		summary["width"] = *width
 	}
-	if height, ok := updates["height"].(*int); ok {
+	if height, ok := updates["height"].(*int); ok && height != nil {
 		summary["height"] = *height
 	}
 

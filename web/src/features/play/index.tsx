@@ -5,12 +5,14 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import {
   AlertCircleIcon,
   ArrowLeftIcon,
+  GaugeIcon,
   LoaderCircleIcon,
   MaximizeIcon,
   MonitorUpIcon,
   PauseIcon,
   PictureInPicture2Icon,
   PlayIcon,
+  SearchIcon,
   SkipBackIcon,
   SkipForwardIcon,
   Volume2Icon,
@@ -21,6 +23,16 @@ import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '#/components/ui/dropdown-menu'
+import {
   catalogItemDetailQueryOptions,
   catalogItemProgressQueryOptions,
   catalogPlaybackQueryOptions,
@@ -29,6 +41,8 @@ import {
 } from '#/lib/mibo-query'
 import { cn } from '#/lib/utils'
 import { useAuthStore } from '#/stores/auth-store'
+
+const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2] as const
 
 type PlayExperienceProps = {
   itemId: number
@@ -60,6 +74,7 @@ export default function PlayExperience({
   const [isPaused, setIsPaused] = useState(false)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
+  const [playbackRate, setPlaybackRate] = useState(1)
   const [isChromeVisible, setIsChromeVisible] = useState(true)
 
   const itemQuery = useQuery({
@@ -216,6 +231,7 @@ export default function PlayExperience({
       setIsPaused(player.paused)
       setVolume(player.volume)
       setIsMuted(player.muted)
+      setPlaybackRate(player.playbackRate)
     }
 
     const handlePause = () => {
@@ -235,6 +251,9 @@ export default function PlayExperience({
     const handleVolumeChange = () => {
       syncState()
     }
+    const handleRateChange = () => {
+      syncState()
+    }
     const handleEnded = () => {
       syncState()
       void persistProgress({ force: true, completed: true })
@@ -249,6 +268,7 @@ export default function PlayExperience({
     player.addEventListener('timeupdate', handleTimeUpdate)
     player.addEventListener('loadedmetadata', handleLoadedMetadata)
     player.addEventListener('volumechange', handleVolumeChange)
+    player.addEventListener('ratechange', handleRateChange)
     player.addEventListener('ended', handleEnded)
     player.addEventListener('error', handleError)
 
@@ -258,10 +278,20 @@ export default function PlayExperience({
       player.removeEventListener('timeupdate', handleTimeUpdate)
       player.removeEventListener('loadedmetadata', handleLoadedMetadata)
       player.removeEventListener('volumechange', handleVolumeChange)
+      player.removeEventListener('ratechange', handleRateChange)
       player.removeEventListener('ended', handleEnded)
       player.removeEventListener('error', handleError)
     }
   }, [playback])
+
+  useEffect(() => {
+    const player = playerRef.current
+    if (!player) {
+      return
+    }
+
+    player.playbackRate = playbackRate
+  }, [playback?.url, playbackRate])
 
   useEffect(() => {
     if (!playback) {
@@ -495,6 +525,12 @@ export default function PlayExperience({
               />
             </div>
 
+            <SubtitleMenu side="bottom" />
+            <PlaybackRateMenu
+              playerRef={playerRef}
+              playbackRate={playbackRate}
+              side="bottom"
+            />
             <PlayerIconButton
               onClick={() => void requestPictureInPicture(playerRef)}
             >
@@ -542,6 +578,12 @@ export default function PlayExperience({
             </div>
 
             <div className="hidden items-center gap-2 sm:flex">
+              <SubtitleMenu side="top" />
+              <PlaybackRateMenu
+                playerRef={playerRef}
+                playbackRate={playbackRate}
+                side="top"
+              />
               <PlayerIconButton
                 onClick={() => void requestPictureInPicture(playerRef)}
               >
@@ -655,6 +697,126 @@ function PlayerIconButton({
   )
 }
 
+function SubtitleMenu({ side }: { side: 'top' | 'bottom' }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="字幕设置"
+          className="inline-flex size-10 items-center justify-center rounded-full bg-white/6 text-white/82 transition hover:bg-white/12 hover:text-white"
+        >
+          <SubtitleGlyph className="scale-90" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" side={side} sideOffset={8}>
+        <DropdownMenuLabel>字幕</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value="off">
+          <DropdownMenuRadioItem value="off">
+            <div className="flex min-w-0 items-center gap-3 pr-8">
+              <SubtitleGlyph />
+              <span>关</span>
+            </div>
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+          }}
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <SearchIcon className="size-4" />
+            <span>搜索字幕</span>
+          </div>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function SubtitleGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={cn('h-6 w-6 text-current', className)}
+    >
+      <rect
+        x="3.5"
+        y="4"
+        width="17"
+        height="16"
+        rx="2.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+      <path
+        d="M10 9h-3v6h3M17 9h-3v6h3"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+    </svg>
+  )
+}
+
+function PlaybackRateMenu({
+  playerRef,
+  playbackRate,
+  side,
+}: {
+  playerRef: RefObject<HTMLVideoElement | null>
+  playbackRate: number
+  side: 'top' | 'bottom'
+}) {
+  const selectedPlaybackRate = String(
+    playerRef.current?.playbackRate ?? playbackRate,
+  )
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`播放速度 ${formatPlaybackRate(playbackRate)}`}
+          className="inline-flex size-10 items-center justify-center rounded-full bg-white/6 text-white/82 transition hover:bg-white/12 hover:text-white"
+        >
+          <GaugeIcon className="size-5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        side={side}
+        className="w-28 min-w-28 border border-white/10 bg-black/90 p-1 text-white shadow-2xl backdrop-blur-xl"
+      >
+        <DropdownMenuLabel className="text-white/50">
+          播放速度
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={selectedPlaybackRate}
+          onValueChange={(value) => {
+            setPlayerPlaybackRate(playerRef, Number(value))
+          }}
+        >
+          {PLAYBACK_RATES.map((rate) => (
+            <DropdownMenuRadioItem
+              key={rate}
+              value={String(rate)}
+              className="text-white/82 focus:bg-white/12 focus:text-white"
+            >
+              {formatPlaybackRate(rate)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function ControlButton({
   children,
   onClick,
@@ -735,6 +897,22 @@ function toggleMute(playerRef: RefObject<HTMLVideoElement | null>) {
   }
 
   player.muted = !player.muted
+}
+
+function setPlayerPlaybackRate(
+  playerRef: RefObject<HTMLVideoElement | null>,
+  playbackRate: number,
+) {
+  const player = playerRef.current
+  if (!player || !Number.isFinite(playbackRate)) {
+    return
+  }
+
+  player.playbackRate = playbackRate
+}
+
+function formatPlaybackRate(rate: number) {
+  return `${rate}x`
 }
 
 async function requestFullscreen(

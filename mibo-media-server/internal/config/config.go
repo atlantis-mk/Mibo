@@ -99,6 +99,7 @@ type WorkerConfig struct {
 	Enabled              bool
 	PollInterval         time.Duration
 	RefreshIntervalHours int
+	ProbeWorkers         int
 }
 
 func Load() (Config, error) {
@@ -165,6 +166,7 @@ func Load() (Config, error) {
 			Enabled:              getBoolEnv("MIBO_WORKER_ENABLED", true),
 			PollInterval:         getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
 			RefreshIntervalHours: getIntEnv("MIBO_WORKER_REFRESH_INTERVAL_HOURS", 0),
+			ProbeWorkers:         getBoundedIntEnv("MIBO_PROBE_WORKERS", 2, 1, 8),
 		},
 	}
 
@@ -224,6 +226,25 @@ func getIntEnv(key string, fallback int) int {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
 		return fallback
+	}
+	return parsed
+}
+
+func getBoundedIntEnv(key string, fallback int, minValue int, maxValue int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	if parsed < minValue {
+		return minValue
+	}
+	if maxValue > 0 && parsed > maxValue {
+		return maxValue
 	}
 	return parsed
 }

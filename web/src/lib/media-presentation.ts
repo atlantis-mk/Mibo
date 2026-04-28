@@ -68,6 +68,7 @@ export type CatalogDetailPresentation = {
   series_title_display: string
   episode_label: string
   episode_context?: CatalogEpisodeParentContext
+  series_playback_target?: CatalogItemDetail['series_playback_target']
   primary_visual_url: string
   default_season_number?: number
   same_season_episodes: CatalogEpisodeRail[]
@@ -142,6 +143,7 @@ export function catalogItemDetailToPresentation(
       episodeContext?.episode_number_end,
     ),
     episode_context: episodeContext,
+    series_playback_target: item.series_playback_target,
     primary_visual_url:
       item.type === 'episode'
         ? episodeStill || seriesBackdrop || seriesPoster
@@ -326,12 +328,13 @@ export function buildPresentedCatalogItem(
   view: MediaDetailView,
 ) {
   if (item.type === 'episode' || view === 'episode') {
+    const episodeTitle = item.title || item.original_title
     return {
       ...item,
       title: item.series_title_display || item.title,
       original_title: item.episode_label
-        ? `${item.episode_label} - ${item.original_title || item.title}`
-        : item.original_title,
+        ? `${item.episode_label} - ${episodeTitle}`
+        : episodeTitle,
       poster_url: item.primary_visual_url || item.poster_url,
       backdrop_url: item.backdrop_url || item.primary_visual_url,
     }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
@@ -31,12 +32,20 @@ type Runner struct {
 	schedule *schedule.Service
 	settings *settings.Service
 	interval time.Duration
+	probeSem chan struct{}
 }
 
 func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *library.Service, metadataSvc *metadata.Service, probeSvc *probe.Service, settingsSvc *settings.Service, args ...any) *Runner {
 	interval := cfg.PollInterval
 	if interval <= 0 {
 		interval = 2 * time.Second
+	}
+	probeWorkers := cfg.ProbeWorkers
+	if probeWorkers < 1 {
+		probeWorkers = 1
+	}
+	if probeWorkers > 8 {
+		probeWorkers = 8
 	}
 
 	runner := &Runner{
@@ -47,6 +56,9 @@ func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *libra
 		probe:    probeSvc,
 		settings: settingsSvc,
 		interval: interval,
+	}
+	if probeWorkers > 1 {
+		runner.probeSem = make(chan struct{}, probeWorkers)
 	}
 	for _, arg := range args {
 		if catalogSvc, ok := arg.(*catalog.Service); ok {
@@ -113,6 +125,11 @@ func (r *Runner) RunOnce(ctx context.Context) {
 func (r *Runner) runOnce(ctx context.Context) {
 	r.enqueueDueSchedules(ctx)
 	r.ensureListenerReconcileCoverage(ctx)
+	var probeWG sync.WaitGroup
+	waitForProbes := func() {
+		probeWG.Wait()
+	}
+	defer waitForProbes()
 	for {
 		job, err := r.jobs.ClaimNext(ctx)
 		if err != nil {
@@ -123,20 +140,40 @@ func (r *Runner) runOnce(ctx context.Context) {
 			return
 		}
 
-		if err := r.handleJob(ctx, job); err != nil {
-			log.Printf("worker: job %d (%s) failed: %v", job.ID, job.Kind, err)
-			r.markScheduleRunFinished(ctx, job, schedule.StatusFailed, err.Error())
-			if failErr := r.jobs.Fail(ctx, job.ID, err); failErr != nil {
-				log.Printf("worker: mark job %d failed: %v", job.ID, failErr)
-			}
+		if r.shouldRunProbeConcurrently(job) {
+			r.probeSem <- struct{}{}
+			probeWG.Add(1)
+			go func(probeJob database.Job) {
+				defer probeWG.Done()
+				defer func() { <-r.probeSem }()
+				r.finishJob(ctx, probeJob, r.handleJob(ctx, probeJob))
+			}(job)
 			continue
 		}
 
-		if err := r.jobs.Complete(ctx, job.ID); err != nil {
-			log.Printf("worker: mark job %d completed: %v", job.ID, err)
-		}
-		r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, "completed")
+		waitForProbes()
+		r.finishJob(ctx, job, r.handleJob(ctx, job))
 	}
+}
+
+func (r *Runner) shouldRunProbeConcurrently(job database.Job) bool {
+	return r.probeSem != nil && job.Kind == library.JobKindProbeInventoryFile
+}
+
+func (r *Runner) finishJob(ctx context.Context, job database.Job, err error) {
+	if err != nil {
+		log.Printf("worker: job %d (%s) failed: %v", job.ID, job.Kind, err)
+		r.markScheduleRunFinished(ctx, job, schedule.StatusFailed, err.Error())
+		if failErr := r.jobs.Fail(ctx, job.ID, err); failErr != nil {
+			log.Printf("worker: mark job %d failed: %v", job.ID, failErr)
+		}
+		return
+	}
+
+	if err := r.jobs.Complete(ctx, job.ID); err != nil {
+		log.Printf("worker: mark job %d completed: %v", job.ID, err)
+	}
+	r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, "completed")
 }
 
 func (r *Runner) handleJob(ctx context.Context, job database.Job) error {

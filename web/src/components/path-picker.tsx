@@ -70,7 +70,7 @@ export function PathPicker({
   const isLocked = !ready || browse === null
 
   return (
-    <div className="grid gap-3">
+    <div className="grid min-w-0 gap-3">
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
         <Input
           value={value}
@@ -106,9 +106,9 @@ export function PathPicker({
         </Button>
       </div>
 
-      <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-muted/20 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-          <div>
+          <div className="min-w-0 truncate">
             {browseLabel}
             {browserState ? `：${browserState.current_path}` : ''}
           </div>
@@ -142,8 +142,8 @@ export function PathPicker({
           </div>
         ) : null}
 
-        <ScrollArea className="mt-3 h-44 rounded-lg border bg-background/80">
-          <div className="grid gap-1 p-2">
+        <ScrollArea className="mt-3 h-44 min-w-0 overflow-hidden rounded-lg border bg-background/80">
+          <div className="grid min-w-0 gap-1 p-2">
             {isLocked ? (
               <div className="px-3 py-6 text-sm text-muted-foreground">
                 {lockedMessage ?? '先完成上一步，再选择路径。'}
@@ -155,19 +155,19 @@ export function PathPicker({
                   type="button"
                   variant="ghost"
                   className={cn(
-                    'h-auto w-full justify-between px-3 py-2 text-left text-sm whitespace-normal',
+                    'h-auto w-full min-w-0 justify-between overflow-hidden px-3 py-2 text-left text-sm whitespace-normal',
                     value === item.path && 'bg-muted',
                   )}
                   onClick={() => void loadPath(item.path)}
                   disabled={disabled || isLoading}
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">{item.name}</div>
                     <div className="truncate text-xs text-muted-foreground">
                       {item.path}
                     </div>
                   </div>
-                  <ChevronRightIcon className="size-4 text-muted-foreground" />
+                  <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
                 </Button>
               ))
             ) : (

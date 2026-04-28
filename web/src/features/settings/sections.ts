@@ -1,21 +1,36 @@
 import {
   BellIcon,
   CalendarClockIcon,
+  ClipboardListIcon,
   DatabaseIcon,
+  GlobeIcon,
+  LayoutDashboardIcon,
+  MonitorSmartphoneIcon,
   KeyRoundIcon,
   PlayCircleIcon,
+  RadioIcon,
   ShieldCheckIcon,
   SparklesIcon,
+  UserIcon,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 
 export type SettingsSectionPath =
+  | '/settings/general'
+  | '/settings/users'
+  | '/settings/devices'
+  | '/settings/dlna'
+  | '/settings/console'
   | '/settings/library'
+  | '/settings/database'
+  | '/settings/network'
+  | '/settings/live-tv'
   | '/settings/metadata-sources'
   | '/settings/playback'
   | '/settings/notifications'
   | '/settings/security'
   | '/settings/schedules'
+  | '/settings/logs'
   | '/settings/metadata'
 
 export type SettingsSection = {
@@ -30,6 +45,51 @@ export type SettingsSection = {
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
+    key: 'users',
+    icon: UserIcon,
+    title: '用户',
+    description: '管理服务器账号、角色、最近活动与访问权限。',
+    status: '账号',
+    to: '/settings/users',
+    matchPrefix: '/settings/users',
+  },
+  {
+    key: 'devices',
+    icon: MonitorSmartphoneIcon,
+    title: '设备',
+    description: '查看连接过服务器的客户端、最近活动和使用用户。',
+    status: '客户端',
+    to: '/settings/devices',
+    matchPrefix: '/settings/devices',
+  },
+  {
+    key: 'dlna',
+    icon: RadioIcon,
+    title: 'DLNA',
+    description: '管理 DLNA 播放、服务器发现、默认用户和设备 Profiles。',
+    status: '设备',
+    to: '/settings/dlna',
+    matchPrefix: '/settings/dlna',
+  },
+  {
+    key: 'general',
+    icon: GlobeIcon,
+    title: '通用',
+    description: '服务器基础行为、界面语言、维护模式和全局 Web 外观。',
+    status: '基础',
+    to: '/settings/general',
+    matchPrefix: '/settings/general',
+  },
+  {
+    key: 'console',
+    icon: LayoutDashboardIcon,
+    title: '控制台',
+    description: '服务器状态、媒体指标、活动和维护快捷入口。',
+    status: '总览',
+    to: '/settings/console',
+    matchPrefix: '/settings/console',
+  },
+  {
     key: 'library',
     icon: DatabaseIcon,
     title: '媒体管理',
@@ -37,6 +97,24 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     status: '核心',
     to: '/settings/library',
     matchPrefix: '/settings/library',
+  },
+  {
+    key: 'network',
+    icon: GlobeIcon,
+    title: '网络',
+    description: '配置局域网、远程访问、端口映射、TLS 和代理识别策略。',
+    status: '服务器',
+    to: '/settings/network',
+    matchPrefix: '/settings/network',
+  },
+  {
+    key: 'database',
+    icon: DatabaseIcon,
+    title: '数据库',
+    description: '调整缓存尺寸、关闭时优化和下次启动数据库清理行为。',
+    status: '高级',
+    to: '/settings/database',
+    matchPrefix: '/settings/database',
   },
   {
     key: 'metadata-sources',
@@ -50,11 +128,20 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     key: 'playback',
     icon: PlayCircleIcon,
-    title: '播放体验',
-    description: '默认画质、设备档案和续播策略。',
-    status: '偏好',
+    title: '转码',
+    description: '硬件加速、编码器、临时路径、字幕处理和 HDR 色调映射。',
+    status: '服务器',
     to: '/settings/playback',
     matchPrefix: '/settings/playback',
+  },
+  {
+    key: 'live-tv',
+    icon: RadioIcon,
+    title: '直播电视',
+    description: '配置电视输入源、节目指南、频道列表和录制行为。',
+    status: '直播',
+    to: '/settings/live-tv',
+    matchPrefix: '/settings/live-tv',
   },
   {
     key: 'notifications',
@@ -77,11 +164,20 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     key: 'schedules',
     icon: CalendarClockIcon,
-    title: '任务工作台',
-    description: '管理启停、立即运行和最近执行历史。',
-    status: '工作台',
+    title: '计划任务',
+    description: '查看维护任务状态，并手动触发后台执行。',
+    status: '维护',
     to: '/settings/schedules',
     matchPrefix: '/settings/schedules',
+  },
+  {
+    key: 'logs',
+    icon: ClipboardListIcon,
+    title: '日志',
+    description: '查看和管理服务器日志、转码日志与历史日志文件。',
+    status: '维护',
+    to: '/settings/logs',
+    matchPrefix: '/settings/logs',
   },
   {
     key: 'metadata',

@@ -518,6 +518,63 @@ func TestScanCatalogWriterCreatesMovieKernelRows(t *testing.T) {
 	assertEvidencePayloadKeys(t, source.PayloadJSON, []string{"detected_title", "hashes_json", "provider_name", "stable_identity_key", "storage_path"})
 }
 
+func TestScanCatalogWriterPreservesMetadataFieldsOnMovieRescan(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	catalogSvc := catalog.NewService(db)
+	initialYear := 2024
+	matchedYear := 2025
+	rescannedYear := 2026
+	artifact := catalogScanArtifact{
+		ItemType:        catalog.ItemTypeMovie,
+		ItemPath:        "/library/Movie A (2024)/movie.mkv",
+		SourcePath:      "/library/Movie A (2024)/movie.mkv",
+		Title:           "Movie A",
+		OriginalTitle:   "Movie.A.2024",
+		Year:            &initialYear,
+		StorageProvider: "local",
+		SizeBytes:       4096,
+		Container:       "mkv",
+	}
+
+	result, err := svc.writeCatalogScanMovie(ctx, libraryRecord, artifact)
+	if err != nil {
+		t.Fatalf("write initial movie artifact: %v", err)
+	}
+	if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: result.Item.ID, FieldKey: "title", Value: "Matched Movie"}); err != nil {
+		t.Fatalf("apply matched title: %v", err)
+	}
+	if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: result.Item.ID, FieldKey: "original_title", Value: "Matched Original"}); err != nil {
+		t.Fatalf("apply matched original title: %v", err)
+	}
+	if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: result.Item.ID, FieldKey: "year", Value: matchedYear}); err != nil {
+		t.Fatalf("apply matched year: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", result.Item.ID).Updates(map[string]any{
+		"title":          "Previously Reverted Title",
+		"original_title": "Previously.Reverted",
+		"year":           2001,
+	}).Error; err != nil {
+		t.Fatalf("simulate stale scanner overwrite: %v", err)
+	}
+
+	artifact.Title = "Movie A Remux"
+	artifact.OriginalTitle = "Movie.A.Remux.2026"
+	artifact.Year = &rescannedYear
+	if _, err := svc.writeCatalogScanMovie(ctx, libraryRecord, artifact); err != nil {
+		t.Fatalf("write rescan movie artifact: %v", err)
+	}
+
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).First(&item, result.Item.ID).Error; err != nil {
+		t.Fatalf("reload movie item: %v", err)
+	}
+	if item.Title != "Matched Movie" || item.OriginalTitle != "Matched Original" || item.Year == nil || *item.Year != matchedYear {
+		t.Fatalf("expected metadata fields to survive rescan, got %#v", item)
+	}
+}
+
 func TestScanCatalogWriterCreatesEpisodeHierarchyWithLocalEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -692,7 +749,7 @@ func TestScanCatalogWriterReusesProviderCreatedDescendantsByHierarchyIdentity(t 
 	if err := db.WithContext(ctx).First(&reloadedSeason, season.ID).Error; err != nil {
 		t.Fatalf("reload season: %v", err)
 	}
-	if reloadedSeason.Path != "show-one/season-01" || reloadedSeason.GovernanceStatus != catalog.GovernanceMatched {
+	if reloadedSeason.Path != "show-one/season-01" || reloadedSeason.Title != "Season 1" || reloadedSeason.GovernanceStatus != catalog.GovernanceMatched {
 		t.Fatalf("expected season path rewrite without governance loss, got %#v", reloadedSeason)
 	}
 
@@ -700,7 +757,7 @@ func TestScanCatalogWriterReusesProviderCreatedDescendantsByHierarchyIdentity(t 
 	if err := db.WithContext(ctx).First(&reloadedEpisode, episode.ID).Error; err != nil {
 		t.Fatalf("reload episode: %v", err)
 	}
-	if reloadedEpisode.Path != "show-one/season-01/episode-0002" || reloadedEpisode.AvailabilityStatus != catalog.AvailabilityAvailable || reloadedEpisode.GovernanceStatus != catalog.GovernanceMatched {
+	if reloadedEpisode.Path != "show-one/season-01/episode-0002" || reloadedEpisode.Title != "Matched Episode 2" || reloadedEpisode.AvailabilityStatus != catalog.AvailabilityAvailable || reloadedEpisode.GovernanceStatus != catalog.GovernanceMatched {
 		t.Fatalf("expected reused episode to become available while preserving governance, got %#v", reloadedEpisode)
 	}
 

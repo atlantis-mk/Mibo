@@ -339,15 +339,23 @@ export function ContinueWatchingRail({
     <section className="border-t border-border/40 bg-background px-4 py-10 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-[1600px]">
         <MediaRail title="继续观看">
-          {entries.map((entry) => (
-            <MediaPosterCard
-              key={`${entry.item.id}-${entry.asset_id ?? 'default'}`}
-              item={entry.item}
-              progress={entry}
-              isFavorite={favoriteIds?.has(entry.item.id) ?? entry.favorite}
-              onFavoriteToggle={onFavoriteToggle}
-            />
-          ))}
+          {entries.map((entry) => {
+            const displayItem = entry.display_item ?? entry.item
+            const playbackItem = entry.play_item ?? entry.item
+
+            return (
+              <MediaPosterCard
+                key={`${entry.item.id}-${entry.asset_id ?? 'default'}`}
+                item={displayItem}
+                playbackItem={playbackItem}
+                progress={entry}
+                isFavorite={Boolean(
+                  favoriteIds?.has(displayItem.id) || entry.favorite,
+                )}
+                onFavoriteToggle={onFavoriteToggle}
+              />
+            )
+          })}
         </MediaRail>
       </div>
     </section>

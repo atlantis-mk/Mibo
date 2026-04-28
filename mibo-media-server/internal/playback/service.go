@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/probe"
 	"github.com/atlan/mibo-media-server/internal/providers"
@@ -96,9 +97,32 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", req.ItemID).First(&item).Error; err != nil {
 		return PlaybackSource{}, err
 	}
+	if item.Type == "series" {
+		target, err := seriesplayback.Select(ctx, s.db, item.ID, req.UserID)
+		if err != nil {
+			return PlaybackSource{}, err
+		}
+		if target == nil {
+			return PlaybackSource{
+				ItemID:   item.ID,
+				Title:    item.Title,
+				Type:     item.Type,
+				Playable: false,
+				Decision: PlaybackDecision{Kind: "unplayable", ClientProfile: req.ClientProfile, SelectedBy: "series_target", Reasons: []DecisionReason{{Code: "series_has_no_playable_episode", Category: "availability", Message: "series has no locally playable episode target"}}},
+			}, nil
+		}
+		if target.AssetID != nil && req.AssetID == 0 {
+			req.AssetID = *target.AssetID
+		}
+		req.ItemID = target.EpisodeID
+		item = database.CatalogItem{}
+		if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", req.ItemID).First(&item).Error; err != nil {
+			return PlaybackSource{}, fmt.Errorf("load resolved series episode: %w", err)
+		}
+	}
 	candidates, err := s.loadCatalogPlaybackCandidates(ctx, req.ItemID)
 	if err != nil {
-		return PlaybackSource{}, err
+		return PlaybackSource{}, fmt.Errorf("load catalog playback candidates: %w", err)
 	}
 	if len(candidates) == 0 {
 		return PlaybackSource{
@@ -123,7 +147,7 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 
 	fileLink, err := s.GetInventoryFileLink(ctx, selected.File.ID)
 	if err != nil {
-		return PlaybackSource{}, err
+		return PlaybackSource{}, fmt.Errorf("load inventory file link: %w", err)
 	}
 	pseudoFile, audioTracks, subtitleTracks := inventoryCandidateMediaInfo(selected)
 	checks := append([]PlaybackCheck{}, fileLink.Checks...)

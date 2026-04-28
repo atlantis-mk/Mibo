@@ -31,13 +31,11 @@ import {
 import { cn } from '#/lib/utils'
 
 import {
-  describeMatchStatus,
   formatAssetLabel,
   formatDateTime,
   formatMediaType,
   formatRuntime,
   formatSeconds,
-  getDisplayMatchStatus,
   getPrimaryCatalogAsset,
 } from './standalone-media-detail-utils'
 
@@ -64,6 +62,7 @@ export function DetailHeroSection({
   overviewExpanded: boolean
   onOverviewExpandedChange: (value: boolean) => void
   onOpenPlaybackEntry: (options?: {
+    itemId?: number
     fromStart?: boolean
     assetId?: number
   }) => void
@@ -79,11 +78,15 @@ export function DetailHeroSection({
 }) {
   const primaryAsset = getPrimaryCatalogAsset(item)
   const isEpisode = item.type === 'episode'
+  const seriesPlaybackTarget =
+    item.type === 'series' ? item.series_playback_target : undefined
   const canPlay =
-    item.availability_status === 'available' && Boolean(primaryAsset)
-  const hasResumableProgress = Boolean(
-    progress && !progress.watched && progress.position_seconds > 0,
-  )
+    item.type === 'series'
+      ? Boolean(seriesPlaybackTarget)
+      : item.availability_status === 'available' && Boolean(primaryAsset)
+  const hasResumableProgress =
+    Boolean(progress && !progress.watched && progress.position_seconds > 0) ||
+    seriesPlaybackTarget?.selection_reason === 'continue'
   const primaryPlayLabel = canPlay
     ? hasResumableProgress
       ? '继续播放'
@@ -95,7 +98,6 @@ export function DetailHeroSection({
   const yearLabel = formatMediaDetailYearRange(item)
   const titleLine = item.original_title || item.title
   const assetSummary = formatAssetLabel(primaryAsset)
-  const matchStatus = getDisplayMatchStatus(item)
   const genreLabel = item.genres.slice(0, 3).join(' / ')
   const seasonSummary = formatSeasonSummary(item)
   const watched = Boolean(progress?.watched)
@@ -156,7 +158,12 @@ export function DetailHeroSection({
           <Button
             size="lg"
             className="h-12 rounded-full px-8 text-base"
-            onClick={() => onOpenPlaybackEntry({ assetId: primaryAsset?.id })}
+            onClick={() =>
+              onOpenPlaybackEntry({
+                itemId: seriesPlaybackTarget?.episode_item_id,
+                assetId: seriesPlaybackTarget?.asset_id ?? primaryAsset?.id,
+              })
+            }
             disabled={!canPlay}
           >
             <Play className="size-4 fill-current" />
@@ -209,8 +216,10 @@ export function DetailHeroSection({
                 <DropdownMenuItem
                   onSelect={() =>
                     onOpenPlaybackEntry({
+                      itemId: seriesPlaybackTarget?.episode_item_id,
                       fromStart: true,
-                      assetId: primaryAsset?.id,
+                      assetId:
+                        seriesPlaybackTarget?.asset_id ?? primaryAsset?.id,
                     })
                   }
                 >
@@ -271,15 +280,6 @@ export function DetailHeroSection({
               {item.availability_status === 'unaired'
                 ? '这一集尚未播出，仍可查看元数据和治理信息。'
                 : '这一集还没有可播放的本地资源，仍可查看元数据和治理信息。'}
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
-        {describeMatchStatus(matchStatus) && matchStatus !== 'matched' ? (
-          <Alert className="border-border/40 bg-card/75 text-foreground backdrop-blur-sm">
-            <AlertTitle>元数据状态</AlertTitle>
-            <AlertDescription className="text-muted-foreground">
-              {describeMatchStatus(matchStatus)}
             </AlertDescription>
           </Alert>
         ) : null}

@@ -36,6 +36,136 @@ export type SetupStatus = {
   library_count: number
 }
 
+export type ConsoleStatus =
+  | 'ok'
+  | 'warning'
+  | 'error'
+  | 'unknown'
+  | 'unavailable'
+  | 'not_configured'
+
+export type ConsoleServerSummary = {
+  name: string
+  service: string
+  status: ConsoleStatus
+  version: string
+  update_status: string
+  api_address: string
+  port: number
+  uptime_seconds: number
+  storage_provider: string
+  storage_root: string
+  database_driver: string
+}
+
+export type ConsoleAccessAddress = {
+  kind: 'local' | 'lan' | 'remote'
+  label: string
+  url?: string
+  status: ConsoleStatus | 'available'
+  route?: string
+  message?: string
+  copyable: boolean
+}
+
+export type ConsoleMediaSummary = {
+  libraries: number
+  media_sources: number
+  catalog_items: number
+  inventory_files: number
+  movies: number
+  series: number
+  episodes: number
+  people: number
+  active_jobs: number
+  failed_jobs: number
+  schedules: number
+  enabled_schedules: number
+  warnings: number
+}
+
+export type ConsoleSectionStatus = {
+  status: ConsoleStatus
+  message?: string
+}
+
+export type ConsoleModuleStatus = {
+  name: string
+  status: ConsoleStatus
+  message?: string
+}
+
+export type ConsoleActivityEvent = {
+  id: string
+  type: string
+  severity: 'info' | 'warning' | 'error'
+  message: string
+  user?: string
+  device?: string
+  media_title?: string
+  timestamp: string
+}
+
+export type ConsoleDeviceSummary = {
+  id: string
+  name: string
+  client_type?: string
+  user?: string
+  state?: string
+  media_title?: string
+  last_seen_at: string
+}
+
+export type ConsoleQuickAction = {
+  id: string
+  label: string
+  description: string
+  kind: 'route' | 'mutation' | 'unsupported'
+  route?: string
+  method?: string
+  endpoint?: string
+  disabled: boolean
+  disabled_reason?: string
+  risk: 'safe' | 'expensive' | 'danger'
+  confirm: boolean
+}
+
+export type ConsoleSectionWarning = {
+  section: string
+  message: string
+}
+
+export type ConsoleSummary = {
+  server: ConsoleServerSummary
+  access: {
+    addresses: ConsoleAccessAddress[]
+  }
+  media: ConsoleMediaSummary
+  health: {
+    database: ConsoleSectionStatus
+    storage: ConsoleSectionStatus
+    modules: ConsoleModuleStatus[]
+  }
+  devices: ConsoleDeviceSummary[]
+  quick_actions: ConsoleQuickAction[]
+  activity: ConsoleActivityEvent[]
+  warnings: ConsoleSectionWarning[]
+}
+
+export type ConsoleActionResult = Record<string, unknown>
+
+export type AdminLogFile = {
+  name: string
+  modified_at: string
+  size_bytes: number
+  kind: string
+}
+
+export type AdminLogContent = {
+  name: string
+  content: string
+}
+
 export type Library = {
   id: number
   name: string
@@ -383,6 +513,14 @@ export type CatalogSeasonDetail = {
   episodes?: CatalogEpisodeDetail[]
 }
 
+export type CatalogSeriesPlaybackTarget = {
+  episode_item_id: number
+  asset_id?: number
+  title: string
+  label?: string
+  selection_reason: string
+}
+
 export type CatalogItemDetail = {
   id: number
   library_id: number
@@ -414,6 +552,7 @@ export type CatalogItemDetail = {
   seasons?: CatalogSeasonDetail[]
   episodes?: CatalogEpisodeDetail[]
   episode_context?: CatalogEpisodeParentContext
+  series_playback_target?: CatalogSeriesPlaybackTarget
   same_season_episodes?: CatalogEpisodeShelfItem[]
   assets?: CatalogAssetDetail[]
   related_items?: CatalogListItem[]
@@ -466,6 +605,8 @@ export type ProgressState = {
 export type CatalogUserItemEntry = ProgressState & {
   favorite: boolean
   item: CatalogListItem
+  display_item?: CatalogListItem
+  play_item?: CatalogListItem
 }
 
 export type CatalogLatestByLibrarySection = {
@@ -689,7 +830,7 @@ export function getApiBaseUrl() {
     (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
       /\/$/,
       '',
-    ) ?? 'http://127.0.0.1:8080'
+    ) ?? 'http://localhost:8080'
   )
 }
 
@@ -867,6 +1008,39 @@ export function createMiboApi(options: ApiOptions) {
     },
     listLibraries() {
       return request<Library[]>('/api/v1/libraries')
+    },
+    getConsoleSummary() {
+      return request<ConsoleSummary>('/api/v1/admin/console')
+    },
+    runConsoleAction(actionId: string) {
+      const actionEndpoints: Record<string, string> = {
+        'scan-libraries': '/api/v1/admin/console/actions/scan-libraries',
+        'catalog-consistency':
+          '/api/v1/admin/console/actions/catalog-consistency',
+        'rebuild-projections':
+          '/api/v1/admin/console/actions/rebuild-projections',
+      }
+      const endpoint = actionEndpoints[actionId]
+      if (!endpoint) {
+        throw new Error('unsupported console action')
+      }
+      return request<ConsoleActionResult>(endpoint, { method: 'POST' })
+    },
+    listAdminLogs() {
+      return request<AdminLogFile[]>('/api/v1/admin/logs')
+    },
+    getAdminLog(name: string) {
+      return request<AdminLogContent>(
+        `/api/v1/admin/logs/${encodeURIComponent(name)}`,
+      )
+    },
+    deleteAdminLog(name: string) {
+      return request<{ name: string; status: string }>(
+        `/api/v1/admin/logs/${encodeURIComponent(name)}`,
+        {
+          method: 'DELETE',
+        },
+      )
     },
     getMetadataSettings() {
       return request<MetadataSettings>('/api/v1/settings/metadata')

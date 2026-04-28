@@ -6,6 +6,8 @@ export const miboQueryKeys = {
   authUser: (token: string) => ['auth', 'me', token] as const,
   homeData: (token: string) => ['home', 'hero', token] as const,
   favorites: (token: string) => ['me', 'favorites', token] as const,
+  consoleSummary: (token: string) => ['admin', 'console', token] as const,
+  adminLogs: (token: string) => ['admin', 'logs', token] as const,
   libraryDetail: (token: string, libraryId: number) =>
     ['library', 'detail', token, libraryId] as const,
   libraryBrowse: (
@@ -83,6 +85,20 @@ export function favoritesQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.favorites(token),
     queryFn: () => createAuthedMiboApi(token).listFavorites(),
+  })
+}
+
+export function consoleSummaryQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.consoleSummary(token),
+    queryFn: () => createAuthedMiboApi(token).getConsoleSummary(),
+  })
+}
+
+export function adminLogsQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.adminLogs(token),
+    queryFn: () => createAuthedMiboApi(token).listAdminLogs(),
   })
 }
 

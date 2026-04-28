@@ -25,7 +25,9 @@ type CatalogUserProgressState struct {
 
 type CatalogUserItemEntry struct {
 	CatalogUserProgressState
-	Item CatalogListItem `json:"item"`
+	Item        CatalogListItem  `json:"item"`
+	DisplayItem *CatalogListItem `json:"display_item,omitempty"`
+	PlayItem    *CatalogListItem `json:"play_item,omitempty"`
 }
 
 func (s *Service) ListContinueWatching(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
@@ -43,7 +45,7 @@ func (s *Service) ListContinueWatching(ctx context.Context, userID uint, limit i
 		return nil, err
 	}
 
-	return s.buildUserItemEntries(ctx, rows)
+	return s.buildUserItemEntries(ctx, rows, true)
 }
 
 func (s *Service) ListRecentlyPlayed(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
@@ -61,7 +63,7 @@ func (s *Service) ListRecentlyPlayed(ctx context.Context, userID uint, limit int
 		return nil, err
 	}
 
-	return s.buildUserItemEntries(ctx, rows)
+	return s.buildUserItemEntries(ctx, rows, false)
 }
 
 func (s *Service) ListFavorites(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
@@ -78,7 +80,7 @@ func (s *Service) ListFavorites(ctx context.Context, userID uint, limit int) ([]
 		return nil, err
 	}
 
-	return s.buildUserItemEntries(ctx, rows)
+	return s.buildUserItemEntries(ctx, rows, false)
 }
 
 func (s *Service) SetFavorite(ctx context.Context, userID, itemID uint, favorite bool) (CatalogUserItemEntry, error) {
@@ -113,7 +115,7 @@ func (s *Service) SetFavorite(ctx context.Context, userID, itemID uint, favorite
 		return CatalogUserItemEntry{}, err
 	}
 
-	entries, err := s.buildUserItemEntries(ctx, []database.UserItemData{row})
+	entries, err := s.buildUserItemEntries(ctx, []database.UserItemData{row}, false)
 	if err != nil {
 		return CatalogUserItemEntry{}, err
 	}
@@ -123,7 +125,7 @@ func (s *Service) SetFavorite(ctx context.Context, userID, itemID uint, favorite
 	return entries[0], nil
 }
 
-func (s *Service) buildUserItemEntries(ctx context.Context, rows []database.UserItemData) ([]CatalogUserItemEntry, error) {
+func (s *Service) buildUserItemEntries(ctx context.Context, rows []database.UserItemData, includeDisplayItems bool) ([]CatalogUserItemEntry, error) {
 	if len(rows) == 0 {
 		return []CatalogUserItemEntry{}, nil
 	}
@@ -158,6 +160,36 @@ func (s *Service) buildUserItemEntries(ctx context.Context, rows []database.User
 	for _, item := range listItems {
 		listItemByID[item.ID] = item
 	}
+	displayItemByID := map[uint]CatalogListItem{}
+	if includeDisplayItems {
+		displayIDs := make([]uint, 0, len(rows))
+		seenDisplayIDs := make(map[uint]struct{}, len(rows))
+		for _, item := range orderedItems {
+			if item.Type != ItemTypeEpisode || item.RootID == nil || *item.RootID == item.ID || *item.RootID == 0 {
+				continue
+			}
+			if _, ok := seenDisplayIDs[*item.RootID]; ok {
+				continue
+			}
+			seenDisplayIDs[*item.RootID] = struct{}{}
+			displayIDs = append(displayIDs, *item.RootID)
+		}
+		if len(displayIDs) > 0 {
+			var displayItems []database.CatalogItem
+			if err := s.db.WithContext(ctx).
+				Where("id IN ? AND type = ? AND deleted_at IS NULL", displayIDs, ItemTypeSeries).
+				Find(&displayItems).Error; err != nil {
+				return nil, err
+			}
+			builtDisplayItems, err := s.buildCatalogListItems(ctx, displayItems)
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range builtDisplayItems {
+				displayItemByID[item.ID] = item
+			}
+		}
+	}
 
 	entries := make([]CatalogUserItemEntry, 0, len(rows))
 	for _, row := range rows {
@@ -165,10 +197,20 @@ func (s *Service) buildUserItemEntries(ctx context.Context, rows []database.User
 		if !ok {
 			continue
 		}
-		entries = append(entries, CatalogUserItemEntry{
+		entry := CatalogUserItemEntry{
 			CatalogUserProgressState: catalogUserProgressState(row, item.RuntimeSeconds),
 			Item:                     item,
-		})
+		}
+		if includeDisplayItems {
+			playItem := item
+			entry.PlayItem = &playItem
+			if sourceItem, ok := itemByID[row.ItemID]; ok && sourceItem.Type == ItemTypeEpisode && sourceItem.RootID != nil {
+				if displayItem, ok := displayItemByID[*sourceItem.RootID]; ok {
+					entry.DisplayItem = &displayItem
+				}
+			}
+		}
+		entries = append(entries, entry)
 	}
 
 	return entries, nil

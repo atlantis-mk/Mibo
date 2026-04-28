@@ -286,6 +286,37 @@ func TestProbeInventoryFileSkipsCatalogFallbackArtworkWhenRemoteImagesExist(t *t
 	}
 }
 
+func TestProbeInventoryFileDoesNotWriteStreamsAfterFileDeleted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeFixture(t)
+	fixture.cfg.FFprobe.Path = writeSlowInventoryFakeFFprobe(t)
+	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.ProbeInventoryFile(ctx, fixture.file.ID)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if err := fixture.db.WithContext(ctx).Unscoped().Delete(&database.InventoryFile{}, fixture.file.ID).Error; err != nil {
+		t.Fatalf("delete inventory file during probe: %v", err)
+	}
+
+	if err := <-errCh; err == nil {
+		t.Fatalf("expected probe to fail after inventory file deletion")
+	}
+
+	var streamCount int64
+	if err := fixture.db.WithContext(ctx).Model(&database.MediaStream{}).Where("file_id = ?", fixture.file.ID).Count(&streamCount).Error; err != nil {
+		t.Fatalf("count streams: %v", err)
+	}
+	if streamCount != 0 {
+		t.Fatalf("expected no streams for deleted inventory file, got %d", streamCount)
+	}
+}
+
 type inventoryProbeFixture struct {
 	cfg      config.Config
 	db       *gorm.DB
@@ -385,6 +416,16 @@ func writeInventoryFakeFFprobe(t *testing.T) string {
 	content := "#!/bin/sh\ncat <<'EOF'\n{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"profile\":\"High\",\"level\":41,\"width\":1920,\"height\":1080,\"avg_frame_rate\":\"24000/1001\",\"r_frame_rate\":\"24000/1001\",\"field_order\":\"progressive\",\"bit_rate\":\"4200000\",\"color_space\":\"bt709\",\"bits_per_raw_sample\":\"10\",\"pix_fmt\":\"yuv420p10le\",\"refs\":4},{\"codec_type\":\"audio\",\"codec_name\":\"flac\",\"channels\":2,\"channel_layout\":\"stereo\",\"sample_rate\":\"48000\",\"bits_per_raw_sample\":\"24\",\"tags\":{\"language\":\"jpn\",\"title\":\"Stereo\"}},{\"codec_type\":\"subtitle\",\"codec_name\":\"ass\",\"disposition\":{\"default\":1,\"forced\":0,\"hearing_impaired\":0,\"external\":1},\"tags\":{\"language\":\"zho\",\"title\":\"Chinese Traditional\"}}],\"format\":{\"duration\":\"7260.25\",\"bit_rate\":\"5000000\"}}\nEOF\n"
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	return path
+}
+
+func writeSlowInventoryFakeFFprobe(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffprobe")
+	content := "#!/bin/sh\nsleep 0.2\ncat <<'EOF'\n{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\"}],\"format\":{\"duration\":\"10\"}}\nEOF\n"
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write slow fake ffprobe: %v", err)
 	}
 	return path
 }

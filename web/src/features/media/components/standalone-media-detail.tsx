@@ -65,6 +65,7 @@ type StandaloneMediaDetailProps = {
   seriesEpisodesErrorMessage: string | null
   onGoBack: () => void
   onOpenPlaybackEntry: (options?: {
+    itemId?: number
     fromStart?: boolean
     assetId?: number
   }) => void
@@ -211,8 +212,8 @@ export function StandaloneMediaDetail({
       />
       {item.backdrop_url ? (
         <>
-          <div className="absolute inset-0 bg-gradient-to-b from-background/80 via-background/70 to-background/95" />
-          <div className="absolute inset-0 bg-gradient-to-r from-background via-background/82 to-background/92" />
+          <div className="absolute inset-0 bg-gradient-to-b from-background/46 via-background/32 to-background/78" />
+          <div className="absolute inset-0 bg-gradient-to-r from-background/56 via-background/40 to-background/60" />
         </>
       ) : null}
 

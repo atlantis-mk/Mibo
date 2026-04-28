@@ -17,6 +17,7 @@ import { cn } from '#/lib/utils'
 
 type MediaPosterCardProps = {
   item: CatalogListItem
+  playbackItem?: CatalogListItem
   progress?: ProgressState | null
   libraryName?: string
   isFavorite?: boolean
@@ -26,6 +27,7 @@ type MediaPosterCardProps = {
 
 export function MediaPosterCard({
   item,
+  playbackItem,
   progress,
   libraryName,
   isFavorite,
@@ -38,6 +40,7 @@ export function MediaPosterCard({
   const playable = isMediaCardPlayable(item)
   const hasProgress = Boolean(progress && progress.position_seconds > 0)
   const mediaType = getMediaCardType(item)
+  const playTarget = playbackItem ?? item
 
   return (
     <article
@@ -105,7 +108,7 @@ export function MediaPosterCard({
             >
               <Link
                 to="/play/$id"
-                params={{ id: String(item.id) }}
+                params={{ id: String(playTarget.id) }}
                 search={{ fromStart: !hasProgress, assetId: undefined }}
               >
                 {hasProgress ? (

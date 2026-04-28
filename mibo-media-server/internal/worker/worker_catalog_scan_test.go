@@ -66,15 +66,49 @@ func TestRunOnceProcessesProbeInventoryFileJob(t *testing.T) {
 	}
 }
 
+func TestRunOnceProcessesProbeInventoryFileJobsConcurrently(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeRunnerFixture(t, writeSlowFakeFFprobe(t, 250*time.Millisecond))
+	fixture.runner = NewRunner(config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond, ProbeWorkers: 2}, fixture.jobsSvc, fixture.librarySvc, nil, fixture.probeSvc, nil, catalog.NewService(fixture.db))
+	if err := fixture.db.WithContext(ctx).Where("id > 0").Delete(&database.Job{}).Error; err != nil {
+		t.Fatalf("clear queued setup jobs: %v", err)
+	}
+	secondFile := fixture.createProbeFile(t, ctx, "Movie B.2024.mkv")
+
+	firstJob, err := fixture.librarySvc.QueueInventoryFileProbe(ctx, fixture.file.ID, false)
+	if err != nil {
+		t.Fatalf("queue first probe job: %v", err)
+	}
+	secondJob, err := fixture.librarySvc.QueueInventoryFileProbe(ctx, secondFile.ID, false)
+	if err != nil {
+		t.Fatalf("queue second probe job: %v", err)
+	}
+
+	startedAt := time.Now()
+	fixture.runner.RunOnce(ctx)
+	elapsed := time.Since(startedAt)
+
+	assertJobCompleted(t, ctx, fixture.db, firstJob.ID)
+	assertJobCompleted(t, ctx, fixture.db, secondJob.ID)
+	if elapsed >= 450*time.Millisecond {
+		t.Fatalf("expected concurrent probes to finish faster than serial execution, elapsed %s", elapsed)
+	}
+}
+
 type inventoryProbeRunnerFixture struct {
 	db         *gorm.DB
+	jobsSvc    *jobs.Service
 	librarySvc *library.Service
+	probeSvc   *probe.Service
 	runner     *Runner
 	asset      database.MediaAsset
 	file       database.InventoryFile
+	moviesRoot string
 }
 
-func newInventoryProbeRunnerFixture(t *testing.T) inventoryProbeRunnerFixture {
+func newInventoryProbeRunnerFixture(t *testing.T, ffprobePathOverride ...string) inventoryProbeRunnerFixture {
 	t.Helper()
 
 	mediaRoot := filepath.Join(t.TempDir(), "media-root")
@@ -92,9 +126,13 @@ func newInventoryProbeRunnerFixture(t *testing.T) inventoryProbeRunnerFixture {
 		t.Fatalf("open database: %v", err)
 	}
 
+	ffprobePath := writeFakeFFprobe(t)
+	if len(ffprobePathOverride) > 0 && ffprobePathOverride[0] != "" {
+		ffprobePath = ffprobePathOverride[0]
+	}
 	cfg := config.Config{
 		Local:   config.LocalStorageConfig{RootPath: mediaRoot},
-		FFprobe: config.FFprobeConfig{Enabled: true, Path: writeFakeFFprobe(t), Timeout: time.Second},
+		FFprobe: config.FFprobeConfig{Enabled: true, Path: ffprobePath, Timeout: time.Second},
 		Worker:  config.WorkerConfig{Enabled: true, PollInterval: time.Millisecond},
 	}
 	registry := providers.NewRegistry(cfg)
@@ -156,5 +194,42 @@ func newInventoryProbeRunnerFixture(t *testing.T) inventoryProbeRunnerFixture {
 	}
 
 	runner := NewRunner(cfg.Worker, jobsSvc, librarySvc, nil, probeSvc, nil, catalog.NewService(db))
-	return inventoryProbeRunnerFixture{db: db, librarySvc: librarySvc, runner: runner, asset: asset, file: file}
+	return inventoryProbeRunnerFixture{db: db, jobsSvc: jobsSvc, librarySvc: librarySvc, probeSvc: probeSvc, runner: runner, asset: asset, file: file, moviesRoot: moviesRoot}
+}
+
+func (f inventoryProbeRunnerFixture) createProbeFile(t *testing.T, ctx context.Context, fileName string) database.InventoryFile {
+	t.Helper()
+	filePath := filepath.Join(f.moviesRoot, fileName)
+	if err := os.WriteFile(filePath, []byte("movie"), 0o644); err != nil {
+		t.Fatalf("write media file: %v", err)
+	}
+	inventorySvc := inventory.NewService(f.db)
+	item := database.CatalogItem{
+		LibraryID:          f.file.LibraryID,
+		Type:               "movie",
+		Path:               filePath,
+		SortKey:            fileName,
+		DisplayOrder:       "aired",
+		Title:              fileName,
+		AvailabilityStatus: "available",
+		GovernanceStatus:   "pending",
+	}
+	if err := f.db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	asset, err := inventorySvc.CreateAsset(ctx, inventory.CreateAssetInput{LibraryID: f.file.LibraryID, AssetType: inventory.AssetTypeMain, DisplayName: fileName, ProbeStatus: probe.StatusPending})
+	if err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	file, err := inventorySvc.UpsertFile(ctx, inventory.UpsertFileInput{LibraryID: f.file.LibraryID, StorageProvider: "local", StoragePath: filePath, StableIdentityKey: fileName, SizeBytes: 5, Container: "mkv", Status: inventory.FileStatusAvailable})
+	if err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if _, err := inventorySvc.LinkAssetToItem(ctx, inventory.LinkAssetItemInput{AssetID: asset.ID, ItemID: item.ID, Role: inventory.AssetItemRolePrimary, Source: "scanner"}); err != nil {
+		t.Fatalf("link asset to item: %v", err)
+	}
+	if _, err := inventorySvc.LinkAssetToFile(ctx, inventory.LinkAssetFileInput{AssetID: asset.ID, FileID: file.ID, Role: inventory.FileRoleSource}); err != nil {
+		t.Fatalf("link asset to file: %v", err)
+	}
+	return file
 }

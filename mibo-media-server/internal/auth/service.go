@@ -44,12 +44,26 @@ func (s *Service) Register(ctx context.Context, username, password string) (data
 		return database.User{}, err
 	}
 
-	user := database.User{
-		Username:     normalized,
-		PasswordHash: string(hash),
-		Role:         "user",
-	}
-	if err := s.db.WithContext(ctx).Create(&user).Error; err != nil {
+	var user database.User
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var userCount int64
+		if err := tx.Model(&database.User{}).Count(&userCount).Error; err != nil {
+			return err
+		}
+
+		role := "user"
+		if userCount == 0 {
+			role = "admin"
+		}
+
+		user = database.User{
+			Username:     normalized,
+			PasswordHash: string(hash),
+			Role:         role,
+		}
+		return tx.Create(&user).Error
+	})
+	if err != nil {
 		return database.User{}, err
 	}
 	return user, nil

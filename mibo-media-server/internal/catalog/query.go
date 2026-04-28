@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"gorm.io/gorm"
 )
@@ -332,6 +333,13 @@ func (s *Service) GetItemDetailForUser(ctx context.Context, itemID uint, userID 
 			return CatalogItemDetail{}, err
 		}
 	}
+	var seriesPlaybackTarget *CatalogSeriesPlaybackTarget
+	if item.Type == ItemTypeSeries {
+		seriesPlaybackTarget, err = s.getSeriesPlaybackTarget(ctx, item.ID, userID)
+		if err != nil {
+			return CatalogItemDetail{}, err
+		}
+	}
 	if item.Type == ItemTypeSeason {
 		episodes, err = s.buildCatalogEpisodeDetailsForParent(ctx, item.ID)
 		if err != nil {
@@ -348,22 +356,40 @@ func (s *Service) GetItemDetailForUser(ctx context.Context, itemID uint, userID 
 	}
 
 	return BuildCatalogItemDetail(CatalogItemDetailInput{
-		Item:               item,
-		Rollup:             rollups[item.ID],
-		Images:             images[item.ID],
-		ExternalIDs:        externalIDs[item.ID],
-		Sources:            sources[item.ID],
-		FieldStates:        fieldStates[item.ID],
-		Cast:               cast,
-		Directors:          directors,
-		Tags:               tagsByItem[item.ID],
-		Seasons:            seasons,
-		Episodes:           episodes,
-		EpisodeContext:     episodeContext,
-		SameSeasonEpisodes: sameSeasonEpisodes,
-		Assets:             assetsByItem[item.ID],
-		Related:            relatedItems,
+		Item:                 item,
+		Rollup:               rollups[item.ID],
+		Images:               images[item.ID],
+		ExternalIDs:          externalIDs[item.ID],
+		Sources:              sources[item.ID],
+		FieldStates:          fieldStates[item.ID],
+		Cast:                 cast,
+		Directors:            directors,
+		Tags:                 tagsByItem[item.ID],
+		Seasons:              seasons,
+		Episodes:             episodes,
+		EpisodeContext:       episodeContext,
+		SeriesPlaybackTarget: seriesPlaybackTarget,
+		SameSeasonEpisodes:   sameSeasonEpisodes,
+		Assets:               assetsByItem[item.ID],
+		Related:              relatedItems,
 	}), nil
+}
+
+func (s *Service) getSeriesPlaybackTarget(ctx context.Context, seriesID uint, userID *uint) (*CatalogSeriesPlaybackTarget, error) {
+	target, err := seriesplayback.Select(ctx, s.db, seriesID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if target == nil {
+		return nil, nil
+	}
+	return &CatalogSeriesPlaybackTarget{
+		EpisodeItemID:   target.EpisodeID,
+		AssetID:         target.AssetID,
+		Title:           target.Title,
+		Label:           target.Label,
+		SelectionReason: target.Reason,
+	}, nil
 }
 
 func (s *Service) loadEpisodeParentContext(ctx context.Context, item database.CatalogItem) (*CatalogEpisodeParentContext, *uint, error) {
@@ -563,9 +589,23 @@ func (s *Service) ListSeriesSeasons(ctx context.Context, seriesID uint) ([]Catal
 	if err != nil {
 		return nil, err
 	}
+	playableEpisodeIDs, err := seriesplayback.LoadPlayableEpisodeIDs(ctx, s.db, series.ID)
+	if err != nil {
+		return nil, err
+	}
 
 	result := make([]CatalogSeasonDetail, 0, len(seasons))
 	for _, season := range seasons {
+		episodes := make([]CatalogEpisodeDetail, 0, len(episodesBySeason[season.ID]))
+		for _, episode := range episodesBySeason[season.ID] {
+			if _, ok := playableEpisodeIDs[episode.ID]; !ok {
+				continue
+			}
+			episodes = append(episodes, episode)
+		}
+		if len(episodes) == 0 {
+			continue
+		}
 		result = append(result, BuildCatalogSeasonDetail(CatalogSeasonDetailInput{
 			Item:        season,
 			Rollup:      rollups[season.ID],
@@ -573,7 +613,7 @@ func (s *Service) ListSeriesSeasons(ctx context.Context, seriesID uint) ([]Catal
 			ExternalIDs: externalIDs[season.ID],
 			Sources:     sources[season.ID],
 			FieldStates: fieldStates[season.ID],
-			Episodes:    episodesBySeason[season.ID],
+			Episodes:    episodes,
 		}))
 	}
 	return result, nil

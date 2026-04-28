@@ -281,9 +281,10 @@ export default function MediaDetail({
           void navigate({ to: '/' })
         }}
         onOpenPlaybackEntry={(options) => {
+          const playbackItemId = options?.itemId ?? itemId
           void navigate({
             to: '/play/$id',
-            params: { id: String(itemId) },
+            params: { id: String(playbackItemId) },
             search: {
               fromStart: Boolean(options?.fromStart),
               assetId: options?.assetId,

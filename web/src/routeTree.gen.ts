@@ -15,12 +15,21 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
+import { Route as SettingsUsersRouteImport } from './routes/settings.users'
 import { Route as SettingsSecurityRouteImport } from './routes/settings.security'
 import { Route as SettingsSchedulesRouteImport } from './routes/settings.schedules'
 import { Route as SettingsPlaybackRouteImport } from './routes/settings.playback'
 import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
+import { Route as SettingsNetworkRouteImport } from './routes/settings.network'
 import { Route as SettingsMetadataSourcesRouteImport } from './routes/settings.metadata-sources'
+import { Route as SettingsLogsRouteImport } from './routes/settings.logs'
+import { Route as SettingsLiveTvRouteImport } from './routes/settings.live-tv'
 import { Route as SettingsLibraryRouteImport } from './routes/settings.library'
+import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
+import { Route as SettingsDlnaRouteImport } from './routes/settings.dlna'
+import { Route as SettingsDevicesRouteImport } from './routes/settings.devices'
+import { Route as SettingsDatabaseRouteImport } from './routes/settings.database'
+import { Route as SettingsConsoleRouteImport } from './routes/settings.console'
 import { Route as PlayIdRouteImport } from './routes/play.$id'
 import { Route as AppSearchRouteImport } from './routes/_app.search'
 import { Route as AppFavoritesRouteImport } from './routes/_app.favorites'
@@ -59,6 +68,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const SettingsUsersRoute = SettingsUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsSecurityRoute = SettingsSecurityRouteImport.update({
   id: '/security',
   path: '/security',
@@ -79,14 +93,54 @@ const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   path: '/notifications',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsNetworkRoute = SettingsNetworkRouteImport.update({
+  id: '/network',
+  path: '/network',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsMetadataSourcesRoute = SettingsMetadataSourcesRouteImport.update({
   id: '/metadata-sources',
   path: '/metadata-sources',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsLogsRoute = SettingsLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsLiveTvRoute = SettingsLiveTvRouteImport.update({
+  id: '/live-tv',
+  path: '/live-tv',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsLibraryRoute = SettingsLibraryRouteImport.update({
   id: '/library',
   path: '/library',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
+  id: '/general',
+  path: '/general',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDlnaRoute = SettingsDlnaRouteImport.update({
+  id: '/dlna',
+  path: '/dlna',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
+  id: '/devices',
+  path: '/devices',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDatabaseRoute = SettingsDatabaseRouteImport.update({
+  id: '/database',
+  path: '/database',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsConsoleRoute = SettingsConsoleRouteImport.update({
+  id: '/console',
+  path: '/console',
   getParentRoute: () => SettingsRoute,
 } as any)
 const PlayIdRoute = PlayIdRouteImport.update({
@@ -138,12 +192,21 @@ export interface FileRoutesByFullPath {
   '/favorites': typeof AppFavoritesRoute
   '/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
+  '/settings/console': typeof SettingsConsoleRoute
+  '/settings/database': typeof SettingsDatabaseRoute
+  '/settings/devices': typeof SettingsDevicesRoute
+  '/settings/dlna': typeof SettingsDlnaRoute
+  '/settings/general': typeof SettingsGeneralRoute
   '/settings/library': typeof SettingsLibraryRoute
+  '/settings/live-tv': typeof SettingsLiveTvRoute
+  '/settings/logs': typeof SettingsLogsRoute
   '/settings/metadata-sources': typeof SettingsMetadataSourcesRoute
+  '/settings/network': typeof SettingsNetworkRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/playback': typeof SettingsPlaybackRoute
   '/settings/schedules': typeof SettingsSchedulesRoute
   '/settings/security': typeof SettingsSecurityRoute
+  '/settings/users': typeof SettingsUsersRoute
   '/settings/': typeof SettingsIndexRoute
   '/library/$id': typeof AppLibraryIdRoute
   '/media/$id': typeof AppMediaIdRoute
@@ -157,12 +220,21 @@ export interface FileRoutesByTo {
   '/favorites': typeof AppFavoritesRoute
   '/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
+  '/settings/console': typeof SettingsConsoleRoute
+  '/settings/database': typeof SettingsDatabaseRoute
+  '/settings/devices': typeof SettingsDevicesRoute
+  '/settings/dlna': typeof SettingsDlnaRoute
+  '/settings/general': typeof SettingsGeneralRoute
   '/settings/library': typeof SettingsLibraryRoute
+  '/settings/live-tv': typeof SettingsLiveTvRoute
+  '/settings/logs': typeof SettingsLogsRoute
   '/settings/metadata-sources': typeof SettingsMetadataSourcesRoute
+  '/settings/network': typeof SettingsNetworkRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/playback': typeof SettingsPlaybackRoute
   '/settings/schedules': typeof SettingsSchedulesRoute
   '/settings/security': typeof SettingsSecurityRoute
+  '/settings/users': typeof SettingsUsersRoute
   '/': typeof AppIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/library/$id': typeof AppLibraryIdRoute
@@ -180,12 +252,21 @@ export interface FileRoutesById {
   '/_app/favorites': typeof AppFavoritesRoute
   '/_app/search': typeof AppSearchRoute
   '/play/$id': typeof PlayIdRoute
+  '/settings/console': typeof SettingsConsoleRoute
+  '/settings/database': typeof SettingsDatabaseRoute
+  '/settings/devices': typeof SettingsDevicesRoute
+  '/settings/dlna': typeof SettingsDlnaRoute
+  '/settings/general': typeof SettingsGeneralRoute
   '/settings/library': typeof SettingsLibraryRoute
+  '/settings/live-tv': typeof SettingsLiveTvRoute
+  '/settings/logs': typeof SettingsLogsRoute
   '/settings/metadata-sources': typeof SettingsMetadataSourcesRoute
+  '/settings/network': typeof SettingsNetworkRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/playback': typeof SettingsPlaybackRoute
   '/settings/schedules': typeof SettingsSchedulesRoute
   '/settings/security': typeof SettingsSecurityRoute
+  '/settings/users': typeof SettingsUsersRoute
   '/_app/': typeof AppIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/_app/library/$id': typeof AppLibraryIdRoute
@@ -204,12 +285,21 @@ export interface FileRouteTypes {
     | '/favorites'
     | '/search'
     | '/play/$id'
+    | '/settings/console'
+    | '/settings/database'
+    | '/settings/devices'
+    | '/settings/dlna'
+    | '/settings/general'
     | '/settings/library'
+    | '/settings/live-tv'
+    | '/settings/logs'
     | '/settings/metadata-sources'
+    | '/settings/network'
     | '/settings/notifications'
     | '/settings/playback'
     | '/settings/schedules'
     | '/settings/security'
+    | '/settings/users'
     | '/settings/'
     | '/library/$id'
     | '/media/$id'
@@ -223,12 +313,21 @@ export interface FileRouteTypes {
     | '/favorites'
     | '/search'
     | '/play/$id'
+    | '/settings/console'
+    | '/settings/database'
+    | '/settings/devices'
+    | '/settings/dlna'
+    | '/settings/general'
     | '/settings/library'
+    | '/settings/live-tv'
+    | '/settings/logs'
     | '/settings/metadata-sources'
+    | '/settings/network'
     | '/settings/notifications'
     | '/settings/playback'
     | '/settings/schedules'
     | '/settings/security'
+    | '/settings/users'
     | '/'
     | '/settings'
     | '/library/$id'
@@ -245,12 +344,21 @@ export interface FileRouteTypes {
     | '/_app/favorites'
     | '/_app/search'
     | '/play/$id'
+    | '/settings/console'
+    | '/settings/database'
+    | '/settings/devices'
+    | '/settings/dlna'
+    | '/settings/general'
     | '/settings/library'
+    | '/settings/live-tv'
+    | '/settings/logs'
     | '/settings/metadata-sources'
+    | '/settings/network'
     | '/settings/notifications'
     | '/settings/playback'
     | '/settings/schedules'
     | '/settings/security'
+    | '/settings/users'
     | '/_app/'
     | '/settings/'
     | '/_app/library/$id'
@@ -312,6 +420,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/settings/users': {
+      id: '/settings/users'
+      path: '/users'
+      fullPath: '/settings/users'
+      preLoaderRoute: typeof SettingsUsersRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/security': {
       id: '/settings/security'
       path: '/security'
@@ -340,6 +455,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsNotificationsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/network': {
+      id: '/settings/network'
+      path: '/network'
+      fullPath: '/settings/network'
+      preLoaderRoute: typeof SettingsNetworkRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/metadata-sources': {
       id: '/settings/metadata-sources'
       path: '/metadata-sources'
@@ -347,11 +469,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsMetadataSourcesRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/logs': {
+      id: '/settings/logs'
+      path: '/logs'
+      fullPath: '/settings/logs'
+      preLoaderRoute: typeof SettingsLogsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/live-tv': {
+      id: '/settings/live-tv'
+      path: '/live-tv'
+      fullPath: '/settings/live-tv'
+      preLoaderRoute: typeof SettingsLiveTvRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/library': {
       id: '/settings/library'
       path: '/library'
       fullPath: '/settings/library'
       preLoaderRoute: typeof SettingsLibraryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/general': {
+      id: '/settings/general'
+      path: '/general'
+      fullPath: '/settings/general'
+      preLoaderRoute: typeof SettingsGeneralRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dlna': {
+      id: '/settings/dlna'
+      path: '/dlna'
+      fullPath: '/settings/dlna'
+      preLoaderRoute: typeof SettingsDlnaRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/devices': {
+      id: '/settings/devices'
+      path: '/devices'
+      fullPath: '/settings/devices'
+      preLoaderRoute: typeof SettingsDevicesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/database': {
+      id: '/settings/database'
+      path: '/database'
+      fullPath: '/settings/database'
+      preLoaderRoute: typeof SettingsDatabaseRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/console': {
+      id: '/settings/console'
+      path: '/console'
+      fullPath: '/settings/console'
+      preLoaderRoute: typeof SettingsConsoleRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/play/$id': {
@@ -434,24 +605,42 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface SettingsRouteChildren {
+  SettingsConsoleRoute: typeof SettingsConsoleRoute
+  SettingsDatabaseRoute: typeof SettingsDatabaseRoute
+  SettingsDevicesRoute: typeof SettingsDevicesRoute
+  SettingsDlnaRoute: typeof SettingsDlnaRoute
+  SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsLibraryRoute: typeof SettingsLibraryRoute
+  SettingsLiveTvRoute: typeof SettingsLiveTvRoute
+  SettingsLogsRoute: typeof SettingsLogsRoute
   SettingsMetadataSourcesRoute: typeof SettingsMetadataSourcesRoute
+  SettingsNetworkRoute: typeof SettingsNetworkRoute
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute
   SettingsPlaybackRoute: typeof SettingsPlaybackRoute
   SettingsSchedulesRoute: typeof SettingsSchedulesRoute
   SettingsSecurityRoute: typeof SettingsSecurityRoute
+  SettingsUsersRoute: typeof SettingsUsersRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   SettingsMetadataIdRoute: typeof SettingsMetadataIdRoute
   SettingsMetadataIndexRoute: typeof SettingsMetadataIndexRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsConsoleRoute: SettingsConsoleRoute,
+  SettingsDatabaseRoute: SettingsDatabaseRoute,
+  SettingsDevicesRoute: SettingsDevicesRoute,
+  SettingsDlnaRoute: SettingsDlnaRoute,
+  SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsLibraryRoute: SettingsLibraryRoute,
+  SettingsLiveTvRoute: SettingsLiveTvRoute,
+  SettingsLogsRoute: SettingsLogsRoute,
   SettingsMetadataSourcesRoute: SettingsMetadataSourcesRoute,
+  SettingsNetworkRoute: SettingsNetworkRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsPlaybackRoute: SettingsPlaybackRoute,
   SettingsSchedulesRoute: SettingsSchedulesRoute,
   SettingsSecurityRoute: SettingsSecurityRoute,
+  SettingsUsersRoute: SettingsUsersRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   SettingsMetadataIdRoute: SettingsMetadataIdRoute,
   SettingsMetadataIndexRoute: SettingsMetadataIndexRoute,

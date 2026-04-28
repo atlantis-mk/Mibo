@@ -3,15 +3,12 @@ package metadata
 import (
 	"context"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/config"
+	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
-
-var metadataYearPattern = regexp.MustCompile(`(?i)(?:^|[\s._\-(])((?:19|20)\d{2})(?:$|[\s._\-)])`)
-var metadataNoisePattern = regexp.MustCompile(`(?i)\b(2160p|1080p|720p|480p|4k|hdr10\+?|dv|dolby[\s._-]?vision|atmos|dts(?:hd)?|truehd|aac\d?(?:\.\d)?|x26[45]|h\.?26[45]|hevc|avc|bluray|blu[\s._-]?ray|bdrip|brrip|bdrmux|remux|web[\s._-]?dl|webrip|hdtv|uhd|nf|amzn|dsnp|hmax|proper|repack|extended|unrated|limited|dual[\s._-]?audio|multi(?:sub|subs)?|sub(?:bed|s)?|dub(?:bed)?|chs|cht|eng|jpn|gb|big5|yts|rarbg|wiki|mkv)\b`)
 
 type matchSearchQuery struct {
 	Value string
@@ -160,24 +157,7 @@ func buildQueryVariants(values []string, year *int) []matchSearchQuery {
 }
 
 func cleanSearchTitle(input string) string {
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer(
-		".", " ",
-		"_", " ",
-		"-", " ",
-		"(", " ",
-		")", " ",
-		"[", " ",
-		"]", " ",
-	)
-	cleaned := replacer.Replace(trimmed)
-	cleaned = metadataYearPattern.ReplaceAllString(cleaned, " ")
-	cleaned = metadataNoisePattern.ReplaceAllString(cleaned, " ")
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	return strings.Trim(cleaned, "- ")
+	return titleclean.Normalize(titleclean.NormalizeInput{RawTitle: input}).Title
 }
 
 func scoreMatchCandidate(item metadataSearchItem, mediaType string, query matchSearchQuery, result searchResult) scoredMatchCandidate {

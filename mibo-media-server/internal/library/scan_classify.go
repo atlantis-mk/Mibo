@@ -8,13 +8,15 @@ import (
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 func classifyMediaFile(libraryType string, libraryRoot string, object storage.Object) classifiedMedia {
 	fileName := path.Base(object.Path)
 	ext := path.Ext(fileName)
 	rawTitle := strings.TrimSuffix(fileName, ext)
-	normalizedTitle := cleanTitle(rawTitle)
+	normalized := titleclean.Normalize(titleclean.NormalizeInput{RawTitle: rawTitle})
+	normalizedTitle := normalized.Title
 	isTVLibrary := isTVLibraryType(libraryType)
 	pathSeriesTitle := tvSeriesTitleFromPath(libraryRoot, object.Path)
 	shouldTryTVPath := isTVLibrary || pathSeriesTitle != "" || tvSeasonFromPath(libraryRoot, object.Path) != nil
@@ -25,7 +27,7 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 		}
 		title := fmt.Sprintf("%s S%02dE%02d-E%02d", seriesTitle, *season, episodeNumbers[0], episodeNumbers[len(episodeNumbers)-1])
 		firstEpisode := episodeNumbers[0]
-		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: &firstEpisode, EpisodeNumbers: episodeNumbers, SourcePath: object.Path, Status: "ready"}
+		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: &firstEpisode, EpisodeNumbers: episodeNumbers, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
 	}
 	if groups := episodePattern.FindStringSubmatch(rawTitle); len(groups) > 0 {
 		seriesTitle := cleanTitle(groups[1])
@@ -34,14 +36,14 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 		}
 		season, episode := parseEpisodeNumbers(groups[2], groups[3], groups[4], groups[5])
 		title := fmt.Sprintf("%s S%02dE%02d", seriesTitle, *season, *episode)
-		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: episode, EpisodeNumbers: episodeNumbersFromPointer(episode), SourcePath: object.Path, Status: "ready"}
+		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: episode, EpisodeNumbers: episodeNumbersFromPointer(episode), SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
 	}
 	if shouldTryTVPath {
 		if classified, ok := classifyTVEpisodeFromPath(libraryRoot, object.Path, rawTitle, pathSeriesTitle); ok {
 			return classified
 		}
 	}
-	year := parseYear(rawTitle)
+	year := normalized.Year
 	title := normalizedTitle
 	if moviePathTitle := movieTitleFromPath(object.Path, rawTitle); moviePathTitle != "" {
 		title = moviePathTitle
@@ -49,7 +51,7 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 	if isTVLibrary {
 		title = titleFromPath(object.Path)
 	}
-	return classifiedMedia{Type: "movie", Title: title, OriginalTitle: rawTitle, Year: year, SourcePath: object.Path, Status: "ready"}
+	return classifiedMedia{Type: "movie", Title: title, OriginalTitle: rawTitle, Year: year, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
 }
 
 func parseMultiEpisodeRange(input string) (*int, []int, bool) {
@@ -352,27 +354,7 @@ func normalizeSeriesGroupingTitle(input string) string {
 }
 
 func cleanTitle(input string) string {
-	replacer := strings.NewReplacer(
-		".", " ",
-		"_", " ",
-		"[", " ",
-		"]", " ",
-		"(", " ",
-		")", " ",
-		"【", " ",
-		"】", " ",
-	)
-	cleaned := replacer.Replace(strings.TrimSpace(input))
-	cleaned = scanNoisePattern.ReplaceAllString(cleaned, " ")
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	cleaned = yearPattern.ReplaceAllString(cleaned, " ")
-	cleaned = stripTrailingReleaseGroup(cleaned)
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	cleaned = strings.Trim(cleaned, "- ")
-	if cleaned == "" {
-		return strings.TrimSpace(input)
-	}
-	return cleaned
+	return titleclean.Normalize(titleclean.NormalizeInput{RawTitle: input}).Title
 }
 
 func stripTrailingReleaseGroup(input string) string {

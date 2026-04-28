@@ -1,122 +1,180 @@
+import { LoaderCircleIcon, PlayIcon } from 'lucide-react'
+
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
-import { Card, CardContent } from '#/components/ui/card'
 import { type Schedule } from '#/lib/mibo-api'
+import { cn } from '#/lib/utils'
 
 type Props = {
+  isRunning?: boolean
   onCreate: () => void
   onEdit: (schedule: Schedule) => void
   onRunNow: (schedule: Schedule) => void
-  onSelect: (schedule: Schedule) => void
   onShowHistory: (schedule: Schedule) => void
   onToggle: (schedule: Schedule) => void
+  runningScheduleId?: number
   schedules: Schedule[]
-  selectedScheduleId?: number
+}
+
+type ScheduleGroup = {
+  key: string
+  title: string
+  schedules: Schedule[]
 }
 
 export function ScheduleList({
+  isRunning,
   onCreate,
   onEdit,
   onRunNow,
-  onSelect,
   onShowHistory,
   onToggle,
+  runningScheduleId,
   schedules,
-  selectedScheduleId,
 }: Props) {
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium text-foreground">
-            计划任务列表
-          </div>
-          <div className="text-sm text-muted-foreground">
-            主列表直接呈现启停状态、next run 与 latest result。
-          </div>
-        </div>
-        <Button onClick={onCreate}>新建计划任务</Button>
+  const groups = groupSchedules(schedules)
+
+  if (schedules.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border/70 bg-card/50 px-6 py-10 text-center">
+        <h2 className="text-lg font-medium text-foreground">暂无计划任务</h2>
+        <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+          创建扫描、清理或链接检查任务后，这里会按维护类别显示上次运行时间、耗时和手动执行入口。
+        </p>
+        <Button className="mt-5" onClick={onCreate}>
+          新建计划任务
+        </Button>
       </div>
+    )
+  }
 
-      {schedules.map((schedule) => (
-        <Card
-          key={schedule.id}
-          className={`rounded-[1.25rem] border py-0 ${selectedScheduleId === schedule.id ? 'border-primary/50 bg-primary/5' : 'border-border/60 bg-background/60'}`}
-        >
-          <CardContent className="space-y-3 px-4 py-4">
-            <button
-              type="button"
-              className="w-full text-left"
-              onClick={() => onSelect(schedule)}
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-2">
-                  <div className="text-sm font-medium text-foreground">
-                    {schedule.name}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge
-                      variant="outline"
-                      className="border-border/60 bg-card/70 text-[11px]"
-                    >
-                      {formatKind(schedule.kind)}
-                    </Badge>
-                    <Badge variant="secondary" className="text-[11px]">
-                      {formatScope(schedule.scope_kind, schedule.library_id)}
-                    </Badge>
-                    <Badge
-                      variant={schedule.enabled ? 'default' : 'outline'}
-                      className="text-[11px]"
-                    >
-                      {schedule.enabled ? '已启用' : '已停用'}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="space-y-1 text-right text-xs text-muted-foreground">
-                  <div>下次运行：{formatDateTime(schedule.next_run_at)}</div>
-                  <div>最近结果：{formatLatestResult(schedule)}</div>
-                </div>
-              </div>
-              <div className="mt-3 text-sm text-muted-foreground">
-                {formatFrequency(schedule.frequency)}
-              </div>
-            </button>
+  return (
+    <div className="space-y-8">
+      {groups.map((group) => (
+        <section key={group.key} className="space-y-2">
+          <h2 className="px-1 text-xl font-medium text-muted-foreground">
+            {group.title}
+          </h2>
+          <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40">
+            {group.schedules.map((schedule, index) => {
+              const running = isRunning && runningScheduleId === schedule.id
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onEdit(schedule)}
-              >
-                编辑
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onToggle(schedule)}
-              >
-                {schedule.enabled ? '停用' : '启用'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onRunNow(schedule)}
-              >
-                立即运行
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => onShowHistory(schedule)}
-              >
-                查看历史
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              return (
+                <article
+                  key={schedule.id}
+                  className={cn(
+                    'grid gap-4 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5',
+                    index > 0 && 'border-t border-border/60',
+                  )}
+                >
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-medium text-foreground">
+                        {schedule.name}
+                      </h3>
+                      <Badge
+                        variant={schedule.enabled ? 'secondary' : 'outline'}
+                        className="rounded-full text-[11px]"
+                      >
+                        {schedule.enabled ? '已启用' : '已停用'}
+                      </Badge>
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-muted-foreground">
+                      <span>上次运行：{formatLastRun(schedule)}</span>
+                      <span>耗时：{formatLastDuration(schedule)}</span>
+                      <span>
+                        下次运行：{formatDateTime(schedule.next_run_at)}
+                      </span>
+                    </div>
+
+                    <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+                      {formatDescription(schedule)}
+                    </p>
+
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        onClick={() => onShowHistory(schedule)}
+                      >
+                        查看历史
+                      </button>
+                      <span className="text-border">/</span>
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        onClick={() => onEdit(schedule)}
+                      >
+                        编辑
+                      </button>
+                      <span className="text-border">/</span>
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        onClick={() => onToggle(schedule)}
+                      >
+                        {schedule.enabled ? '停用' : '启用'}
+                      </button>
+                      <span className="text-muted-foreground">
+                        {formatLatestResult(schedule)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="size-11 rounded-full border-primary/35 text-primary hover:bg-primary hover:text-primary-foreground sm:justify-self-end"
+                    disabled={running}
+                    onClick={() => onRunNow(schedule)}
+                  >
+                    {running ? (
+                      <LoaderCircleIcon className="size-4 animate-spin" />
+                    ) : (
+                      <PlayIcon className="ml-0.5 size-4 fill-current" />
+                    )}
+                    <span className="sr-only">立即运行 {schedule.name}</span>
+                  </Button>
+                </article>
+              )
+            })}
+          </div>
+        </section>
       ))}
     </div>
   )
+}
+
+function groupSchedules(schedules: Schedule[]): ScheduleGroup[] {
+  const groupMap = new Map<string, ScheduleGroup>()
+
+  for (const schedule of schedules) {
+    const group = getScheduleGroup(schedule)
+    const existing = groupMap.get(group.key)
+
+    if (existing) {
+      existing.schedules.push(schedule)
+    } else {
+      groupMap.set(group.key, { ...group, schedules: [schedule] })
+    }
+  }
+
+  return Array.from(groupMap.values())
+}
+
+function getScheduleGroup(schedule: Schedule) {
+  switch (schedule.kind) {
+    case 'scan':
+      return { key: 'library', title: 'Library' }
+    case 'library_cleanup':
+      return { key: 'database', title: 'Database' }
+    case 'invalid_link_check':
+      return { key: 'application', title: 'Application' }
+    default:
+      return { key: 'maintenance', title: 'Maintenance' }
+  }
 }
 
 export function formatKind(kind: string) {
@@ -142,10 +200,12 @@ export function formatScope(scope: Schedule['scope_kind'], libraryId?: number) {
 
 export function formatFrequency(frequency: Schedule['frequency']) {
   if (frequency.kind === 'daily') return `每天 ${frequency.time_of_day}`
-  if (frequency.kind === 'weekly')
+  if (frequency.kind === 'weekly') {
     return `每周 ${formatWeekday(frequency.weekday)} ${frequency.time_of_day}`
-  if (frequency.kind === 'monthly')
+  }
+  if (frequency.kind === 'monthly') {
     return `每月 ${frequency.day_of_month} 日 ${frequency.time_of_day}`
+  }
   return frequency.time_of_day
 }
 
@@ -173,6 +233,72 @@ export function formatLatestResult(schedule: Schedule) {
   return schedule.latest_run_message
     ? `${label} · ${schedule.latest_run_message}`
     : label
+}
+
+function formatDescription(schedule: Schedule) {
+  const scope = formatScope(schedule.scope_kind, schedule.library_id)
+  const frequency = formatFrequency(schedule.frequency)
+
+  switch (schedule.kind) {
+    case 'scan':
+      return `扫描 ${scope} 的媒体文件与目录变化，并按 ${frequency} 自动更新媒体库。`
+    case 'library_cleanup':
+      return `清理 ${scope} 中不再存在的条目、孤立记录和过期索引，保持数据库可用。`
+    case 'invalid_link_check':
+      return `检查 ${scope} 的资源链接和目录引用，发现失效项后交给治理流程处理。`
+    default:
+      return `${formatKind(schedule.kind)}，作用范围为 ${scope}，计划频率为 ${frequency}。`
+  }
+}
+
+function formatLastRun(schedule: Schedule) {
+  const value =
+    schedule.latest_run_finished_at ??
+    schedule.latest_run_started_at ??
+    schedule.recent_runs?.[0]?.finished_at ??
+    schedule.recent_runs?.[0]?.started_at
+
+  if (!value) return '从未运行'
+  return formatRelativeTime(value)
+}
+
+function formatLastDuration(schedule: Schedule) {
+  const startedAt =
+    schedule.latest_run_started_at ?? schedule.recent_runs?.[0]?.started_at
+  const finishedAt =
+    schedule.latest_run_finished_at ?? schedule.recent_runs?.[0]?.finished_at
+
+  if (!startedAt || !finishedAt) {
+    return schedule.latest_run_status === 'running' ? '运行中' : '0 seconds'
+  }
+
+  const durationSeconds = Math.max(
+    0,
+    Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 1000),
+  )
+
+  if (durationSeconds < 60) return `${durationSeconds} seconds`
+
+  const minutes = Math.floor(durationSeconds / 60)
+  const seconds = durationSeconds % 60
+  return seconds > 0 ? `${minutes} min ${seconds} sec` : `${minutes} min`
+}
+
+function formatRelativeTime(value: string) {
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return formatDateTime(value)
+
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000))
+  if (seconds < 60) return `${seconds} 秒钟前`
+
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟前`
+
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+
+  const days = Math.round(hours / 24)
+  return `${days} 天前`
 }
 
 function formatWeekday(weekday?: number) {

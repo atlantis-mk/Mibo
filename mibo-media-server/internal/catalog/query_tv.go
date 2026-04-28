@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
 )
 
@@ -86,40 +87,39 @@ func (s *Service) ListSeriesMissingEpisodes(ctx context.Context, seriesID uint) 
 }
 
 func (s *Service) GetSeriesNextUp(ctx context.Context, userID uint, seriesID uint) (*CatalogEpisodeDetail, error) {
-	episodes, err := s.ListSeriesEpisodes(ctx, seriesID, nil, AvailabilityAvailable)
+	target, err := seriesplayback.Select(ctx, s.db, seriesID, &userID)
 	if err != nil {
 		return nil, err
 	}
-	if len(episodes) == 0 {
+	if target == nil {
 		return nil, nil
 	}
-
-	episodeIDs := make([]uint, 0, len(episodes))
-	for _, episode := range episodes {
-		episodeIDs = append(episodeIDs, episode.ID)
-	}
-
-	var progressRows []database.UserItemData
-	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id IN ?", userID, episodeIDs).
-		Find(&progressRows).Error; err != nil {
+	detail, err := s.GetItemDetailForUser(ctx, target.EpisodeID, &userID)
+	if err != nil {
 		return nil, err
 	}
-	completedByEpisode := make(map[uint]bool, len(progressRows))
-	for _, row := range progressRows {
-		if row.CompletedAt != nil {
-			completedByEpisode[row.ItemID] = true
-		}
+	episode := CatalogEpisodeDetail{
+		ID:                 detail.ID,
+		LibraryID:          detail.LibraryID,
+		Type:               detail.Type,
+		Title:              detail.Title,
+		Overview:           detail.Overview,
+		Year:               detail.Year,
+		ParentIndexNumber:  detail.EpisodeContext.SeasonNumber,
+		IndexNumber:        detail.EpisodeContext.EpisodeNumber,
+		IndexNumberEnd:     detail.EpisodeContext.EpisodeNumberEnd,
+		RuntimeSeconds:     detail.RuntimeSeconds,
+		AvailabilityStatus: detail.AvailabilityStatus,
+		GovernanceStatus:   detail.GovernanceStatus,
+		ReleaseDate:        detail.ReleaseDate,
+		FirstAirDate:       detail.FirstAirDate,
+		SelectedImages:     detail.SelectedImages,
+		ExternalIdentities: detail.ExternalIdentities,
+		SourceEvidence:     detail.SourceEvidence,
+		FieldStates:        detail.FieldStates,
+		Assets:             detail.Assets,
 	}
-
-	for _, episode := range episodes {
-		if completedByEpisode[episode.ID] {
-			continue
-		}
-		episodeCopy := episode
-		return &episodeCopy, nil
-	}
-	return nil, nil
+	return &episode, nil
 }
 
 func normalizeCatalogQueryTypeFilter(value string) string {

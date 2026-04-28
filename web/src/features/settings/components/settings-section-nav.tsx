@@ -39,7 +39,7 @@ export function SettingsSectionNav({
               className={cn(
                 'group flex w-full items-start gap-3 rounded-[1.1rem] border px-3 py-3 text-left transition-colors',
                 active
-                  ? 'border-border bg-muted text-foreground shadow-sm'
+                  ? 'border-primary/35 bg-primary text-primary-foreground shadow-sm'
                   : 'border-transparent text-muted-foreground hover:border-border/60 hover:bg-muted/50 hover:text-foreground',
               )}
             >
@@ -47,7 +47,7 @@ export function SettingsSectionNav({
                 className={cn(
                   'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl border transition-colors',
                   active
-                    ? 'border-border bg-background text-foreground'
+                    ? 'border-primary/20 bg-primary-foreground/15 text-primary-foreground'
                     : 'border-border/50 bg-background/60 text-muted-foreground group-hover:text-foreground',
                 )}
               >
@@ -58,11 +58,25 @@ export function SettingsSectionNav({
                   <div className="truncate text-sm font-medium">
                     {section.title}
                   </div>
-                  <div className="shrink-0 rounded-full border border-border/60 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <div
+                    className={cn(
+                      'shrink-0 rounded-full border px-2 py-0.5 text-[11px]',
+                      active
+                        ? 'border-primary-foreground/25 bg-primary-foreground/15 text-primary-foreground/85'
+                        : 'border-border/60 bg-background/70 text-muted-foreground',
+                    )}
+                  >
                     {section.status}
                   </div>
                 </div>
-                <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                <div
+                  className={cn(
+                    'mt-1 line-clamp-2 text-xs leading-5',
+                    active
+                      ? 'text-primary-foreground/80'
+                      : 'text-muted-foreground',
+                  )}
+                >
                   {section.description}
                 </div>
               </div>

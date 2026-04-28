@@ -222,7 +222,8 @@ func (r *Router) handleGetCatalogItemProgress(w http.ResponseWriter, req *http.R
 }
 
 func (r *Router) handleGetCatalogPlaybackSource(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
+	user, err := r.requireUser(req)
+	if err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
@@ -241,7 +242,8 @@ func (r *Router) handleGetCatalogPlaybackSource(w http.ResponseWriter, req *http
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	source, err := r.playback.GetPlaybackSource(req.Context(), playback.PlaybackRequest{ItemID: itemID, AssetID: assetID, ClientProfile: clientProfile, AllowHLSFallback: r.hls.Enabled()})
+	userID := user.ID
+	source, err := r.playback.GetPlaybackSource(req.Context(), playback.PlaybackRequest{ItemID: itemID, AssetID: assetID, UserID: &userID, ClientProfile: clientProfile, AllowHLSFallback: r.hls.Enabled()})
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return

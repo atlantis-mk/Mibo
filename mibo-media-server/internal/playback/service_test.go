@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/probe"
@@ -201,6 +203,76 @@ func TestCatalogPlaybackReturnsUnplayableForMissingInventoryFile(t *testing.T) {
 	}
 }
 
+func TestCatalogPlaybackResolvesSeriesToPlayableEpisode(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	seasonNumber := 1
+	episodeOneNumber := 1
+	episodeTwoNumber := 2
+	series := database.CatalogItem{LibraryID: fixture.library.ID, Type: "series", Title: "Catalog Series", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&series).Error; err != nil {
+		fixture.t.Fatalf("create series: %v", err)
+	}
+	season := database.CatalogItem{LibraryID: fixture.library.ID, Type: "season", ParentID: &series.ID, Title: "Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&season).Error; err != nil {
+		fixture.t.Fatalf("create season: %v", err)
+	}
+	first := database.CatalogItem{LibraryID: fixture.library.ID, Type: "episode", ParentID: &season.ID, Title: "Episode 1", ParentIndexNumber: &seasonNumber, IndexNumber: &episodeOneNumber, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	second := database.CatalogItem{LibraryID: fixture.library.ID, Type: "episode", ParentID: &season.ID, Title: "Episode 2", ParentIndexNumber: &seasonNumber, IndexNumber: &episodeTwoNumber, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	for _, item := range []*database.CatalogItem{&first, &second} {
+		if err := fixture.db.WithContext(context.Background()).Create(item).Error; err != nil {
+			fixture.t.Fatalf("create episode: %v", err)
+		}
+	}
+	createPlayablePlaybackAsset(t, fixture, first.ID, "series-episode-one.mp4")
+	secondAsset, secondFile := createPlayablePlaybackAsset(t, fixture, second.ID, "series-episode-two.mp4")
+	userID := uint(7)
+	lastPlayed := time.Now().UTC()
+	if err := fixture.db.WithContext(context.Background()).Create(&database.UserItemData{UserID: userID, ItemID: second.ID, AssetID: &secondAsset.ID, PositionSeconds: 300, LastPlayedAt: &lastPlayed}).Error; err != nil {
+		fixture.t.Fatalf("create progress: %v", err)
+	}
+	target, err := seriesplayback.Select(context.Background(), fixture.db, series.ID, &userID)
+	if err != nil {
+		fixture.t.Fatalf("select series playback target: %v", err)
+	}
+	if target == nil || target.EpisodeID != second.ID {
+		fixture.t.Fatalf("unexpected series playback target: %#v", target)
+	}
+
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: series.ID, UserID: &userID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get series playback source: %v", err)
+	}
+	if source.ItemID != second.ID || source.AssetID != secondAsset.ID || source.FileID != secondFile.ID || !source.Playable {
+		fixture.t.Fatalf("unexpected resolved series playback source: %#v", source)
+	}
+}
+
+func TestCatalogPlaybackReturnsUnplayableForSeriesWithoutLocalEpisodes(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	seasonNumber := 1
+	episodeNumber := 1
+	series := database.CatalogItem{LibraryID: fixture.library.ID, Type: "series", Title: "Missing Series", AvailabilityStatus: "missing", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&series).Error; err != nil {
+		fixture.t.Fatalf("create series: %v", err)
+	}
+	season := database.CatalogItem{LibraryID: fixture.library.ID, Type: "season", ParentID: &series.ID, Title: "Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: "missing", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&season).Error; err != nil {
+		fixture.t.Fatalf("create season: %v", err)
+	}
+	missing := database.CatalogItem{LibraryID: fixture.library.ID, Type: "episode", ParentID: &season.ID, Title: "Missing Episode", ParentIndexNumber: &seasonNumber, IndexNumber: &episodeNumber, AvailabilityStatus: "missing", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&missing).Error; err != nil {
+		fixture.t.Fatalf("create missing episode: %v", err)
+	}
+
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: series.ID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get series playback source: %v", err)
+	}
+	if source.Playable || source.Decision.Kind != "unplayable" || !hasDecisionReasonCode(source.Decision.Reasons, "series_has_no_playable_episode") {
+		fixture.t.Fatalf("expected unplayable series decision, got %#v", source)
+	}
+}
+
 type playbackDecisionFixture struct {
 	t        *testing.T
 	db       *gorm.DB
@@ -257,4 +329,32 @@ func hasDecisionReasonCode(reasons []DecisionReason, want string) bool {
 		}
 	}
 	return false
+}
+
+func createPlayablePlaybackAsset(t *testing.T, fixture *playbackDecisionFixture, itemID uint, name string) (database.MediaAsset, database.InventoryFile) {
+	t.Helper()
+	asset := database.MediaAsset{LibraryID: fixture.library.ID, AssetType: "main", Status: "available", ProbeStatus: probe.StatusReady}
+	if err := fixture.db.WithContext(context.Background()).Create(&asset).Error; err != nil {
+		t.Fatalf("create media asset: %v", err)
+	}
+	filePath := filepath.Join(fixture.rootPath, name)
+	if err := os.WriteFile(filePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write inventory file: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: filePath, Container: "mp4", Status: "available"}
+	if err := fixture.db.WithContext(context.Background()).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetItem{AssetID: asset.ID, ItemID: itemID, Role: "primary", SegmentIndex: 0}).Error; err != nil {
+		t.Fatalf("create asset item: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: "source", PartIndex: 0}).Error; err != nil {
+		t.Fatalf("create asset file: %v", err)
+	}
+	width := 1280
+	height := 720
+	if err := fixture.db.WithContext(context.Background()).Create(&database.MediaStream{FileID: file.ID, StreamIndex: 0, StreamType: "video", Codec: "h264", Width: &width, Height: &height}).Error; err != nil {
+		t.Fatalf("create media stream: %v", err)
+	}
+	return asset, file
 }

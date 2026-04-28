@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 var (
@@ -48,16 +50,18 @@ const (
 )
 
 type classifiedMedia struct {
-	Type           string
-	Title          string
-	OriginalTitle  string
-	SeriesTitle    string
-	Year           *int
-	SeasonNumber   *int
-	EpisodeNumber  *int
-	EpisodeNumbers []int
-	SourcePath     string
-	Status         string
+	Type                 string
+	Title                string
+	OriginalTitle        string
+	SeriesTitle          string
+	Year                 *int
+	SeasonNumber         *int
+	EpisodeNumber        *int
+	EpisodeNumbers       []int
+	SourcePath           string
+	Status               string
+	NormalizationVersion string
+	RemovedTokens        []titleclean.RemovedToken
 }
 
 type catalogEpisodeSlot struct {
@@ -66,24 +70,26 @@ type catalogEpisodeSlot struct {
 }
 
 type catalogScanArtifact struct {
-	ItemType          string
-	ItemPath          string
-	SourcePath        string
-	SeriesPath        string
-	SeasonPath        string
-	Title             string
-	OriginalTitle     string
-	SeriesTitle       string
-	Year              *int
-	SeasonNumber      *int
-	EpisodeSlots      []catalogEpisodeSlot
-	StorageProvider   string
-	StableIdentityKey string
-	ProviderName      string
-	HashesJSON        string
-	SizeBytes         int64
-	ModifiedAt        *time.Time
-	Container         string
+	ItemType             string
+	ItemPath             string
+	SourcePath           string
+	SeriesPath           string
+	SeasonPath           string
+	Title                string
+	OriginalTitle        string
+	SeriesTitle          string
+	Year                 *int
+	SeasonNumber         *int
+	EpisodeSlots         []catalogEpisodeSlot
+	StorageProvider      string
+	StableIdentityKey    string
+	ProviderName         string
+	HashesJSON           string
+	SizeBytes            int64
+	ModifiedAt           *time.Time
+	Container            string
+	NormalizationVersion string
+	RemovedTokens        []titleclean.RemovedToken
 }
 
 type SyncResult struct {
