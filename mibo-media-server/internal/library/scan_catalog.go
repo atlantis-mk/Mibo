@@ -59,11 +59,28 @@ func (s *Service) writeCatalogScanMovie(ctx context.Context, library database.Li
 		if err != nil {
 			return err
 		}
-		if _, err := inventorySvc.LinkAssetToItem(ctx, inventory.LinkAssetItemInput{AssetID: asset.ID, ItemID: item.ID, Role: inventory.AssetItemRolePrimary, SegmentIndex: 0, Source: "scanner"}); err != nil {
+		assetType, role := catalogScanMovieAssetDisposition(ctx, tx, file.ID, item.ID, artifact)
+		if asset.AssetType != assetType {
+			if err := tx.WithContext(ctx).Model(&database.MediaAsset{}).Where("id = ?", asset.ID).Update("asset_type", assetType).Error; err != nil {
+				return err
+			}
+			asset.AssetType = assetType
+		}
+		if _, err := inventorySvc.LinkAssetToItem(ctx, inventory.LinkAssetItemInput{AssetID: asset.ID, ItemID: item.ID, Role: role, SegmentIndex: 0, Source: "scanner"}); err != nil {
 			return err
 		}
 
-		if err := recordCatalogScanMetadataSource(ctx, tx, catalogSvc, item.ID, buildCatalogScanEvidencePayload(artifact, nil)); err != nil {
+		source, err := recordCatalogScanMetadataSource(ctx, tx, catalogSvc, item.ID, buildCatalogScanEvidencePayload(artifact, nil))
+		if err != nil {
+			return err
+		}
+		if err := s.applyCatalogScanImages(ctx, tx, item.ID, artifact.ImageCandidates, &source.ID); err != nil {
+			return err
+		}
+		if err := applyCatalogScanExternalIDs(ctx, catalogSvc, item, artifact.ExternalIDs); err != nil {
+			return err
+		}
+		if err := syncCatalogScanHashtagTags(ctx, tx, item.ID, artifact.Tags); err != nil {
 			return err
 		}
 
@@ -110,6 +127,14 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 		if err != nil {
 			return err
 		}
+		seriesSource, err := recordCatalogScanMetadataSource(ctx, tx, catalogSvc, seriesItem.ID, buildCatalogScanEvidencePayload(artifact, nil))
+		if err != nil {
+			return err
+		}
+		seriesFallbackImages := catalogScanSeriesFallbackImageCandidates(artifact.ImageCandidates)
+		if err := s.applyCatalogScanImages(ctx, tx, seriesItem.ID, seriesFallbackImages, &seriesSource.ID); err != nil {
+			return err
+		}
 
 		seasonTitle := fmt.Sprintf("Season %d", *artifact.SeasonNumber)
 		seasonItem, err := createOrReuseCatalogItem(ctx, tx, catalogSvc, catalog.CreateItemInput{
@@ -153,7 +178,17 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 				return err
 			}
 			episodeItems = append(episodeItems, episodeItem)
-			if err := recordCatalogScanMetadataSource(ctx, tx, catalogSvc, episodeItem.ID, buildCatalogScanEvidencePayload(artifact, episodeNumbersWithAppend(episodeNumbers, episodeNumber))); err != nil {
+			source, err := recordCatalogScanMetadataSource(ctx, tx, catalogSvc, episodeItem.ID, buildCatalogScanEvidencePayload(artifact, episodeNumbersWithAppend(episodeNumbers, episodeNumber)))
+			if err != nil {
+				return err
+			}
+			if err := s.applyCatalogScanImages(ctx, tx, episodeItem.ID, artifact.ImageCandidates, &source.ID); err != nil {
+				return err
+			}
+			if err := applyCatalogScanExternalIDs(ctx, catalogSvc, episodeItem, artifact.ExternalIDs); err != nil {
+				return err
+			}
+			if err := syncCatalogScanHashtagTags(ctx, tx, episodeItem.ID, artifact.Tags); err != nil {
 				return err
 			}
 			result.Item = episodeItem
@@ -201,6 +236,58 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 	return result, nil
 }
 
+func syncCatalogScanHashtagTags(ctx context.Context, tx *gorm.DB, itemID uint, tags []string) error {
+	if itemID == 0 {
+		return nil
+	}
+	if err := tx.WithContext(ctx).
+		Where("item_id = ? AND tag_id IN (SELECT id FROM tags WHERE kind = ?)", itemID, "hashtag").
+		Delete(&database.ItemTag{}).Error; err != nil {
+		return err
+	}
+
+	for _, tagName := range uniqueCatalogScanTags(tags) {
+		tag := database.Tag{Kind: "hashtag", Name: tagName}
+		if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "kind"}, {Name: "name"}},
+			DoNothing: true,
+		}).Create(&tag).Error; err != nil {
+			return err
+		}
+		if tag.ID == 0 {
+			if err := tx.WithContext(ctx).Where("kind = ? AND name = ?", "hashtag", tagName).First(&tag).Error; err != nil {
+				return err
+			}
+		}
+		itemTag := database.ItemTag{ItemID: itemID, TagID: tag.ID}
+		if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "item_id"}, {Name: "tag_id"}},
+			DoNothing: true,
+		}).Create(&itemTag).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func uniqueCatalogScanTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(tag, "#"))
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
 func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, rootPath string, seen map[string]struct{}) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var files []database.InventoryFile
@@ -222,10 +309,11 @@ func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, roo
 			missingFileIDs = append(missingFileIDs, file.ID)
 		}
 		if len(missingFileIDs) > 0 {
+			missingAt := time.Now().UTC()
 			if err := tx.WithContext(ctx).
 				Model(&database.InventoryFile{}).
 				Where("id IN ?", missingFileIDs).
-				Updates(map[string]any{"status": inventory.FileStatusMissing, "deleted_at": nil}).Error; err != nil {
+				Updates(map[string]any{"status": inventory.FileStatusMissing, "missing_since": gorm.Expr("COALESCE(missing_since, ?)", missingAt), "deleted_at": nil}).Error; err != nil {
 				return err
 			}
 		}
@@ -242,7 +330,7 @@ func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, roo
 			if err := tx.WithContext(ctx).
 				Model(&database.MediaAsset{}).
 				Where("id = ?", assetID).
-				Updates(map[string]any{"status": status, "deleted_at": nil}).Error; err != nil {
+				Updates(missingAwareAssetUpdates(status)).Error; err != nil {
 				return err
 			}
 		}
@@ -259,13 +347,33 @@ func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, roo
 			if err := tx.WithContext(ctx).
 				Model(&database.CatalogItem{}).
 				Where("id = ?", itemID).
-				Update("availability_status", availability).Error; err != nil {
+				Updates(missingAwareCatalogUpdates(availability)).Error; err != nil {
 				return err
 			}
 		}
 
 		return nil
 	})
+}
+
+func missingAwareAssetUpdates(status string) map[string]any {
+	updates := map[string]any{"status": status, "deleted_at": nil}
+	if status == inventory.AssetStatusMissing {
+		updates["missing_since"] = gorm.Expr("COALESCE(missing_since, ?)", time.Now().UTC())
+	} else {
+		updates["missing_since"] = nil
+	}
+	return updates
+}
+
+func missingAwareCatalogUpdates(availability string) map[string]any {
+	updates := map[string]any{"availability_status": availability}
+	if availability == catalog.AvailabilityMissing {
+		updates["missing_since"] = gorm.Expr("COALESCE(missing_since, ?)", time.Now().UTC())
+	} else {
+		updates["missing_since"] = nil
+	}
+	return updates
 }
 
 func upsertCatalogScanFile(ctx context.Context, tx *gorm.DB, inventorySvc *inventory.Service, libraryID uint, artifact catalogScanArtifact) (database.InventoryFile, error) {
@@ -316,13 +424,14 @@ func reuseInventoryFileByStableIdentity(ctx context.Context, db *gorm.DB, librar
 		return database.InventoryFile{}, false, err
 	}
 	updates := map[string]any{
-		"storage_path": storagePath,
-		"hashes_json":  strings.TrimSpace(artifact.HashesJSON),
-		"size_bytes":   artifact.SizeBytes,
-		"modified_at":  artifact.ModifiedAt,
-		"container":    container,
-		"status":       inventory.FileStatusAvailable,
-		"deleted_at":   nil,
+		"storage_path":  storagePath,
+		"hashes_json":   strings.TrimSpace(artifact.HashesJSON),
+		"size_bytes":    artifact.SizeBytes,
+		"modified_at":   artifact.ModifiedAt,
+		"container":     container,
+		"status":        inventory.FileStatusAvailable,
+		"missing_since": nil,
+		"deleted_at":    nil,
 	}
 	if err := db.WithContext(ctx).Model(&database.InventoryFile{}).Where("id = ?", file.ID).Updates(updates).Error; err != nil {
 		return database.InventoryFile{}, false, err
@@ -475,10 +584,11 @@ func createOrReuseCatalogScanAsset(ctx context.Context, tx *gorm.DB, inventorySv
 	asset, err := findCatalogScanAssetForFile(ctx, tx, fileID)
 	if err == nil {
 		updates := map[string]any{
-			"asset_type":   strings.TrimSpace(assetType),
-			"display_name": defaultCatalogTitle(artifact.Title, artifact.SourcePath),
-			"status":       inventory.AssetStatusAvailable,
-			"deleted_at":   nil,
+			"asset_type":    strings.TrimSpace(assetType),
+			"display_name":  defaultCatalogTitle(artifact.Title, artifact.SourcePath),
+			"status":        inventory.AssetStatusAvailable,
+			"missing_since": nil,
+			"deleted_at":    nil,
 		}
 		if err := tx.WithContext(ctx).Model(&database.MediaAsset{}).Where("id = ?", asset.ID).Updates(updates).Error; err != nil {
 			return database.MediaAsset{}, err
@@ -527,7 +637,21 @@ func catalogScanAssetDisposition(ctx context.Context, tx *gorm.DB, fileID uint, 
 	return inventory.AssetTypeMain, inventory.AssetItemRolePrimary
 }
 
+func catalogScanMovieAssetDisposition(ctx context.Context, tx *gorm.DB, fileID uint, itemID uint, artifact catalogScanArtifact) (string, string) {
+	if strings.TrimSpace(artifact.PreferredAssetType) != "" || strings.TrimSpace(artifact.PreferredAssetRole) != "" {
+		return defaultCatalogState(artifact.PreferredAssetType, inventory.AssetTypeExtra), defaultCatalogState(artifact.PreferredAssetRole, inventory.AssetItemRoleExtra)
+	}
+	if itemID != 0 && hasOtherCatalogAssetForItem(ctx, tx, itemID, fileID) {
+		return inventory.AssetTypeVersion, inventory.AssetItemRoleVersion
+	}
+	return inventory.AssetTypeMain, inventory.AssetItemRolePrimary
+}
+
 func hasOtherCatalogAssetForEpisode(ctx context.Context, tx *gorm.DB, itemID uint, fileID uint) bool {
+	return hasOtherCatalogAssetForItem(ctx, tx, itemID, fileID)
+}
+
+func hasOtherCatalogAssetForItem(ctx context.Context, tx *gorm.DB, itemID uint, fileID uint) bool {
 	var count int64
 	err := tx.WithContext(ctx).
 		Model(&database.AssetItem{}).
@@ -548,12 +672,22 @@ func createOrReuseCatalogItem(ctx context.Context, tx *gorm.DB, catalogSvc *cata
 	}
 
 	var item database.CatalogItem
-	err := tx.WithContext(ctx).Where("library_id = ? AND path = ? AND deleted_at IS NULL", input.LibraryID, pathValue).First(&item).Error
+	err := findCatalogItemByScannerIdentityForScan(ctx, catalogSvc, input, &item)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		err = tx.WithContext(ctx).Where("library_id = ? AND path = ? AND deleted_at IS NULL", input.LibraryID, pathValue).First(&item).Error
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		err = findCatalogHierarchyItemForScan(ctx, tx, input, &item)
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return catalogSvc.CreateItem(ctx, input)
+		created, err := catalogSvc.CreateItem(ctx, input)
+		if err != nil {
+			return database.CatalogItem{}, err
+		}
+		if err := recordCatalogScannerIdentity(ctx, catalogSvc, created); err != nil {
+			return database.CatalogItem{}, err
+		}
+		return created, nil
 	}
 	if err != nil {
 		return database.CatalogItem{}, err
@@ -569,6 +703,7 @@ func createOrReuseCatalogItem(ctx context.Context, tx *gorm.DB, catalogSvc *cata
 		"index_number":          input.IndexNumber,
 		"parent_index_number":   input.ParentIndexNumber,
 		"availability_status":   defaultCatalogState(input.AvailabilityStatus, catalog.AvailabilityAvailable),
+		"missing_since":         nil,
 		"governance_status":     governanceStatusForScanUpdate(item.GovernanceStatus, input.GovernanceStatus),
 		"deleted_at":            nil,
 		"last_canonicalized_at": time.Now().UTC(),
@@ -582,7 +717,35 @@ func createOrReuseCatalogItem(ctx context.Context, tx *gorm.DB, catalogSvc *cata
 	if err := tx.WithContext(ctx).First(&item, item.ID).Error; err != nil {
 		return database.CatalogItem{}, err
 	}
+	if err := recordCatalogScannerIdentity(ctx, catalogSvc, item); err != nil {
+		return database.CatalogItem{}, err
+	}
 	return item, nil
+}
+
+func findCatalogItemByScannerIdentityForScan(ctx context.Context, catalogSvc *catalog.Service, input catalog.CreateItemInput, target *database.CatalogItem) error {
+	if target == nil {
+		return gorm.ErrRecordNotFound
+	}
+	identityKey, ok := catalog.ScannerIdentityKeyForItem(database.CatalogItem{LibraryID: input.LibraryID, Type: input.Type, Path: strings.TrimSpace(input.Path)})
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	item, _, err := catalogSvc.FindItemByIdentity(ctx, catalog.IdentityProviderScanner, strings.TrimSpace(input.Type), identityKey)
+	if err != nil {
+		return err
+	}
+	*target = item
+	return nil
+}
+
+func recordCatalogScannerIdentity(ctx context.Context, catalogSvc *catalog.Service, item database.CatalogItem) error {
+	identityKey, ok := catalog.ScannerIdentityKeyForItem(item)
+	if !ok {
+		return nil
+	}
+	_, err := catalogSvc.SetIdentity(ctx, catalog.IdentityInput{ItemID: item.ID, Provider: catalog.IdentityProviderScanner, IdentityType: item.Type, IdentityKey: identityKey, SourcePath: item.Path})
+	return err
 }
 
 func findOrCreateCatalogMovieItem(ctx context.Context, tx *gorm.DB, catalogSvc *catalog.Service, libraryID uint, assetID uint, artifact catalogScanArtifact) (database.CatalogItem, error) {
@@ -594,6 +757,7 @@ func findOrCreateCatalogMovieItem(ctx context.Context, tx *gorm.DB, catalogSvc *
 			"original_title":        strings.TrimSpace(artifact.OriginalTitle),
 			"year":                  artifact.Year,
 			"availability_status":   catalog.AvailabilityAvailable,
+			"missing_since":         nil,
 			"governance_status":     governanceStatusForScanUpdate(existing.GovernanceStatus, catalog.GovernancePending),
 			"last_canonicalized_at": time.Now().UTC(),
 			"deleted_at":            nil,
@@ -605,6 +769,9 @@ func findOrCreateCatalogMovieItem(ctx context.Context, tx *gorm.DB, catalogSvc *
 			return database.CatalogItem{}, err
 		}
 		if err := tx.WithContext(ctx).First(&existing, existing.ID).Error; err != nil {
+			return database.CatalogItem{}, err
+		}
+		if err := recordCatalogScannerIdentity(ctx, catalogSvc, existing); err != nil {
 			return database.CatalogItem{}, err
 		}
 		return existing, nil
@@ -700,30 +867,54 @@ func catalogScanShouldPreserveDescriptiveFields(governanceStatus string) bool {
 	}
 }
 
-func recordCatalogScanMetadataSource(ctx context.Context, tx *gorm.DB, catalogSvc *catalog.Service, itemID uint, payloadJSON string) error {
+func recordCatalogScanMetadataSource(ctx context.Context, tx *gorm.DB, catalogSvc *catalog.Service, itemID uint, payloadJSON string) (database.MetadataSource, error) {
 	now := time.Now().UTC()
 	var existing database.MetadataSource
 	err := tx.WithContext(ctx).
 		Where("item_id = ? AND source_type = ? AND source_name = ? AND external_id = ? AND language = ?", itemID, catalog.SourceTypeLocalFile, "scanner", "", "").
 		First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		_, err = catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{
+		source, err := catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{
 			ItemID:      itemID,
 			SourceType:  catalog.SourceTypeLocalFile,
 			SourceName:  "scanner",
 			PayloadJSON: payloadJSON,
 			FetchedAt:   now,
 		})
-		return err
+		return source, err
 	}
 	if err != nil {
-		return err
+		return database.MetadataSource{}, err
 	}
-	return tx.WithContext(ctx).Model(&database.MetadataSource{}).Where("id = ?", existing.ID).Updates(map[string]any{
+	if err := tx.WithContext(ctx).Model(&database.MetadataSource{}).Where("id = ?", existing.ID).Updates(map[string]any{
 		"payload_json": payloadJSON,
 		"fetched_at":   now,
 		"updated_at":   now,
-	}).Error
+	}).Error; err != nil {
+		return database.MetadataSource{}, err
+	}
+	if err := tx.WithContext(ctx).First(&existing, existing.ID).Error; err != nil {
+		return database.MetadataSource{}, err
+	}
+	return existing, nil
+}
+
+func applyCatalogScanExternalIDs(ctx context.Context, catalogSvc *catalog.Service, item database.CatalogItem, externalIDs []catalogScanExternalID) error {
+	if item.ID == 0 || len(externalIDs) == 0 {
+		return nil
+	}
+	for _, externalID := range externalIDs {
+		provider := strings.TrimSpace(externalID.Provider)
+		providerType := strings.TrimSpace(externalID.ProviderType)
+		value := strings.TrimSpace(externalID.ExternalID)
+		if provider == "" || providerType == "" || value == "" {
+			continue
+		}
+		if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: item.ID, Provider: provider, ProviderType: providerType, ExternalID: value, IsPrimary: true, Source: "scanner", Confidence: externalID.Confidence}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumbers []int) string {
@@ -746,11 +937,23 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 	if len(artifact.RemovedTokens) > 0 {
 		payload["removed_tokens"] = artifact.RemovedTokens
 	}
+	if tags := uniqueCatalogScanTags(artifact.Tags); len(tags) > 0 {
+		payload["hashtag_tags"] = tags
+	}
 	if len(artifact.SubtitleSidecars) > 0 {
 		payload["subtitle_sidecars"] = sidecarEvidencePayload(artifact.SubtitleSidecars)
 	}
 	if len(artifact.MetadataSidecars) > 0 {
 		payload["metadata_sidecars"] = metadataSidecarEvidencePayload(artifact.MetadataSidecars)
+	}
+	if len(artifact.ImageCandidates) > 0 {
+		payload["image_candidates"] = imageCandidateEvidencePayload(artifact.ImageCandidates)
+	}
+	if len(artifact.ExternalIDs) > 0 {
+		payload["external_ids"] = externalIDEvidencePayload(artifact.ExternalIDs)
+	}
+	if len(artifact.Decisions) > 0 {
+		payload["resolver_decisions"] = resolverDecisionEvidencePayload(artifact.Decisions)
 	}
 	if strings.TrimSpace(artifact.SeriesTitle) != "" {
 		payload["series_title"] = strings.TrimSpace(artifact.SeriesTitle)
@@ -766,6 +969,38 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 		return "{}"
 	}
 	return string(encoded)
+}
+
+func imageCandidateEvidencePayload(candidates []catalogScanImageCandidate) []map[string]any {
+	items := make([]map[string]any, 0, len(candidates))
+	for _, candidate := range candidates {
+		item := map[string]any{
+			"image_type":  strings.TrimSpace(candidate.ImageType),
+			"source":      strings.TrimSpace(candidate.Source),
+			"priority":    candidate.Priority,
+			"provisional": candidate.Provisional,
+		}
+		if strings.TrimSpace(candidate.URL) != "" {
+			item["url"] = strings.TrimSpace(candidate.URL)
+		}
+		if strings.TrimSpace(candidate.Path) != "" {
+			item["path"] = strings.TrimSpace(candidate.Path)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func externalIDEvidencePayload(externalIDs []catalogScanExternalID) []map[string]any {
+	items := make([]map[string]any, 0, len(externalIDs))
+	for _, externalID := range externalIDs {
+		items = append(items, map[string]any{
+			"provider":      strings.TrimSpace(externalID.Provider),
+			"provider_type": strings.TrimSpace(externalID.ProviderType),
+			"external_id":   strings.TrimSpace(externalID.ExternalID),
+		})
+	}
+	return items
 }
 
 func sidecarEvidencePayload(sidecars []catalogScanSidecar) []map[string]any {
@@ -795,6 +1030,32 @@ func metadataSidecarEvidencePayload(sidecars []catalogScanMetadataSidecar) []map
 		}
 		if len(sidecar.ExternalIDs) > 0 {
 			item["external_ids"] = sidecar.ExternalIDs
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func resolverDecisionEvidencePayload(decisions []scanDecision) []map[string]any {
+	items := make([]map[string]any, 0, len(decisions))
+	for _, decision := range decisions {
+		item := map[string]any{
+			"type":        strings.TrimSpace(decision.Type),
+			"target_kind": strings.TrimSpace(decision.TargetKind),
+			"target_key":  strings.TrimSpace(decision.TargetKey),
+			"reason":      strings.TrimSpace(decision.Reason),
+		}
+		if decision.Confidence != nil {
+			item["confidence"] = *decision.Confidence
+		}
+		if len(decision.EvidenceRefs) > 0 {
+			item["evidence_refs"] = append([]string(nil), decision.EvidenceRefs...)
+		}
+		if len(decision.Warnings) > 0 {
+			item["warnings"] = append([]string(nil), decision.Warnings...)
+		}
+		if !decision.CreatedAt.IsZero() {
+			item["created_at"] = decision.CreatedAt.UTC().Format(time.RFC3339Nano)
 		}
 		items = append(items, item)
 	}
@@ -1037,6 +1298,7 @@ func catalogItemAvailabilityStatus(ctx context.Context, tx *gorm.DB, itemID uint
 	}
 	if len(children) > 0 {
 		hasUnaired := false
+		hasMissing := false
 		for _, child := range children {
 			availability, err := catalogItemAvailabilityStatus(ctx, tx, child.ID)
 			if err != nil {
@@ -1046,10 +1308,13 @@ func catalogItemAvailabilityStatus(ctx context.Context, tx *gorm.DB, itemID uint
 			case catalog.AvailabilityAvailable:
 				return catalog.AvailabilityAvailable, nil
 			case catalog.AvailabilityMissing, catalog.AvailabilityNoLocalMedia:
-				return catalog.AvailabilityMissing, nil
+				hasMissing = true
 			case catalog.AvailabilityUnaired:
 				hasUnaired = true
 			}
+		}
+		if hasMissing {
+			return catalog.AvailabilityMissing, nil
 		}
 		if hasUnaired {
 			return catalog.AvailabilityUnaired, nil

@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, Home, Search, Settings, Tv, User } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from "react"
+import type { ReactNode } from "react"
+import { Link, useNavigate } from "@tanstack/react-router"
+import { ArrowLeft, Home, Search, Settings, Tv, User } from "lucide-react"
 
-import 'swiper/css'
-import 'swiper/css/free-mode'
+import "swiper/css"
+import "swiper/css/free-mode"
 
-import { AppTopBar } from '#/components/app-top-bar'
-import { Button } from '#/components/ui/button'
+import { AppTopBar } from "#/components/app-top-bar"
+import { Button } from "#/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '#/components/ui/dialog'
+} from "#/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,20 +23,20 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
-import { SidebarTrigger } from '#/components/ui/sidebar'
-import type { CatalogAssetDetail, ProgressState } from '#/lib/mibo-api'
+} from "#/components/ui/dropdown-menu"
+import { SidebarTrigger } from "#/components/ui/sidebar"
+import type { CatalogAssetDetail, ProgressState } from "#/lib/mibo-api"
 import type {
   CatalogDetailPresentation,
   CatalogSeasonRail,
-} from '#/lib/media-presentation'
+} from "#/lib/media-presentation"
 import {
   formatMediaDetailYearRange,
   formatMediaRating,
   formatProviderLabel,
   formatSeasonSummary,
-} from '#/lib/media-presentation'
-import { useAuthStore } from '#/stores/auth-store'
+} from "#/lib/media-presentation"
+import { useAuthStore } from "#/stores/auth-store"
 
 import {
   DetailHeroSection,
@@ -44,7 +44,7 @@ import {
   RelatedMediaSection,
   SeriesEpisodesSection,
   SpecsSection,
-} from './standalone-media-detail-sections'
+} from "./standalone-media-detail-sections"
 import {
   formatAssetLabel,
   formatAvailabilityStatus,
@@ -53,8 +53,8 @@ import {
   getDisplayDatabaseLinks,
   getDisplaySourcePath,
   getPrimaryCatalogAsset,
-} from './standalone-media-detail-utils'
-import { cn } from '#/lib/utils'
+} from "./standalone-media-detail-utils"
+import { cn } from "#/lib/utils"
 
 type StandaloneMediaDetailProps = {
   item: CatalogDetailPresentation
@@ -115,11 +115,11 @@ export function StandaloneMediaDetail({
   }, [item.id])
 
   const primaryAsset = getPrimaryCatalogAsset(item)
-  const isEpisode = item.type === 'episode'
+  const isEpisode = item.type === "episode"
   const databaseLinks = getDisplayDatabaseLinks(item)
   const genreLabel = (
     item.genres.length > 0 ? item.genres : item.tags.map((tag) => tag.name)
-  ).join(' / ')
+  ).join(" / ")
   const ratingLabel = [
     formatMediaRating(item.community_rating)
       ? `评分 ${formatMediaRating(item.community_rating)}`
@@ -127,7 +127,7 @@ export function StandaloneMediaDetail({
     item.official_rating ? `分级 ${item.official_rating}` : null,
   ]
     .filter(Boolean)
-    .join('\n')
+    .join("\n")
   const dateLabel = [
     formatMediaDetailYearRange(item)
       ? `年份 ${formatMediaDetailYearRange(item)}`
@@ -143,38 +143,38 @@ export function StandaloneMediaDetail({
     formatSeasonSummary(item) || null,
   ]
     .filter(Boolean)
-    .join('\n')
+    .join("\n")
 
   const handleLogout = async () => {
     clearSession()
-    await navigate({ to: '/login', search: { redirect: '/' }, replace: true })
+    await navigate({ to: "/login", search: { redirect: "/" }, replace: true })
   }
 
   const detailGroups = useMemo(
     () => [
       {
-        title: '类型与可用性',
+        title: "类型与可用性",
         value: [
           formatMediaType(item.type),
           formatAvailabilityStatus(item.availability_status),
         ]
           .filter(Boolean)
-          .join('\n'),
+          .join("\n"),
       },
       {
-        title: '类型 / 标签',
-        value: genreLabel || '暂未标注',
+        title: "类型 / 标签",
+        value: genreLabel || "暂未标注",
       },
       {
-        title: '评分与分级',
-        value: ratingLabel || '暂无评分',
+        title: "评分与分级",
+        value: ratingLabel || "暂无评分",
       },
       {
-        title: '日期与状态',
-        value: dateLabel || '暂无日期信息',
+        title: "日期与状态",
+        value: dateLabel || "暂无日期信息",
       },
       {
-        title: '来源',
+        title: "来源",
         value: [
           item.metadata_provider
             ? `主提供方 ${formatProviderLabel(item.metadata_provider)}`
@@ -183,10 +183,10 @@ export function StandaloneMediaDetail({
           getDisplaySourcePath(item),
         ]
           .filter(Boolean)
-          .join('\n'),
+          .join("\n"),
       },
       {
-        title: '技术信息',
+        title: "技术信息",
         value: [
           formatAssetLabel(primaryAsset),
           primaryAsset
@@ -194,10 +194,10 @@ export function StandaloneMediaDetail({
             : null,
         ]
           .filter(Boolean)
-          .join('\n'),
+          .join("\n"),
       },
     ],
-    [databaseLinks, dateLabel, genreLabel, item, primaryAsset, ratingLabel],
+    [databaseLinks, dateLabel, genreLabel, item, primaryAsset, ratingLabel]
   )
 
   return (
@@ -207,7 +207,7 @@ export function StandaloneMediaDetail({
         style={{
           backgroundImage: item.backdrop_url
             ? `url(${item.backdrop_url})`
-            : 'linear-gradient(135deg, rgba(54,54,54,0.96), rgba(29,29,29,0.98))',
+            : "linear-gradient(135deg, rgba(54,54,54,0.96), rgba(29,29,29,0.98))",
         }}
       />
       {item.backdrop_url ? (
@@ -305,7 +305,7 @@ export function StandaloneMediaDetail({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuLabel>
-                    {user?.username ?? '当前用户'}
+                    {user?.username ?? "当前用户"}
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild>
@@ -335,19 +335,19 @@ export function StandaloneMediaDetail({
           }
         />
 
-        <div className="mx-auto flex min-h-full w-full max-w-[1960px] flex-col px-6 pb-14 pt-28 sm:px-8 lg:px-10">
+        <div className="mx-auto flex min-h-full w-full max-w-[1960px] flex-col px-6 pt-28 pb-14 sm:px-8 lg:px-10">
           <section
             className={cn(
-              'grid gap-8 xl:gap-9',
+              "grid gap-8 xl:gap-9",
               isEpisode
-                ? 'lg:grid-cols-[minmax(360px,560px)_minmax(0,1fr)]'
-                : 'lg:grid-cols-[336px_minmax(0,1fr)]',
+                ? "lg:grid-cols-[minmax(360px,560px)_minmax(0,1fr)]"
+                : "lg:grid-cols-[336px_minmax(0,1fr)]"
             )}
           >
             <div
               className={cn(
-                'mx-auto w-full lg:mx-0',
-                isEpisode ? 'max-w-[560px]' : 'max-w-[336px]',
+                "mx-auto w-full lg:mx-0",
+                isEpisode ? "max-w-[560px]" : "max-w-[336px]"
               )}
             >
               <div className="overflow-hidden rounded-[10px] border border-border/40 bg-card/80 shadow-xl">
@@ -356,15 +356,15 @@ export function StandaloneMediaDetail({
                     src={item.poster_url}
                     alt={`${item.title} poster`}
                     className={cn(
-                      'w-full object-cover',
-                      isEpisode ? 'aspect-video' : 'aspect-[2/3]',
+                      "w-full object-cover",
+                      isEpisode ? "aspect-video" : "aspect-[2/3]"
                     )}
                   />
                 ) : (
                   <div
                     className={cn(
-                      isEpisode ? 'aspect-video' : 'aspect-[2/3]',
-                      'bg-muted',
+                      isEpisode ? "aspect-video" : "aspect-[2/3]",
+                      "bg-muted"
                     )}
                   />
                 )}
@@ -435,26 +435,26 @@ function TopBarIconButton({
 }
 
 function formatShortDate(value?: string) {
-  if (!value) return ''
+  if (!value) return ""
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value.slice(0, 10)
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
   }).format(date)
 }
 
 function formatSeriesStatus(status: string) {
   switch (status.trim().toLowerCase()) {
-    case 'continuing':
-    case 'returning series':
-      return '更新中'
-    case 'ended':
-      return '已完结'
-    case 'canceled':
-    case 'cancelled':
-      return '已取消'
+    case "continuing":
+    case "returning series":
+      return "更新中"
+    case "ended":
+      return "已完结"
+    case "canceled":
+    case "cancelled":
+      return "已取消"
     default:
       return status
   }

@@ -1,5 +1,5 @@
-import type { ComponentType } from 'react'
-import { Link } from '@tanstack/react-router'
+import type { ComponentType } from "react"
+import { Link } from "@tanstack/react-router"
 import {
   ArrowUpRightIcon,
   ClapperboardIcon,
@@ -7,53 +7,47 @@ import {
   LibraryBigIcon,
   PlayIcon,
   TvIcon,
-} from 'lucide-react'
-import { Autoplay } from 'swiper/modules'
-import { Swiper, SwiperSlide } from 'swiper/react'
-import type { Swiper as SwiperType } from 'swiper/types'
+} from "lucide-react"
+import { Autoplay, FreeMode } from "swiper/modules"
+import { Swiper, SwiperSlide } from "swiper/react"
 
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
-import { MediaPosterCard, MediaRail } from '#/components/media-poster-card'
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
+import { MediaPosterCard, MediaRail } from "#/components/media-poster-card"
 import type {
   CatalogListItem,
   CatalogUserItemEntry,
   Library,
-} from '#/lib/mibo-api'
+} from "#/lib/mibo-api"
+import { formatLibraryType } from "#/lib/library-presentation"
 import {
   formatMediaCardTitle,
   getMediaCardBackdropUrl,
   getMediaCardPosterUrl,
   getMediaCardType,
   getPrimarySeriesTitle,
-} from '#/lib/media-presentation'
-import { cn } from '#/lib/utils'
+} from "#/lib/media-presentation"
+import { cn } from "#/lib/utils"
 
 const DEFAULT_OVERVIEW =
-  '最近加入的内容会在这里轮播展示，方便在首页快速发现刚扫描入库的媒体。'
+  "最近加入的内容会在这里轮播展示，方便在首页快速发现刚扫描入库的媒体。"
 
 export function HeroCarousel({
   heroItems,
   canLoopHeroItems,
-  selectedIndex,
   userName,
   continueWatchingCount,
   movieCount,
   showCount,
-  onSwiper,
-  onSlideChange,
-  onDotClick,
+  hasBottomOverlay = false,
 }: {
   heroItems: any[]
   canLoopHeroItems: boolean
-  selectedIndex: number
   userName: string
   continueWatchingCount: number
   movieCount: number
   showCount: number
-  onSwiper: (instance: SwiperType) => void
-  onSlideChange: (instance: SwiperType) => void
-  onDotClick: (index: number) => void
+  hasBottomOverlay?: boolean
 }) {
   return (
     <Swiper
@@ -69,8 +63,6 @@ export function HeroCarousel({
             }
           : false
       }
-      onSwiper={onSwiper}
-      onSlideChange={onSlideChange}
       className="w-full"
     >
       {heroItems.map((item) => {
@@ -87,7 +79,7 @@ export function HeroCarousel({
                   ? undefined
                   : {
                       background:
-                        'linear-gradient(135deg, rgba(5,10,18,1), rgba(30,41,59,0.88), rgba(15,118,110,0.66))',
+                        "linear-gradient(135deg, rgba(5,10,18,1), rgba(30,41,59,0.88), rgba(15,118,110,0.66))",
                     }
               }
             >
@@ -102,7 +94,12 @@ export function HeroCarousel({
                   <div className="absolute inset-0 bg-linear-to-t from-background/95 via-background/20 to-background/10" />
                 </>
               ) : null}
-              <div className="relative flex min-h-svh items-end px-6 py-8 sm:px-8 lg:px-12 lg:py-10">
+              <div
+                className={cn(
+                  "relative flex min-h-svh items-end px-6 pt-24 sm:px-8 lg:px-12",
+                  hasBottomOverlay ? "pb-81" : "pb-8 lg:pb-10"
+                )}
+              >
                 <div className="grid w-full gap-6 xl:grid-cols-[minmax(0,1.25fr)_340px] xl:items-end">
                   <div className="max-w-4xl min-w-0">
                     <Badge
@@ -121,7 +118,7 @@ export function HeroCarousel({
                           <span>{item.year}</span>
                         </>
                       ) : null}
-                      {getMediaCardType(item) !== 'show' && seriesTitle ? (
+                      {getMediaCardType(item) !== "show" && seriesTitle ? (
                         <>
                           <span>•</span>
                           <span>{seriesTitle}</span>
@@ -131,7 +128,7 @@ export function HeroCarousel({
                     <h1 className="mt-5 max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
                       {displayTitle}
                     </h1>
-                    <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
+                    <p className="mt-4 line-clamp-3 max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
                       {item.overview || DEFAULT_OVERVIEW}
                     </p>
                     <div className="mt-6 flex flex-wrap gap-3">
@@ -156,8 +153,8 @@ export function HeroCarousel({
                           params={{ id: String(item.id) }}
                           search={{
                             view:
-                              getMediaCardType(item) === 'show'
-                                ? 'series'
+                              getMediaCardType(item) === "show"
+                                ? "series"
                                 : undefined,
                           }}
                         >
@@ -204,68 +201,66 @@ export function HeroCarousel({
           </SwiperSlide>
         )
       })}
-
-      {heroItems.length > 1 ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center px-6">
-          <div className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-3 py-2 backdrop-blur-xl">
-            {heroItems.map((item, index) => (
-              <button
-                key={item.id}
-                type="button"
-                aria-label={`切换到第 ${index + 1} 张幻灯片`}
-                onClick={() => onDotClick(index)}
-                className={cn(
-                  'h-2.5 rounded-full bg-muted transition-all',
-                  selectedIndex === index
-                    ? 'w-8 bg-primary'
-                    : 'w-2.5 hover:bg-muted-foreground/60',
-                )}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
     </Swiper>
   )
 }
 
 export function LatestLibraryRail({
   latestLibrarySections,
-  favoriteIds,
-  onFavoriteToggle,
 }: {
   latestLibrarySections: any[]
-  favoriteIds?: Set<number>
-  onFavoriteToggle?: (item: CatalogListItem, favorite: boolean) => void
 }) {
+  if (latestLibrarySections.length === 0) {
+    return (
+      <section className="relative flex min-h-[calc(100svh-18rem)] items-center justify-center border-t border-border/40 bg-background px-4 py-16 sm:px-6 lg:px-8">
+        <div className="rounded-[2rem] border border-border/40 bg-card/70 px-6 py-8 text-center text-sm text-muted-foreground backdrop-blur-sm">
+          还没有可展示的最新内容，稍后会按媒体库自动补充到这里。
+        </div>
+      </section>
+    )
+  }
+
   return (
-    <section className="relative border-t border-border/40 bg-background px-4 pb-16 pt-10 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1600px]">
-        {latestLibrarySections.length > 0 ? (
-          <div className="space-y-8">
-            {latestLibrarySections.map((section) => (
-              <MediaRail
-                key={section.library_id}
-                title={`最新${section.library_name}`}
-                href={{ libraryId: section.library_id }}
-              >
-                {section.items.map((item: CatalogListItem) => (
-                  <MediaPosterCard
-                    key={item.id}
-                    item={item}
-                    libraryName={section.library_name}
-                    isFavorite={favoriteIds?.has(item.id)}
-                    onFavoriteToggle={onFavoriteToggle}
-                  />
-                ))}
-              </MediaRail>
-            ))}
-          </div>
-        ) : (
-          <div className="mt-8 rounded-[2rem] border border-border/40 bg-card/70 px-6 py-8 text-sm text-muted-foreground backdrop-blur-sm">
-            还没有可展示的最新内容，稍后会按媒体库自动补充到这里。
-          </div>
-        )}
+    <section className="relative border-t border-border/40 bg-background px-4 pt-10 pb-16 sm:px-6 lg:px-8">
+      <div>
+        <div className="space-y-8">
+          {latestLibrarySections.map((section) => (
+            <section key={section.library_id}>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <Link
+                  to="/library/$id"
+                  params={{ id: String(section.library_id) }}
+                  className="text-xl font-semibold tracking-tight text-foreground underline-offset-4 hover:underline"
+                >
+                  最新{section.library_name}
+                </Link>
+              </div>
+              <div className="-mx-4 sm:-mx-6 lg:-mx-8">
+                <Swiper
+                  modules={[FreeMode]}
+                  slidesPerView="auto"
+                  spaceBetween={16}
+                  slidesOffsetBefore={16}
+                  breakpoints={{
+                    640: { slidesOffsetBefore: 24 },
+                    1024: { slidesOffsetBefore: 32 },
+                  }}
+                  freeMode
+                  className="!overflow-x-clip !overflow-y-visible pt-1 pb-3"
+                >
+                  {section.items.map((item: CatalogListItem) => (
+                    <SwiperSlide key={item.id} className="!w-auto">
+                      <MediaPosterCard
+                        item={item}
+                        libraryName={section.library_name}
+                      />
+                    </SwiperSlide>
+                  ))}
+                </Swiper>
+              </div>
+            </section>
+          ))}
+        </div>
       </div>
     </section>
   )
@@ -274,21 +269,36 @@ export function LatestLibraryRail({
 export function MyMediaSection({
   libraries,
   latestLibrarySections,
+  variant = "default",
 }: {
   libraries: Library[]
   latestLibrarySections: { library_id: number; items: CatalogListItem[] }[]
+  variant?: "default" | "heroOverlay"
 }) {
   const postersByLibrary = new Map(
     latestLibrarySections.map((section) => [
       section.library_id,
       section.items.map(getMediaCardPosterUrl).filter(Boolean).slice(0, 4),
-    ]),
+    ])
   )
 
   if (libraries.length === 0) {
     return (
-      <section className="px-4 py-10 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-[1600px] rounded-[2rem] border border-border/40 bg-card/70 px-6 py-8 text-sm text-muted-foreground backdrop-blur-sm">
+      <section
+        className={cn(
+          variant === "heroOverlay"
+            ? "pointer-events-none absolute inset-x-0 bottom-8 z-20 px-4 sm:px-6 lg:px-8"
+            : "px-4 py-10 sm:px-6 lg:px-8"
+        )}
+      >
+        <div
+          className={cn(
+            "mx-auto max-w-[1600px] rounded-[2rem] border border-border/40 px-6 py-8 text-sm text-muted-foreground backdrop-blur-sm",
+            variant === "heroOverlay"
+              ? "pointer-events-auto bg-background/70 shadow-2xl shadow-black/25"
+              : "bg-card/70"
+          )}
+        >
           还没有媒体库。前往设置添加媒体源和媒体库后，这里会显示你的媒体入口。
         </div>
       </section>
@@ -296,24 +306,45 @@ export function MyMediaSection({
   }
 
   return (
-    <section className="px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1600px]">
-        <div className="mb-5 flex items-end justify-between gap-4">
-          <div>
-            <div className="text-xs tracking-[0.24em] text-muted-foreground uppercase">
-              My Media
+    <section
+      className={cn(
+        variant === "heroOverlay"
+          ? "pointer-events-none absolute inset-x-0 bottom-8 z-20 px-4 sm:px-6 lg:px-8"
+          : "px-4 py-10 sm:px-6 lg:px-8"
+      )}
+    >
+      <div
+        className={cn(
+          variant === "heroOverlay"
+            ? "pointer-events-auto"
+            : "mx-auto max-w-[1600px]"
+        )}
+      >
+        {variant === "default" ? (
+          <div className="mb-5 flex items-end justify-between gap-4">
+            <div>
+              <div className="text-xs tracking-[0.24em] text-muted-foreground uppercase">
+                My Media
+              </div>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                我的媒体
+              </h2>
             </div>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-              我的媒体
-            </h2>
           </div>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        ) : null}
+        <div
+          className={cn(
+            variant === "heroOverlay"
+              ? "flex h-64 gap-3 overflow-x-auto px-1 pt-3 pb-1"
+              : "grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+          )}
+        >
           {libraries.map((library) => (
             <LibraryCollageCard
               key={library.id}
               library={library}
               posters={postersByLibrary.get(library.id) ?? []}
+              variant={variant}
             />
           ))}
         </div>
@@ -324,12 +355,8 @@ export function MyMediaSection({
 
 export function ContinueWatchingRail({
   entries,
-  favoriteIds,
-  onFavoriteToggle,
 }: {
   entries: CatalogUserItemEntry[]
-  favoriteIds?: Set<number>
-  onFavoriteToggle?: (item: CatalogListItem, favorite: boolean) => void
 }) {
   if (entries.length === 0) {
     return null
@@ -337,26 +364,39 @@ export function ContinueWatchingRail({
 
   return (
     <section className="border-t border-border/40 bg-background px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1600px]">
-        <MediaRail title="继续观看">
-          {entries.map((entry) => {
-            const displayItem = entry.display_item ?? entry.item
-            const playbackItem = entry.play_item ?? entry.item
+      <div>
+        <section>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-xl font-semibold tracking-tight text-foreground">
+              继续观看
+            </h2>
+          </div>
+          <Swiper
+            modules={[FreeMode]}
+            slidesPerView="auto"
+            spaceBetween={16}
+            freeMode
+            className="!overflow-x-clip !overflow-y-visible pt-1 pb-3"
+          >
+            {entries.map((entry) => {
+              const displayItem = entry.display_item ?? entry.item
+              const playbackItem = entry.play_item ?? entry.item
 
-            return (
-              <MediaPosterCard
-                key={`${entry.item.id}-${entry.asset_id ?? 'default'}`}
-                item={displayItem}
-                playbackItem={playbackItem}
-                progress={entry}
-                isFavorite={Boolean(
-                  favoriteIds?.has(displayItem.id) || entry.favorite,
-                )}
-                onFavoriteToggle={onFavoriteToggle}
-              />
-            )
-          })}
-        </MediaRail>
+              return (
+                <SwiperSlide
+                  key={`${entry.item.id}-${entry.asset_id ?? "default"}`}
+                  className="!w-auto"
+                >
+                  <MediaPosterCard
+                    item={displayItem}
+                    playbackItem={playbackItem}
+                    progress={entry}
+                  />
+                </SwiperSlide>
+              )
+            })}
+          </Swiper>
+        </section>
       </div>
     </section>
   )
@@ -365,9 +405,11 @@ export function ContinueWatchingRail({
 function LibraryCollageCard({
   library,
   posters,
+  variant = "default",
 }: {
   library: Library
   posters: string[]
+  variant?: "default" | "heroOverlay"
 }) {
   const shouldUseCollage = posters.length >= 4
   const primaryPoster = posters[0]
@@ -376,9 +418,19 @@ function LibraryCollageCard({
     <Link
       to="/library/$id"
       params={{ id: String(library.id) }}
-      className="group overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className={cn(
+        "group overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        variant === "heroOverlay"
+          ? "h-full w-[240px] shrink-0 rounded-[1rem] sm:w-[280px] lg:w-[320px]"
+          : ""
+      )}
     >
-      <div className="aspect-[16/10] bg-muted">
+      <div
+        className={cn(
+          "relative overflow-hidden bg-muted",
+          variant === "heroOverlay" ? "aspect-[16/9]" : "aspect-[16/10]"
+        )}
+      >
         {shouldUseCollage ? (
           <div className="grid h-full grid-cols-4 gap-1 p-1">
             {posters.slice(0, 4).map((poster, index) => (
@@ -399,14 +451,25 @@ function LibraryCollageCard({
             暂无封面
           </div>
         )}
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,hsl(var(--background)/0.92)_0%,hsl(var(--background)/0.58)_34%,transparent_34.5%,transparent_61%,hsl(var(--background)/0.74)_61.5%,hsl(var(--background)/0.9)_100%)] opacity-95 transition-opacity group-hover:opacity-80" />
       </div>
-      <div className="flex items-center justify-between gap-3 px-4 py-4">
+      <div
+        className={cn(
+          "flex items-center justify-between gap-3 px-4",
+          variant === "heroOverlay" ? "py-2" : "py-4"
+        )}
+      >
         <div className="min-w-0">
-          <div className="truncate text-lg font-semibold tracking-tight">
+          <div
+            className={cn(
+              "truncate font-semibold tracking-tight",
+              variant === "heroOverlay" ? "text-sm" : "text-lg"
+            )}
+          >
             {library.name}
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {library.type || '媒体库'} · {library.status}
+            {formatLibraryType(library.type)} · {library.status}
           </div>
         </div>
         <ArrowUpRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
@@ -431,8 +494,8 @@ export function StatCard({
   return (
     <div
       className={cn(
-        'rounded-[1.75rem] border border-border/40 bg-card/75 p-4 backdrop-blur-md',
-        compact ? 'min-w-0' : '',
+        "rounded-[1.75rem] border border-border/40 bg-card/75 p-4 backdrop-blur-md",
+        compact ? "min-w-0" : ""
       )}
     >
       <div className="flex items-center gap-2 text-xs tracking-[0.2em] text-muted-foreground uppercase">
@@ -448,7 +511,7 @@ export function StatCard({
 }
 
 export function formatMediaType(type: string) {
-  if (type === 'movie') return '电影'
-  if (type === 'show' || type === 'episode') return '剧集'
-  return '媒体'
+  if (type === "movie") return "电影"
+  if (type === "show" || type === "episode") return "剧集"
+  return "媒体"
 }

@@ -1,4 +1,4 @@
-import { useAuthStore } from '#/stores/auth-store'
+import { useAuthStore } from "#/stores/auth-store"
 
 export type ApiErrorShape = {
   code: string
@@ -19,6 +19,14 @@ export type User = {
   updated_at: string
 }
 
+export type AdminUser = User
+
+export type CreateAdminUserInput = {
+  username: string
+  password: string
+  role: "user" | "admin"
+}
+
 export type LoginResult = {
   token: string
   expires_at: string
@@ -37,12 +45,12 @@ export type SetupStatus = {
 }
 
 export type ConsoleStatus =
-  | 'ok'
-  | 'warning'
-  | 'error'
-  | 'unknown'
-  | 'unavailable'
-  | 'not_configured'
+  | "ok"
+  | "warning"
+  | "error"
+  | "unknown"
+  | "unavailable"
+  | "not_configured"
 
 export type ConsoleServerSummary = {
   name: string
@@ -59,10 +67,10 @@ export type ConsoleServerSummary = {
 }
 
 export type ConsoleAccessAddress = {
-  kind: 'local' | 'lan' | 'remote'
+  kind: "local" | "lan" | "remote"
   label: string
   url?: string
-  status: ConsoleStatus | 'available'
+  status: ConsoleStatus | "available"
   route?: string
   message?: string
   copyable: boolean
@@ -98,7 +106,7 @@ export type ConsoleModuleStatus = {
 export type ConsoleActivityEvent = {
   id: string
   type: string
-  severity: 'info' | 'warning' | 'error'
+  severity: "info" | "warning" | "error"
   message: string
   user?: string
   device?: string
@@ -120,13 +128,13 @@ export type ConsoleQuickAction = {
   id: string
   label: string
   description: string
-  kind: 'route' | 'mutation' | 'unsupported'
+  kind: "route" | "mutation" | "unsupported"
   route?: string
   method?: string
   endpoint?: string
   disabled: boolean
   disabled_reason?: string
-  risk: 'safe' | 'expensive' | 'danger'
+  risk: "safe" | "expensive" | "danger"
   confirm: boolean
 }
 
@@ -154,6 +162,19 @@ export type ConsoleSummary = {
 
 export type ConsoleActionResult = Record<string, unknown>
 
+export type LoginSession = {
+  id: number
+  user_agent: string
+  remote_addr: string
+  device_name: string
+  client_type: string
+  expires_at: string
+  last_used_at?: string
+  created_at: string
+  updated_at: string
+  is_current: boolean
+}
+
 export type AdminLogFile = {
   name: string
   modified_at: string
@@ -174,11 +195,183 @@ export type Library = {
   root_path: string
   status: string
   scanner_enabled: boolean
+  paths?: LibraryPath[]
+  policies?: LibraryPolicies
 }
 
 export type LibraryDetail = Library & {
   catalog_items_count: number
   inventory_files_count: number
+}
+
+export type LibraryPath = {
+  id: number
+  library_id: number
+  media_source_id: number
+  root_path: string
+  display_name: string
+  enabled: boolean
+}
+
+export type LibraryScanPolicy = {
+  scanner_enabled: boolean
+  realtime_monitor_enabled: boolean
+  scheduled_refresh_enabled: boolean
+  refresh_interval_hours: number
+  ignore_hidden_files: boolean
+  ignore_file_extensions: string[]
+  min_file_size_bytes: number
+  sample_ignore_size_bytes: number
+  configurable_exclusion_rules: boolean
+}
+
+export type LibraryMetadataPolicy = {
+  preferred_metadata_language: string
+  preferred_image_language: string
+  metadata_country_code: string
+  metadata_profile_id?: number
+  metadata_profile_name?: string
+}
+
+export type LibraryMetadataStrategy = {
+  library_id: number
+  template_profile_id?: number
+  template_profile_name?: string
+  search_provider_ids: number[]
+  detail_provider_ids: number[]
+  image_provider_ids: number[]
+  people_provider_ids: number[]
+  hierarchy_provider_ids: number[]
+  preferred_metadata_language?: string
+  preferred_image_language?: string
+  metadata_country_code?: string
+}
+
+export type LibraryMetadataStrategyInput = {
+  template_profile_id?: number
+  search_provider_ids: number[]
+  detail_provider_ids: number[]
+  image_provider_ids: number[]
+  people_provider_ids: number[]
+  hierarchy_provider_ids: number[]
+  preferred_metadata_language?: string
+  preferred_image_language?: string
+  metadata_country_code?: string
+}
+
+export type LibraryPlaybackPolicy = {
+  resume_enabled: boolean
+  min_resume_pct: number
+  max_resume_pct: number
+  min_resume_duration_seconds: number
+}
+
+export type LibrarySubtitlePolicy = {
+  external_sidecars_enabled: boolean
+  preferred_languages: string[]
+  require_perfect_match: boolean
+  save_with_media: boolean
+  tolerate_unavailable_subtitles: boolean
+  skip_if_embedded_subtitles_present: boolean
+  skip_if_audio_track_matches: boolean
+}
+
+export type LibraryPolicies = {
+  scan: LibraryScanPolicy
+  metadata: LibraryMetadataPolicy
+  playback: LibraryPlaybackPolicy
+  subtitle: LibrarySubtitlePolicy
+}
+
+export type ScanExclusion = {
+  id: number
+  library_id: number
+  library_name?: string
+  storage_provider: string
+  stable_identity_key?: string
+  storage_path: string
+  reason: string
+  enabled: boolean
+  created_by_user_id?: number
+  disabled_at?: string
+  disabled_by_user_id?: number
+  created_at: string
+  updated_at: string
+}
+
+export type FilenameExclusionFile = {
+  id: number
+  storage_path: string
+  stable_identity_key?: string
+  status: string
+  restored: boolean
+}
+
+export type FilenameExclusionRule = {
+  id: number
+  normalized_filename: string
+  reason: string
+  enabled: boolean
+  created_by_user_id?: number
+  updated_by_user_id?: number
+  disabled_at?: string
+  disabled_by_user_id?: number
+  created_at: string
+  updated_at: string
+  affected_count: number
+  affected_files: FilenameExclusionFile[]
+}
+
+export type ScanExclusionsView = {
+  manual_exclusions: ScanExclusion[]
+  filename_rules: FilenameExclusionRule[]
+}
+
+export type FilenameExclusionPreview = {
+  library_id: number
+  library_name: string
+  storage_provider: string
+  normalized_filename: string
+  affected_count: number
+  affected_files: FilenameExclusionFile[]
+}
+
+export type FilenameExclusionRestore = {
+  id: number
+  rule_id: number
+  stable_identity_key?: string
+  storage_path: string
+  created_by_user_id?: number
+  created_at: string
+  updated_at: string
+}
+
+export type ScanExclusionRule = {
+  id: number
+  key: string
+  library_id?: number
+  name: string
+  description: string
+  rule_type: "filename_token" | "directory_segment" | "path_pattern"
+  value: string
+  reason: string
+  enabled: boolean
+  system: boolean
+  created_by_user_id?: number
+  updated_by_user_id?: number
+  disabled_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type ScanExclusionRuleInput = {
+  library_id?: number
+  name: string
+  description?: string
+  rule_type: ScanExclusionRule["rule_type"]
+  value: string
+  reason: string
+  enabled?: boolean
 }
 
 export type OpenListMediaSourceConfig = {
@@ -558,17 +751,84 @@ export type CatalogItemDetail = {
   related_items?: CatalogListItem[]
 }
 
-export type CatalogMetadataOperationResult = {
+export type CatalogMetadataPlanProviderSummary = {
+  id: number
+  name: string
+  provider_type: string
+  enabled: boolean
+  configured: boolean
+  operational: boolean
+  availability_status?: string
+  cooldown_until?: string
+}
+
+export type CatalogMetadataExecutionPlanSummary = {
+  library_id: number
+  strategy_id: number
+  metadata_profile_id?: number
+  metadata_profile_name?: string
+  preferred_metadata_language?: string
+  preferred_image_language?: string
+  search_providers?: CatalogMetadataPlanProviderSummary[]
+  detail_providers?: CatalogMetadataPlanProviderSummary[]
+  image_providers?: CatalogMetadataPlanProviderSummary[]
+  people_providers?: CatalogMetadataPlanProviderSummary[]
+  hierarchy_providers?: CatalogMetadataPlanProviderSummary[]
+  local_evidence_enabled: boolean
+}
+
+export type CatalogMetadataProviderAttempt = {
+  stage: string
+  provider_instance_id: number
+  provider_instance_name: string
+  provider_type: string
+  outcome: string
+  error_class?: string
+  error_message?: string
+  status_code?: number
+  candidate_count?: number
+  selected: boolean
+}
+
+export type CatalogMetadataAppliedField = {
+  item_id: number
+  field_key: string
+  source_id?: number
+  apply_mode: string
+  confidence?: number
+}
+
+export type CatalogMetadataSkippedField = {
+  item_id: number
+  field_key: string
+  reason: string
+}
+
+export type CatalogMetadataOperationWarning = {
+  code: string
+  message: string
+}
+
+export type CatalogMetadataAffectedScope = {
+  item_ids?: number[]
+  library_id: number
+  root_id?: number
+}
+
+export type CatalogMetadataOperation = {
+  operation: string
   origin_item_id: number
   target_item_id: number
   target_type: string
-  action: string
-  descendant_status?: string
-  descendant_item_id?: number
-  season_number?: number
-  episode_number?: number
-  provider_external_id?: string
-  message?: string
+  status: string
+  governance_status?: string
+  plan: CatalogMetadataExecutionPlanSummary
+  provider_attempts?: CatalogMetadataProviderAttempt[]
+  metadata_source_ids?: number[]
+  applied_fields?: CatalogMetadataAppliedField[]
+  skipped_fields?: CatalogMetadataSkippedField[]
+  affected_scope: CatalogMetadataAffectedScope
+  warnings?: CatalogMetadataOperationWarning[]
 }
 
 export type CatalogGovernanceWorkspace = {
@@ -585,7 +845,7 @@ export type CatalogGovernanceWorkspace = {
   field_states?: CatalogFieldState[]
   assets?: CatalogAssetDetail[]
   recommended_children?: CatalogListItem[]
-  metadata_result?: CatalogMetadataOperationResult
+  metadata_operation?: CatalogMetadataOperation
 }
 
 export type ProgressState = {
@@ -615,6 +875,108 @@ export type CatalogLatestByLibrarySection = {
   items: CatalogListItem[]
 }
 
+export type HealthSeverity = "info" | "warning" | "error" | "blocking"
+
+export type HealthSummary = {
+  status: "healthy" | "warning" | "error" | "blocking"
+  issue_count: number
+  blocking_count: number
+  error_count: number
+  warning_count: number
+  issues: HealthIssue[]
+}
+
+export type HealthIssue = {
+  id: string
+  severity: HealthSeverity
+  reason_code: string
+  scope: string
+  title: string
+  message: string
+  impact: HealthImpact
+  affected: HealthAffected
+  actions: HealthAction[]
+  technical_detail: HealthTechnicalDetail
+  first_seen_at?: string
+  last_seen_at?: string
+  latest_job_id?: number
+}
+
+export type HealthImpact = {
+  blocks_scan: boolean
+  blocks_home_visibility: boolean
+  blocks_playback: boolean
+  blocks_metadata: boolean
+  affected_catalog_items: number
+  affected_files: number
+}
+
+export type HealthAffected = {
+  media_sources: HealthMediaSourceRef[]
+  libraries: HealthLibraryRef[]
+  jobs: HealthJobRef[]
+}
+
+export type HealthMediaSourceRef = {
+  id: number
+  name: string
+  provider: string
+  root_path: string
+}
+
+export type HealthLibraryRef = {
+  id: number
+  name: string
+  type: string
+  status: string
+  media_source_id: number
+  root_path: string
+}
+
+export type HealthJobRef = {
+  id: number
+  kind: string
+  status: string
+  attempts: number
+  created_at: string
+  updated_at: string
+  finished_at?: string
+  payload_json?: string
+}
+
+export type HealthAction = {
+  type: string
+  label: string
+  description?: string
+  href?: string
+  media_source_id?: number
+  job_id?: number
+  library_ids?: number[]
+}
+
+export type HealthTechnicalDetail = {
+  job_kind?: string
+  job_status?: string
+  payload_json?: string
+  error_message?: string
+}
+
+export type MediaSourceValidationResult = {
+  media_source_id: number
+  status: string
+  message: string
+}
+
+export type HealthIssueRescanResult = {
+  issue_id: string
+  jobs: HealthJobRef[]
+}
+
+export type HealthIssueIgnoreResult = {
+  issue_id: string
+  status: string
+}
+
 export type MetadataProviderSettings = {
   configured: boolean
   api_key_masked: boolean
@@ -624,11 +986,65 @@ export type MetadataProviderSettings = {
   timeout: string
   source: string
   implementation: string
+  upstream_provider_filter?: string
+  fallback_enabled?: boolean
 }
 
-export type MetadataSettings = {
-  tmdb: MetadataProviderSettings
-  tvdb: MetadataProviderSettings
+export type MetadataProviderInstance = {
+  id: number
+  name: string
+  provider_type: string
+  system_managed: boolean
+  locked: boolean
+  enabled: boolean
+  availability_status: string
+  failure_reason?: string
+  cooldown_until?: string
+  configured: boolean
+  tmdb?: MetadataProviderSettings
+  tvdb?: MetadataProviderSettings
+  metatube?: MetadataProviderSettings
+}
+
+export type MetadataProviderInstanceInput = {
+  name: string
+  provider_type: string
+  enabled?: boolean
+  availability_status?: string
+  failure_reason?: string
+  cooldown_until?: string
+  tmdb?: MetadataProviderInput
+  tvdb?: MetadataProviderInput
+  metatube?: MetadataProviderInput
+}
+
+export type MetadataProfile = {
+  id: number
+  name: string
+  description?: string
+  system: boolean
+  locked: boolean
+  search_provider_ids: number[]
+  detail_provider_ids: number[]
+  image_provider_ids: number[]
+  people_provider_ids: number[]
+  hierarchy_provider_ids: number[]
+  preferred_metadata_language?: string
+  preferred_image_language?: string
+  fallback_enabled: boolean
+}
+
+export type MetadataProfileInput = {
+  name: string
+  description?: string
+  search_provider_ids: number[]
+  detail_provider_ids: number[]
+  image_provider_ids: number[]
+  people_provider_ids: number[]
+  hierarchy_provider_ids: number[]
+  preferred_metadata_language?: string
+  preferred_image_language?: string
+  fallback_enabled?: boolean
 }
 
 export type MetadataProviderInput = {
@@ -638,25 +1054,70 @@ export type MetadataProviderInput = {
   image_base_url?: string
   language?: string
   timeout?: string
+  upstream_provider_filter?: string
+  fallback_enabled?: boolean
 }
 
-export type MetadataSettingsInput = {
-  tmdb: MetadataProviderInput
-  tvdb: MetadataProviderInput
+export type NetworkCertificatePasswordState = {
+  configured: boolean
+  masked: boolean
+}
+
+export type NetworkSettingsStatus = {
+  source: string
+  restart_required_fields: string[]
+  future_runtime_fields: string[]
+  automatic_port_mapping_active: boolean
+  message: string
+}
+
+export type NetworkSettings = {
+  local_networks: string[]
+  local_ip_address: string
+  local_http_port: number
+  local_https_port: number
+  allow_remote_access: boolean
+  remote_ip_filter: string[]
+  remote_ip_filter_mode: "allow" | "block"
+  public_http_port: number
+  public_https_port: number
+  external_domain: string
+  trust_proxy_headers: boolean
+  ssl_certificate_path: string
+  certificate_password: NetworkCertificatePasswordState
+  secure_connection_mode: "disabled" | "preferred" | "required"
+  automatic_port_mapping: boolean
+  max_video_streams: "unlimited" | "1" | "2" | "4" | "8"
+  remote_streaming_bitrate_limit:
+    | "unlimited"
+    | "4mbps"
+    | "8mbps"
+    | "12mbps"
+    | "20mbps"
+  network_request_protocol: "auto" | "ipv4" | "ipv6"
+  effective_status: NetworkSettingsStatus
+}
+
+export type NetworkSettingsInput = Omit<
+  NetworkSettings,
+  "certificate_password" | "effective_status"
+> & {
+  certificate_password?: string
+  clear_certificate_password?: boolean
 }
 
 export type DiscoveryQuery = {
-  scope?: 'all' | 'library'
+  scope?: "all" | "library"
   library_id?: number
   q?: string
-  type?: 'all' | 'movie' | 'show' | 'episode'
+  type?: "all" | "movie" | "show" | "episode"
   genre?: string
   region?: string
   year?: number
   min_rating?: number
-  watched_state?: 'all' | 'unwatched' | 'in_progress' | 'watched'
-  sort?: 'recent' | 'title' | 'year' | 'watch_status'
-  sort_direction?: 'asc' | 'desc'
+  watched_state?: "all" | "unwatched" | "in_progress" | "watched"
+  sort?: "recent" | "title" | "year" | "watch_status"
+  sort_direction?: "asc" | "desc"
   limit?: number
   offset?: number
 }
@@ -669,8 +1130,8 @@ export type CatalogDiscoveryResponse = {
   limit: number
   offset: number
   has_more: boolean
-  sort: 'recent' | 'title' | 'year' | 'watch_status'
-  sort_direction: 'asc' | 'desc'
+  sort: "recent" | "title" | "year" | "watch_status"
+  sort_direction: "asc" | "desc"
 }
 
 export type SearchHistoryEntry = {
@@ -682,11 +1143,11 @@ export type SearchHistoryEntry = {
   year?: number
   min_rating?: number
   watched_state: string
-  sort: 'recent' | 'title' | 'year' | 'watch_status'
+  sort: "recent" | "title" | "year" | "watch_status"
   last_used_at: string
 }
 
-export type ClientProfile = 'web' | 'mobile' | 'tv'
+export type ClientProfile = "web" | "mobile" | "tv"
 
 export type PlaybackCheck = {
   code: string
@@ -701,7 +1162,7 @@ export type DecisionReason = {
 }
 
 export type PlaybackDecision = {
-  kind: 'direct' | 'fallback' | 'unplayable'
+  kind: "direct" | "fallback" | "unplayable"
   client_profile: ClientProfile
   selected_by: string
   fallback_kind?: string
@@ -746,11 +1207,11 @@ export type Job = {
   updated_at: string
 }
 
-export type ScheduleFrequencyKind = 'daily' | 'weekly' | 'monthly'
+export type ScheduleFrequencyKind = "daily" | "weekly" | "monthly"
 
-export type ScheduleScopeKind = 'global' | 'library'
+export type ScheduleScopeKind = "global" | "library"
 
-export type ScheduleRunStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type ScheduleRunStatus = "queued" | "running" | "completed" | "failed"
 
 export type ScheduleFrequency = {
   kind: ScheduleFrequencyKind
@@ -764,6 +1225,7 @@ export type ScheduleRun = {
   schedule_id: number
   status: ScheduleRunStatus
   job_id?: number
+  job?: Job
   error_summary: string
   started_at?: string
   finished_at?: string
@@ -780,7 +1242,7 @@ export type Schedule = {
   frequency: ScheduleFrequency
   enabled: boolean
   next_run_at?: string
-  latest_run_status?: ScheduleRunStatus | ''
+  latest_run_status?: ScheduleRunStatus | ""
   latest_run_message: string
   latest_job_id?: number
   latest_run_started_at?: string
@@ -804,12 +1266,27 @@ export type ScheduleRunNowResult = {
   job: Job
 }
 
+export type CleanupSettings = {
+  missing_cleanup_enabled: boolean
+  missing_retention: string
+  missing_retention_seconds: number
+  missing_cleanup_batch_size: number
+  can_run: boolean
+  warning: string
+}
+
+export type CleanupSettingsInput = {
+  missing_cleanup_enabled: boolean
+  missing_retention_seconds: number
+  missing_cleanup_batch_size: number
+}
+
 type ApiOptions = {
   baseUrl: string
   token?: string | null
 }
 
-export const TOKEN_STORAGE_KEY = 'mibo-web-token'
+export const TOKEN_STORAGE_KEY = "mibo-web-token"
 
 let isRedirectingToLogin = false
 
@@ -819,7 +1296,7 @@ export class ApiError extends Error {
 
   constructor(status: number, error: ApiErrorShape) {
     super(error.message)
-    this.name = 'ApiError'
+    this.name = "ApiError"
     this.status = status
     this.code = error.code
   }
@@ -829,13 +1306,13 @@ export function getApiBaseUrl() {
   return (
     (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
       /\/$/,
-      '',
-    ) ?? 'http://localhost:8080'
+      ""
+    ) ?? ""
   )
 }
 
 function handleUnauthorizedResponse(token?: string | null) {
-  if (!token || typeof window === 'undefined') {
+  if (!token || typeof window === "undefined") {
     return
   }
 
@@ -843,30 +1320,30 @@ function handleUnauthorizedResponse(token?: string | null) {
 
   useAuthStore.getState().clearSession()
 
-  if (pathname === '/login' || isRedirectingToLogin) {
+  if (pathname === "/login" || isRedirectingToLogin) {
     return
   }
 
   isRedirectingToLogin = true
 
   const redirect = `${pathname}${search}${hash}`
-  const loginUrl = new URL('/login', window.location.origin)
-  loginUrl.searchParams.set('redirect', redirect)
+  const loginUrl = new URL("/login", window.location.origin)
+  loginUrl.searchParams.set("redirect", redirect)
   window.location.replace(loginUrl.toString())
 }
 
 export function createMiboApi(options: ApiOptions) {
-  const baseUrl = options.baseUrl.replace(/\/$/, '')
+  const baseUrl = options.baseUrl.replace(/\/$/, "")
 
   async function request<T>(pathname: string, init?: RequestInit): Promise<T> {
     const headers = new Headers(init?.headers)
 
-    if (!headers.has('Content-Type') && init?.body !== undefined) {
-      headers.set('Content-Type', 'application/json')
+    if (!headers.has("Content-Type") && init?.body !== undefined) {
+      headers.set("Content-Type", "application/json")
     }
 
     if (options.token) {
-      headers.set('Authorization', `Bearer ${options.token}`)
+      headers.set("Authorization", `Bearer ${options.token}`)
     }
 
     let response: Response
@@ -877,8 +1354,8 @@ export function createMiboApi(options: ApiOptions) {
       })
     } catch {
       throw new ApiError(0, {
-        code: 'network_error',
-        message: '无法连接后端服务，请确认 Mibo 服务已启动。',
+        code: "network_error",
+        message: "无法连接后端服务，请确认 Mibo 服务已启动。",
       })
     }
 
@@ -892,7 +1369,7 @@ export function createMiboApi(options: ApiOptions) {
     } catch {
       if (!response.ok) {
         throw new ApiError(response.status, {
-          code: 'request_failed',
+          code: "request_failed",
           message: `请求失败，状态码 ${response.status}`,
         })
       }
@@ -902,16 +1379,16 @@ export function createMiboApi(options: ApiOptions) {
       throw new ApiError(
         response.status,
         payload?.error ?? {
-          code: 'request_failed',
+          code: "request_failed",
           message: `请求失败，状态码 ${response.status}`,
-        },
+        }
       )
     }
 
     if (payload?.data === undefined) {
       throw new ApiError(response.status, {
-        code: 'missing_payload',
-        message: '服务端返回了空数据',
+        code: "missing_payload",
+        message: "服务端返回了空数据",
       })
     }
 
@@ -920,49 +1397,63 @@ export function createMiboApi(options: ApiOptions) {
 
   return {
     getSetupStatus() {
-      return request<SetupStatus>('/api/v1/setup/status')
+      return request<SetupStatus>("/api/v1/setup/status")
     },
     register(username: string, password: string) {
-      return request<User>('/api/v1/auth/register', {
-        method: 'POST',
+      return request<User>("/api/v1/auth/register", {
+        method: "POST",
         body: JSON.stringify({ username, password }),
       })
     },
     login(username: string, password: string) {
-      return request<LoginResult>('/api/v1/auth/login', {
-        method: 'POST',
+      return request<LoginResult>("/api/v1/auth/login", {
+        method: "POST",
         body: JSON.stringify({ username, password }),
       })
     },
     logout() {
-      return request<{ status: string }>('/api/v1/auth/logout', {
-        method: 'POST',
+      return request<{ status: string }>("/api/v1/auth/logout", {
+        method: "POST",
+      })
+    },
+    listLoginSessions() {
+      return request<LoginSession[]>("/api/v1/auth/sessions")
+    },
+    revokeLoginSession(sessionId: number) {
+      return request<{ id: number; status: string }>(
+        `/api/v1/auth/sessions/${sessionId}`,
+        { method: "DELETE" }
+      )
+    },
+    revokeOtherLoginSessions() {
+      return request<{ status: string }>("/api/v1/auth/sessions/others", {
+        method: "DELETE",
       })
     },
     me() {
-      return request<User>('/api/v1/me')
+      return request<User>("/api/v1/me")
     },
     listMediaSources() {
-      return request<MediaSource[]>('/api/v1/media-sources')
+      return request<MediaSource[]>("/api/v1/media-sources")
     },
     browseStorageProvider(provider: string, path?: string) {
-      const query = path ? `?path=${encodeURIComponent(path)}` : ''
+      const query = path ? `?path=${encodeURIComponent(path)}` : ""
       return request<StorageBrowseResult>(
-        `/api/v1/storage/providers/${provider}/browse${query}`,
+        `/api/v1/storage/providers/${provider}/browse${query}`
       )
     },
     browseOpenList(input: {
       path?: string
       config: OpenListMediaSourceConfig
     }) {
-      return request<StorageBrowseResult>('/api/v1/storage/openlist/browse', {
-        method: 'POST',
+      return request<StorageBrowseResult>("/api/v1/storage/openlist/browse", {
+        method: "POST",
         body: JSON.stringify(input),
       })
     },
     testOpenListConnection(input: { config: OpenListMediaSourceConfig }) {
-      return request<OpenListTestResult>('/api/v1/storage/openlist/test', {
-        method: 'POST',
+      return request<OpenListTestResult>("/api/v1/storage/openlist/test", {
+        method: "POST",
         body: JSON.stringify(input),
       })
     },
@@ -973,8 +1464,8 @@ export function createMiboApi(options: ApiOptions) {
       storage_ref?: string
       config?: MediaSourceConfigInput
     }) {
-      return request<MediaSource>('/api/v1/media-sources', {
-        method: 'POST',
+      return request<MediaSource>("/api/v1/media-sources", {
+        method: "POST",
         body: JSON.stringify(input),
       })
     },
@@ -985,10 +1476,10 @@ export function createMiboApi(options: ApiOptions) {
         root_path: string
         storage_ref?: string
         config?: MediaSourceConfigInput
-      },
+      }
     ) {
       return request<MediaSource>(`/api/v1/media-sources/${mediaSourceId}`, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(input),
       })
     },
@@ -996,58 +1487,138 @@ export function createMiboApi(options: ApiOptions) {
       return request<{ id: number; status: string; type: string }>(
         `/api/v1/media-sources/${mediaSourceId}`,
         {
-          method: 'DELETE',
-        },
+          method: "DELETE",
+        }
       )
     },
     browseMediaSource(mediaSourceId: number, path?: string) {
-      const query = path ? `?path=${encodeURIComponent(path)}` : ''
+      const query = path ? `?path=${encodeURIComponent(path)}` : ""
       return request<StorageBrowseResult>(
-        `/api/v1/media-sources/${mediaSourceId}/browse${query}`,
+        `/api/v1/media-sources/${mediaSourceId}/browse${query}`
+      )
+    },
+    validateMediaSource(mediaSourceId: number) {
+      return request<MediaSourceValidationResult>(
+        `/api/v1/media-sources/${mediaSourceId}/validate`,
+        { method: "POST" }
       )
     },
     listLibraries() {
-      return request<Library[]>('/api/v1/libraries')
+      return request<Library[]>("/api/v1/libraries")
+    },
+    getHealthSummary() {
+      return request<HealthSummary>("/api/v1/health/summary")
+    },
+    listHealthIssues() {
+      return request<HealthIssue[]>("/api/v1/health/issues")
+    },
+    rescanHealthIssueLibraries(issueId: string) {
+      return request<HealthIssueRescanResult>(
+        `/api/v1/health/issues/${encodeURIComponent(issueId)}/rescan`,
+        { method: "POST" }
+      )
+    },
+    ignoreHealthIssue(issueId: string) {
+      return request<HealthIssueIgnoreResult>(
+        `/api/v1/health/issues/${encodeURIComponent(issueId)}/ignore`,
+        { method: "POST" }
+      )
     },
     getConsoleSummary() {
-      return request<ConsoleSummary>('/api/v1/admin/console')
+      return request<ConsoleSummary>("/api/v1/admin/console")
     },
     runConsoleAction(actionId: string) {
       const actionEndpoints: Record<string, string> = {
-        'scan-libraries': '/api/v1/admin/console/actions/scan-libraries',
-        'catalog-consistency':
-          '/api/v1/admin/console/actions/catalog-consistency',
-        'rebuild-projections':
-          '/api/v1/admin/console/actions/rebuild-projections',
+        "scan-libraries": "/api/v1/admin/console/actions/scan-libraries",
+        "catalog-consistency":
+          "/api/v1/admin/console/actions/catalog-consistency",
+        "rebuild-projections":
+          "/api/v1/admin/console/actions/rebuild-projections",
       }
       const endpoint = actionEndpoints[actionId]
       if (!endpoint) {
-        throw new Error('unsupported console action')
+        throw new Error("unsupported console action")
       }
-      return request<ConsoleActionResult>(endpoint, { method: 'POST' })
+      return request<ConsoleActionResult>(endpoint, { method: "POST" })
     },
     listAdminLogs() {
-      return request<AdminLogFile[]>('/api/v1/admin/logs')
+      return request<AdminLogFile[]>("/api/v1/admin/logs")
+    },
+    listAdminUsers() {
+      return request<AdminUser[]>("/api/v1/admin/users")
+    },
+    createAdminUser(input: CreateAdminUserInput) {
+      return request<AdminUser>("/api/v1/admin/users", {
+        method: "POST",
+        body: JSON.stringify(input),
+      })
     },
     getAdminLog(name: string) {
       return request<AdminLogContent>(
-        `/api/v1/admin/logs/${encodeURIComponent(name)}`,
+        `/api/v1/admin/logs/${encodeURIComponent(name)}`
       )
     },
     deleteAdminLog(name: string) {
       return request<{ name: string; status: string }>(
         `/api/v1/admin/logs/${encodeURIComponent(name)}`,
         {
-          method: 'DELETE',
-        },
+          method: "DELETE",
+        }
       )
     },
-    getMetadataSettings() {
-      return request<MetadataSettings>('/api/v1/settings/metadata')
+    listMetadataProviderInstances() {
+      return request<MetadataProviderInstance[]>(
+        "/api/v1/settings/metadata/providers"
+      )
     },
-    updateMetadataSettings(input: MetadataSettingsInput) {
-      return request<MetadataSettings>('/api/v1/settings/metadata', {
-        method: 'PUT',
+    createMetadataProviderInstance(input: MetadataProviderInstanceInput) {
+      return request<MetadataProviderInstance>(
+        "/api/v1/settings/metadata/providers",
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    updateMetadataProviderInstance(
+      providerId: number,
+      input: Partial<MetadataProviderInstanceInput>
+    ) {
+      return request<MetadataProviderInstance>(
+        `/api/v1/settings/metadata/providers/${providerId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    listMetadataProfiles() {
+      return request<MetadataProfile[]>("/api/v1/settings/metadata/profiles")
+    },
+    createMetadataProfile(input: MetadataProfileInput) {
+      return request<MetadataProfile>("/api/v1/settings/metadata/profiles", {
+        method: "POST",
+        body: JSON.stringify(input),
+      })
+    },
+    updateMetadataProfile(
+      profileId: number,
+      input: Partial<MetadataProfileInput>
+    ) {
+      return request<MetadataProfile>(
+        `/api/v1/settings/metadata/profiles/${profileId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    getNetworkSettings() {
+      return request<NetworkSettings>("/api/v1/settings/network")
+    },
+    updateNetworkSettings(input: NetworkSettingsInput) {
+      return request<NetworkSettings>("/api/v1/settings/network", {
+        method: "PUT",
         body: JSON.stringify(input),
       })
     },
@@ -1059,93 +1630,300 @@ export function createMiboApi(options: ApiOptions) {
       type: string
       media_source_id: number
       root_path: string
+      scan?: LibraryScanPolicy
+      metadata?: LibraryMetadataPolicy
+      metadata_strategy?: LibraryMetadataStrategyInput
+      playback?: LibraryPlaybackPolicy
+      subtitle?: LibrarySubtitlePolicy
+      scan_exclusion_rules?: ScanExclusionRuleInput[]
     }) {
-      return request<{ library: Library }>('/api/v1/libraries', {
-        method: 'POST',
+      return request<{ library: Library }>("/api/v1/libraries", {
+        method: "POST",
         body: JSON.stringify(input),
       })
+    },
+    listLibraryPaths(libraryId: number) {
+      return request<LibraryPath[]>(`/api/v1/libraries/${libraryId}/paths`)
+    },
+    addLibraryPath(
+      libraryId: number,
+      input: {
+        media_source_id: number
+        root_path: string
+        display_name?: string
+        enabled?: boolean
+      }
+    ) {
+      return request<LibraryPath>(`/api/v1/libraries/${libraryId}/paths`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      })
+    },
+    updateLibraryPath(
+      libraryId: number,
+      pathId: number,
+      input: {
+        media_source_id?: number
+        root_path?: string
+        display_name?: string
+        enabled?: boolean
+      }
+    ) {
+      return request<LibraryPath>(
+        `/api/v1/libraries/${libraryId}/paths/${pathId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    getLibraryPolicies(libraryId: number) {
+      return request<LibraryPolicies>(`/api/v1/libraries/${libraryId}/policies`)
+    },
+    getLibraryMetadataStrategy(libraryId: number) {
+      return request<LibraryMetadataStrategy>(
+        `/api/v1/libraries/${libraryId}/metadata-strategy`
+      )
+    },
+    updateLibraryMetadataStrategy(
+      libraryId: number,
+      input: LibraryMetadataStrategyInput
+    ) {
+      return request<LibraryMetadataStrategy>(
+        `/api/v1/libraries/${libraryId}/metadata-strategy`,
+        {
+          method: "PUT",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    updateLibraryScanPolicy(libraryId: number, input: LibraryScanPolicy) {
+      return request<LibraryScanPolicy>(
+        `/api/v1/libraries/${libraryId}/policies/scan`,
+        {
+          method: "PUT",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    updateLibraryMetadataPolicy(
+      libraryId: number,
+      input: LibraryMetadataPolicy
+    ) {
+      return request<LibraryMetadataPolicy>(
+        `/api/v1/libraries/${libraryId}/policies/metadata`,
+        {
+          method: "PUT",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    updateLibraryPlaybackPolicy(
+      libraryId: number,
+      input: LibraryPlaybackPolicy
+    ) {
+      return request<LibraryPlaybackPolicy>(
+        `/api/v1/libraries/${libraryId}/policies/playback`,
+        {
+          method: "PUT",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    updateLibrarySubtitlePolicy(
+      libraryId: number,
+      input: LibrarySubtitlePolicy
+    ) {
+      return request<LibrarySubtitlePolicy>(
+        `/api/v1/libraries/${libraryId}/policies/subtitle`,
+        {
+          method: "PUT",
+          body: JSON.stringify(input),
+        }
+      )
     },
     deleteLibrary(libraryId: number) {
       return request<{ id: number; status: string; type: string }>(
         `/api/v1/libraries/${libraryId}`,
         {
-          method: 'DELETE',
-        },
+          method: "DELETE",
+        }
       )
     },
     scanLibrary(libraryId: number) {
       return request<{ id: number }>(`/api/v1/libraries/${libraryId}/scan`, {
-        method: 'POST',
+        method: "POST",
       })
+    },
+    listScanExclusions(filters?: { libraryId?: number; enabled?: boolean }) {
+      const query = new URLSearchParams()
+      if (typeof filters?.libraryId === "number" && filters.libraryId > 0) {
+        query.set("library_id", String(filters.libraryId))
+      }
+      if (typeof filters?.enabled === "boolean") {
+        query.set("enabled", String(filters.enabled))
+      }
+      const queryString = query.toString()
+      return request<ScanExclusionsView>(
+        `/api/v1/scan-exclusions${queryString ? `?${queryString}` : ""}`
+      )
+    },
+    setScanExclusionEnabled(exclusionId: number, enabled: boolean) {
+      return request<ScanExclusion>(`/api/v1/scan-exclusions/${exclusionId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      })
+    },
+    listScanExclusionRules() {
+      return request<ScanExclusionRule[]>("/api/v1/scan-exclusion-rules")
+    },
+    createScanExclusionRule(input: ScanExclusionRuleInput) {
+      return request<ScanExclusionRule>("/api/v1/scan-exclusion-rules", {
+        method: "POST",
+        body: JSON.stringify(input),
+      })
+    },
+    updateScanExclusionRule(ruleId: number, input: ScanExclusionRuleInput) {
+      return request<ScanExclusionRule>(
+        `/api/v1/scan-exclusion-rules/${ruleId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    setScanExclusionRuleEnabled(ruleId: number, enabled: boolean) {
+      return request<ScanExclusionRule>(
+        `/api/v1/scan-exclusion-rules/${ruleId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ enabled }),
+        }
+      )
+    },
+    deleteScanExclusionRule(ruleId: number) {
+      return request<{ status: string }>(
+        `/api/v1/scan-exclusion-rules/${ruleId}`,
+        {
+          method: "DELETE",
+        }
+      )
+    },
+    replaceLibraryScanExclusionRules(
+      libraryId: number,
+      input: ScanExclusionRuleInput[]
+    ) {
+      return request<ScanExclusionRule[]>(
+        `/api/v1/libraries/${libraryId}/scan-exclusion-rules`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ rules: input }),
+        }
+      )
+    },
+    previewCatalogItemScanExclusion(itemId: number) {
+      return request<FilenameExclusionPreview>(
+        `/api/v1/items/${itemId}/scan-exclusion-preview`
+      )
+    },
+    createCatalogItemFilenameExclusionRule(
+      itemId: number,
+      reason = "advertisement"
+    ) {
+      return request<FilenameExclusionRule>(
+        `/api/v1/items/${itemId}/filename-exclusion-rule`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason }),
+        }
+      )
+    },
+    setFilenameExclusionRuleEnabled(ruleId: number, enabled: boolean) {
+      return request<FilenameExclusionRule>(
+        `/api/v1/filename-exclusion-rules/${ruleId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ enabled }),
+        }
+      )
+    },
+    restoreFilenameExclusionMatch(ruleId: number, inventoryFileId: number) {
+      return request<FilenameExclusionRestore>(
+        `/api/v1/filename-exclusion-rules/${ruleId}/restores`,
+        {
+          method: "POST",
+          body: JSON.stringify({ inventory_file_id: inventoryFileId }),
+        }
+      )
     },
     listLibraryItems(
       libraryId: number,
       queryOptions?: {
-        type?: 'all' | 'movie' | 'show'
+        type?: "all" | "movie" | "show"
         year?: number
-        sort?: 'recent' | 'title' | 'year' | 'watch_status'
+        sort?: "recent" | "title" | "year" | "watch_status"
         limit?: number
-      },
+      }
     ) {
       const query = new URLSearchParams()
 
       if (queryOptions?.type) {
-        query.set('type', queryOptions.type)
+        query.set("type", queryOptions.type)
       }
-      if (typeof queryOptions?.year === 'number') {
-        query.set('year', String(queryOptions.year))
+      if (typeof queryOptions?.year === "number") {
+        query.set("year", String(queryOptions.year))
       }
       if (queryOptions?.sort) {
-        query.set('sort', queryOptions.sort)
+        query.set("sort", queryOptions.sort)
       }
-      if (typeof queryOptions?.limit === 'number') {
-        query.set('limit', String(queryOptions.limit))
+      if (typeof queryOptions?.limit === "number") {
+        query.set("limit", String(queryOptions.limit))
       }
 
       const queryString = query.toString()
       return request<CatalogListItem[]>(
-        `/api/v1/libraries/${libraryId}/items${queryString ? `?${queryString}` : ''}`,
+        `/api/v1/libraries/${libraryId}/items${queryString ? `?${queryString}` : ""}`
       )
     },
     discoverMedia(queryOptions?: DiscoveryQuery) {
       const query = new URLSearchParams()
 
-      if (queryOptions?.scope) query.set('scope', queryOptions.scope)
-      if (typeof queryOptions?.library_id === 'number') {
-        query.set('library_id', String(queryOptions.library_id))
+      if (queryOptions?.scope) query.set("scope", queryOptions.scope)
+      if (typeof queryOptions?.library_id === "number") {
+        query.set("library_id", String(queryOptions.library_id))
       }
-      if (queryOptions?.q) query.set('q', queryOptions.q)
-      if (queryOptions?.type) query.set('type', queryOptions.type)
-      if (queryOptions?.genre) query.set('genre', queryOptions.genre)
-      if (queryOptions?.region) query.set('region', queryOptions.region)
-      if (typeof queryOptions?.year === 'number') {
-        query.set('year', String(queryOptions.year))
+      if (queryOptions?.q) query.set("q", queryOptions.q)
+      if (queryOptions?.type) query.set("type", queryOptions.type)
+      if (queryOptions?.genre) query.set("genre", queryOptions.genre)
+      if (queryOptions?.region) query.set("region", queryOptions.region)
+      if (typeof queryOptions?.year === "number") {
+        query.set("year", String(queryOptions.year))
       }
-      if (typeof queryOptions?.min_rating === 'number') {
-        query.set('min_rating', String(queryOptions.min_rating))
+      if (typeof queryOptions?.min_rating === "number") {
+        query.set("min_rating", String(queryOptions.min_rating))
       }
       if (queryOptions?.watched_state) {
-        query.set('watched_state', queryOptions.watched_state)
+        query.set("watched_state", queryOptions.watched_state)
       }
-      if (queryOptions?.sort) query.set('sort', queryOptions.sort)
+      if (queryOptions?.sort) query.set("sort", queryOptions.sort)
       if (queryOptions?.sort_direction) {
-        query.set('sort_direction', queryOptions.sort_direction)
+        query.set("sort_direction", queryOptions.sort_direction)
       }
-      if (typeof queryOptions?.limit === 'number') {
-        query.set('limit', String(queryOptions.limit))
+      if (typeof queryOptions?.limit === "number") {
+        query.set("limit", String(queryOptions.limit))
       }
-      if (typeof queryOptions?.offset === 'number') {
-        query.set('offset', String(queryOptions.offset))
+      if (typeof queryOptions?.offset === "number") {
+        query.set("offset", String(queryOptions.offset))
       }
 
       const queryString = query.toString()
       return request<CatalogDiscoveryResponse>(
-        `/api/v1/discovery${queryString ? `?${queryString}` : ''}`,
+        `/api/v1/discovery${queryString ? `?${queryString}` : ""}`
       )
     },
     listSearchHistory(limit = 8) {
       return request<SearchHistoryEntry[]>(
-        `/api/v1/search/history?limit=${limit}`,
+        `/api/v1/search/history?limit=${limit}`
       )
     },
     getCatalogItem(itemId: number) {
@@ -1159,7 +1937,7 @@ export function createMiboApi(options: ApiOptions) {
     },
     getCatalogGovernanceWorkspace(itemId: number) {
       return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${itemId}/governance`,
+        `/api/v1/items/${itemId}/governance`
       )
     },
     updateCatalogGovernanceField(
@@ -1170,14 +1948,14 @@ export function createMiboApi(options: ApiOptions) {
         lock?: boolean
         lock_reason?: string
         force?: boolean
-      },
+      }
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${itemId}/governance/fields`,
         {
-          method: 'PUT',
+          method: "PUT",
           body: JSON.stringify(input),
-        },
+        }
       )
     },
     selectCatalogGovernanceImage(
@@ -1185,14 +1963,14 @@ export function createMiboApi(options: ApiOptions) {
       input: {
         image_type: string
         url: string
-      },
+      }
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${itemId}/governance/images`,
         {
-          method: 'PUT',
+          method: "PUT",
           body: JSON.stringify(input),
-        },
+        }
       )
     },
     linkCatalogGovernanceAsset(
@@ -1201,18 +1979,18 @@ export function createMiboApi(options: ApiOptions) {
       input: {
         target_item_id: number
         source_item_id?: number
-        mode?: 'copy' | 'move'
+        mode?: "copy" | "move"
         segment_index?: number
         start_seconds?: number
         end_seconds?: number
-      },
+      }
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links`,
         {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify(input),
-        },
+        }
       )
     },
     correctCatalogEpisodeNumbering(
@@ -1221,26 +1999,26 @@ export function createMiboApi(options: ApiOptions) {
         season_number: number
         episode_number: number
         episode_number_end?: number
-      },
+      }
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${itemId}/governance/episode-numbering`,
         {
-          method: 'PUT',
+          method: "PUT",
           body: JSON.stringify(input),
-        },
+        }
       )
     },
     unlinkCatalogGovernanceAsset(
       workspaceItemId: number,
       assetId: number,
-      targetItemId: number,
+      targetItemId: number
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links/${targetItemId}`,
         {
-          method: 'DELETE',
-        },
+          method: "DELETE",
+        }
       )
     },
     searchCatalogItemMetadata(
@@ -1251,90 +2029,114 @@ export function createMiboApi(options: ApiOptions) {
         imdb_id?: string
         tmdb_id?: string
         tvdb_id?: string
-      },
+      }
     ) {
       return request<MetadataSearchCandidate[]>(
         `/api/v1/items/${itemId}/metadata/search`,
         {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify(input),
-        },
+        }
       )
     },
     applyCatalogItemMetadataCandidate(
       itemId: number,
       input: {
         external_id: string
-      },
+      }
     ) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${itemId}/metadata/apply`,
         {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify(input),
-        },
+        }
       )
     },
     refetchCatalogItemMetadata(itemId: number) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${itemId}/metadata/refetch`,
         {
-          method: 'POST',
-        },
+          method: "POST",
+        }
       )
     },
     matchCatalogItem(itemId: number) {
       return request<CatalogGovernanceWorkspace>(
         `/api/v1/items/${itemId}/match`,
         {
-          method: 'POST',
-        },
+          method: "POST",
+        }
       )
+    },
+    markCatalogItemScanExclusion(itemId: number, reason = "advertisement") {
+      return request<ScanExclusion>(`/api/v1/items/${itemId}/scan-exclusion`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      })
     },
     reprobeInventoryFile(fileId: number) {
       return request<Job>(`/api/v1/inventory-files/${fileId}/probe`, {
-        method: 'POST',
+        method: "POST",
       })
     },
-    listJobs(filters?: { limit?: number; status?: string; kind?: string }) {
+    listJobs(filters?: {
+      limit?: number
+      offset?: number
+      status?: string
+      kind?: string
+    }) {
       const query = new URLSearchParams()
 
-      if (typeof filters?.limit === 'number') {
-        query.set('limit', String(filters.limit))
+      if (typeof filters?.limit === "number") {
+        query.set("limit", String(filters.limit))
+      }
+      if (typeof filters?.offset === "number") {
+        query.set("offset", String(filters.offset))
       }
       if (filters?.status) {
-        query.set('status', filters.status)
+        query.set("status", filters.status)
       }
       if (filters?.kind) {
-        query.set('kind', filters.kind)
+        query.set("kind", filters.kind)
       }
 
       const queryString = query.toString()
       return request<Job[]>(
-        `/api/v1/jobs${queryString ? `?${queryString}` : ''}`,
+        `/api/v1/jobs${queryString ? `?${queryString}` : ""}`
       )
     },
+    retryJob(jobId: number) {
+      return request<Job>(`/api/v1/jobs/${jobId}/retry`, {
+        method: "POST",
+      })
+    },
+    cancelJob(jobId: number) {
+      return request<Job>(`/api/v1/jobs/${jobId}/cancel`, {
+        method: "POST",
+      })
+    },
     listSchedules() {
-      return request<Schedule[]>('/api/v1/schedules')
+      return request<Schedule[]>("/api/v1/schedules")
     },
     getSchedule(scheduleId: number) {
       return request<Schedule>(`/api/v1/schedules/${scheduleId}`)
     },
     createSchedule(input: ScheduleMutationInput) {
-      return request<Schedule>('/api/v1/schedules', {
-        method: 'POST',
+      return request<Schedule>("/api/v1/schedules", {
+        method: "POST",
         body: JSON.stringify(input),
       })
     },
     updateSchedule(scheduleId: number, input: ScheduleMutationInput) {
       return request<Schedule>(`/api/v1/schedules/${scheduleId}`, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(input),
       })
     },
     toggleSchedule(scheduleId: number, enabled: boolean) {
       return request<Schedule>(`/api/v1/schedules/${scheduleId}/toggle`, {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({ enabled }),
       })
     },
@@ -1342,30 +2144,44 @@ export function createMiboApi(options: ApiOptions) {
       return request<ScheduleRunNowResult>(
         `/api/v1/schedules/${scheduleId}/run`,
         {
-          method: 'POST',
-        },
+          method: "POST",
+        }
       )
     },
     listScheduleHistory(scheduleId: number) {
       return request<ScheduleRun[]>(`/api/v1/schedules/${scheduleId}/history`)
+    },
+    getCleanupSettings() {
+      return request<CleanupSettings>("/api/v1/settings/cleanup")
+    },
+    updateCleanupSettings(input: CleanupSettingsInput) {
+      return request<CleanupSettings>("/api/v1/settings/cleanup", {
+        method: "PUT",
+        body: JSON.stringify(input),
+      })
+    },
+    runMissingMediaCleanup() {
+      return request<Job>("/api/v1/settings/cleanup/missing-media/run", {
+        method: "POST",
+      })
     },
     getCatalogPlayback(
       itemId: number,
       playbackOptions: {
         assetId?: number
         clientProfile: ClientProfile
-      },
+      }
     ) {
       const query = new URLSearchParams({
         client_profile: playbackOptions.clientProfile,
       })
 
-      if (typeof playbackOptions.assetId === 'number') {
-        query.set('asset_id', String(playbackOptions.assetId))
+      if (typeof playbackOptions.assetId === "number") {
+        query.set("asset_id", String(playbackOptions.assetId))
       }
 
       return request<PlaybackSource>(
-        `/api/v1/items/${itemId}/playback?${query.toString()}`,
+        `/api/v1/items/${itemId}/playback?${query.toString()}`
       )
     },
     getCatalogItemProgress(itemId: number) {
@@ -1378,35 +2194,35 @@ export function createMiboApi(options: ApiOptions) {
       duration_seconds?: number
       completed?: boolean
     }) {
-      return request<ProgressState>('/api/v1/me/progress', {
-        method: 'POST',
+      return request<ProgressState>("/api/v1/me/progress", {
+        method: "POST",
         body: JSON.stringify(input),
       })
     },
     continueWatching() {
-      return request<CatalogUserItemEntry[]>('/api/v1/me/continue-watching')
+      return request<CatalogUserItemEntry[]>("/api/v1/me/continue-watching")
     },
     listFavorites() {
-      return request<CatalogUserItemEntry[]>('/api/v1/me/favorites')
+      return request<CatalogUserItemEntry[]>("/api/v1/me/favorites")
     },
     addFavorite(itemId: number) {
       return request<CatalogUserItemEntry>(`/api/v1/me/favorites/${itemId}`, {
-        method: 'POST',
+        method: "POST",
       })
     },
     removeFavorite(itemId: number) {
       return request<CatalogUserItemEntry>(`/api/v1/me/favorites/${itemId}`, {
-        method: 'DELETE',
+        method: "DELETE",
       })
     },
     latestByLibrary() {
       return request<CatalogLatestByLibrarySection[]>(
-        '/api/v1/home/latest-by-library',
+        "/api/v1/home/latest-by-library"
       )
     },
     recentlyAdded(limit = 5) {
       return request<CatalogListItem[]>(
-        `/api/v1/home/recently-added?limit=${limit}`,
+        `/api/v1/home/recently-added?limit=${limit}`
       )
     },
   }

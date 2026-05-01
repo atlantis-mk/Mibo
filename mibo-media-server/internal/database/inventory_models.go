@@ -11,6 +11,7 @@ type MediaAsset struct {
 	QualityLabel         string     `gorm:"size:128;index" json:"quality_label"`
 	DurationSeconds      *float64   `json:"duration_seconds,omitempty"`
 	Status               string     `gorm:"size:64;not null;default:available;index" json:"status"`
+	MissingSince         *time.Time `gorm:"index" json:"missing_since,omitempty"`
 	ProbeStatus          string     `gorm:"size:64;not null;default:pending;index" json:"probe_status"`
 	TechnicalSummaryJSON string     `gorm:"type:text" json:"technical_summary_json"`
 	CreatedAt            time.Time  `json:"created_at"`
@@ -43,6 +44,7 @@ type InventoryFile struct {
 	ModifiedAt        *time.Time `gorm:"index" json:"modified_at,omitempty"`
 	Container         string     `gorm:"size:64;index" json:"container"`
 	Status            string     `gorm:"size:64;not null;default:available;index;index:idx_inventory_files_library_status_path,priority:2" json:"status"`
+	MissingSince      *time.Time `gorm:"index" json:"missing_since,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 	DeletedAt         *time.Time `gorm:"index" json:"deleted_at,omitempty"`
@@ -50,6 +52,78 @@ type InventoryFile struct {
 
 func (InventoryFile) TableName() string {
 	return "inventory_files"
+}
+
+type ScanExclusion struct {
+	ID                uint       `gorm:"primaryKey" json:"id"`
+	LibraryID         uint       `gorm:"not null;index:idx_scan_exclusions_identity,priority:1;index:idx_scan_exclusions_path,priority:1" json:"library_id"`
+	StorageProvider   string     `gorm:"size:64;not null;index:idx_scan_exclusions_identity,priority:2;index:idx_scan_exclusions_path,priority:2" json:"storage_provider"`
+	StableIdentityKey string     `gorm:"size:512;index:idx_scan_exclusions_identity,priority:3" json:"stable_identity_key"`
+	StoragePath       string     `gorm:"size:2048;not null;index:idx_scan_exclusions_path,priority:3" json:"storage_path"`
+	Reason            string     `gorm:"size:64;not null;index" json:"reason"`
+	Enabled           bool       `gorm:"not null;index" json:"enabled"`
+	CreatedByUserID   *uint      `gorm:"index" json:"created_by_user_id,omitempty"`
+	DisabledAt        *time.Time `json:"disabled_at,omitempty"`
+	DisabledByUserID  *uint      `gorm:"index" json:"disabled_by_user_id,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+func (ScanExclusion) TableName() string {
+	return "scan_exclusions"
+}
+
+type FilenameExclusionRule struct {
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	NormalizedFilename string     `gorm:"size:512;not null;uniqueIndex" json:"normalized_filename"`
+	Reason             string     `gorm:"size:64;not null;index" json:"reason"`
+	Enabled            bool       `gorm:"not null;index" json:"enabled"`
+	CreatedByUserID    *uint      `gorm:"index" json:"created_by_user_id,omitempty"`
+	UpdatedByUserID    *uint      `gorm:"index" json:"updated_by_user_id,omitempty"`
+	DisabledAt         *time.Time `json:"disabled_at,omitempty"`
+	DisabledByUserID   *uint      `gorm:"index" json:"disabled_by_user_id,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+func (FilenameExclusionRule) TableName() string {
+	return "filename_exclusion_rules"
+}
+
+type FilenameExclusionRestore struct {
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	RuleID            uint      `gorm:"index:idx_filename_exclusion_restores_identity,priority:1;index:idx_filename_exclusion_restores_path,priority:1" json:"rule_id"`
+	StableIdentityKey string    `gorm:"size:512;index:idx_filename_exclusion_restores_identity,priority:2" json:"stable_identity_key"`
+	StoragePath       string    `gorm:"size:2048;not null;index:idx_filename_exclusion_restores_path,priority:2" json:"storage_path"`
+	CreatedByUserID   *uint     `gorm:"index" json:"created_by_user_id,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+func (FilenameExclusionRestore) TableName() string {
+	return "filename_exclusion_restores"
+}
+
+type ScanExclusionRule struct {
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	Key             string     `gorm:"size:128;not null;uniqueIndex" json:"key"`
+	LibraryID       *uint      `gorm:"index" json:"library_id,omitempty"`
+	Name            string     `gorm:"size:255;not null" json:"name"`
+	Description     string     `gorm:"size:1024" json:"description"`
+	RuleType        string     `gorm:"size:64;not null;index:idx_scan_exclusion_rules_enabled_type,priority:2" json:"rule_type"`
+	Value           string     `gorm:"size:2048;not null" json:"value"`
+	Reason          string     `gorm:"size:64;not null;index" json:"reason"`
+	Enabled         bool       `gorm:"not null;index:idx_scan_exclusion_rules_enabled_type,priority:1" json:"enabled"`
+	System          bool       `gorm:"not null;index" json:"system"`
+	CreatedByUserID *uint      `gorm:"index" json:"created_by_user_id,omitempty"`
+	UpdatedByUserID *uint      `gorm:"index" json:"updated_by_user_id,omitempty"`
+	DisabledAt      *time.Time `json:"disabled_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+func (ScanExclusionRule) TableName() string {
+	return "scan_exclusion_rules"
 }
 
 type AssetFile struct {

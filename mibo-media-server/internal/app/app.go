@@ -11,6 +11,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/health"
 	"github.com/atlan/mibo-media-server/internal/httpapi"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
@@ -28,10 +29,11 @@ import (
 )
 
 type App struct {
-	cfg    config.Config
-	db     *gorm.DB
-	server *http.Server
-	worker *worker.Runner
+	cfg      config.Config
+	db       *gorm.DB
+	server   *http.Server
+	worker   *worker.Runner
+	listener *listener.Service
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
@@ -49,18 +51,22 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	jobsSvc := jobs.NewService(db)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	catalogSvc := catalog.NewService(db)
+	if _, err := catalogSvc.BackfillScannerIdentities(ctx); err != nil {
+		return nil, fmt.Errorf("backfill scanner identities: %w", err)
+	}
 	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
-	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
+	listenerSvc := listener.NewService(db, jobsSvc, librarySvc, registry)
 	probeSvc := probe.NewService(db, registry, cfg.FFprobe, cfg.FFmpeg)
 	playbackSvc := playback.NewService(db, registry)
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
+	healthSvc := health.NewService(db, registry, librarySvc, jobsSvc, cfg.OpenList.BaseURL)
 	catalogSvc.SetPersonProfileRefresher(metadataSvc)
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
 	progressSvc := progress.NewService(db, searchSvc)
 	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, catalogSvc, searchSvc, scheduleSvc, listenerSvc)
 
-	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, scheduleSvc, listenerSvc)
+	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, scheduleSvc, listenerSvc, healthSvc)
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,
@@ -69,10 +75,11 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	return &App{
-		cfg:    cfg,
-		db:     db,
-		server: server,
-		worker: workerRunner,
+		cfg:      cfg,
+		db:       db,
+		server:   server,
+		worker:   workerRunner,
+		listener: listenerSvc,
 	}, nil
 }
 
@@ -94,6 +101,8 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.cfg.Worker.Enabled {
 		go a.worker.Run(ctx)
+		go a.listener.StartLocalObserver(ctx)
+		go a.listener.StartOpenListObserver(ctx)
 	}
 
 	select {

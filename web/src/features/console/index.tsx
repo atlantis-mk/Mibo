@@ -169,7 +169,7 @@ export default function ConsolePage({
     >
       <div
         className={cn(
-          'mx-auto flex w-full max-w-7xl flex-col gap-6',
+          'flex w-full flex-col gap-6',
           embedded ? 'p-0' : 'px-4 py-5 sm:px-6 lg:px-8',
         )}
       >

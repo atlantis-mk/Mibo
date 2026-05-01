@@ -1,18 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { LoaderCircleIcon } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
+import { LoaderCircleIcon } from "lucide-react"
 
-import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
-import { StandaloneMediaDetail } from '#/features/media/components/standalone-media-detail'
+import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert"
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
+import { StandaloneMediaDetail } from "#/features/media/components/standalone-media-detail"
 import {
   buildPresentedCatalogItem,
   catalogEpisodeShelfToSeasonRails,
   catalogItemDetailToPresentation,
   catalogSeasonsToRails,
   type MediaDetailView,
-} from '#/lib/media-presentation'
+} from "#/lib/media-presentation"
 import {
   catalogItemDetailQueryOptions,
   catalogItemProgressQueryOptions,
@@ -21,8 +21,8 @@ import {
   favoritesQueryOptions,
   homeDataQueryOptions,
   miboQueryKeys,
-} from '#/lib/mibo-query'
-import { useAuthStore } from '#/stores/auth-store'
+} from "#/lib/mibo-query"
+import { useAuthStore } from "#/stores/auth-store"
 
 export default function MediaDetail({
   itemId,
@@ -36,7 +36,7 @@ export default function MediaDetail({
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
   const hasValidItemId = Number.isFinite(itemId) && itemId > 0
 
   const itemQuery = useQuery({
@@ -58,17 +58,17 @@ export default function MediaDetail({
     : null
   const seriesEpisodesQuery = useQuery({
     ...catalogSeriesSeasonsQueryOptions(queryToken, detailItem?.id ?? 0),
-    enabled: hasHydrated && !!token && detailItem?.type === 'series',
+    enabled: hasHydrated && !!token && detailItem?.type === "series",
   })
   const presentedItem = itemQuery.data
     ? buildPresentedCatalogItem(
         presentationItem ?? catalogItemDetailToPresentation(itemQuery.data),
         catalogSeasonsToRails(seriesEpisodesQuery.data ?? []),
-        detailView,
+        detailView
       )
     : null
   const displayedSeasonRails = presentedItem
-    ? presentedItem.type === 'episode'
+    ? presentedItem.type === "episode"
       ? catalogEpisodeShelfToSeasonRails(presentedItem)
       : catalogSeasonsToRails(seriesEpisodesQuery.data ?? [])
     : []
@@ -76,7 +76,7 @@ export default function MediaDetail({
   const rematchMutation = useMutation({
     mutationFn: async () => {
       if (!token) {
-        throw new Error('当前未登录，无法重新匹配媒体。')
+        throw new Error("当前未登录，无法重新匹配媒体。")
       }
 
       return createAuthedMiboApi(token).refetchCatalogItemMetadata(itemId)
@@ -96,14 +96,14 @@ export default function MediaDetail({
   const reprobeMutation = useMutation({
     mutationFn: async () => {
       if (!token) {
-        throw new Error('当前未登录，无法重新探测媒体文件。')
+        throw new Error("当前未登录，无法重新探测媒体文件。")
       }
 
       const primaryFileId = detailAssets.find(
-        (asset) => asset.file_ids.length > 0,
+        (asset) => asset.file_ids.length > 0
       )?.file_ids[0]
       if (!primaryFileId) {
-        throw new Error('当前条目没有可重新探测的媒体资产。')
+        throw new Error("当前条目没有可重新探测的媒体资产。")
       }
 
       return createAuthedMiboApi(token).reprobeInventoryFile(primaryFileId)
@@ -123,19 +123,19 @@ export default function MediaDetail({
   const markWatchedMutation = useMutation({
     mutationFn: async () => {
       if (!token) {
-        throw new Error('当前未登录，无法更新观看进度。')
+        throw new Error("当前未登录，无法更新观看进度。")
       }
 
       const item = itemQuery.data
       if (!item) {
-        throw new Error('媒体详情尚未加载完成。')
+        throw new Error("媒体详情尚未加载完成。")
       }
 
       const durationSeconds =
         progressQuery.data?.duration_seconds ?? item.runtime_seconds
 
       if (!durationSeconds || durationSeconds <= 0) {
-        throw new Error('当前媒体缺少时长信息，暂时无法标记为看完。')
+        throw new Error("当前媒体缺少时长信息，暂时无法标记为看完。")
       }
 
       return createAuthedMiboApi(token).updateProgress({
@@ -161,7 +161,7 @@ export default function MediaDetail({
   const favoriteMutation = useMutation({
     mutationFn: async (favorite: boolean) => {
       if (!token) {
-        throw new Error('当前未登录，无法更新收藏。')
+        throw new Error("当前未登录，无法更新收藏。")
       }
 
       const api = createAuthedMiboApi(token)
@@ -178,7 +178,6 @@ export default function MediaDetail({
       ])
     },
   })
-
   if (!hasHydrated || (token && itemQuery.isLoading)) {
     return (
       <div className="flex min-h-svh w-full items-center justify-center bg-background text-foreground">
@@ -239,8 +238,8 @@ export default function MediaDetail({
           100,
           Math.max(
             0,
-            Math.round((progress.position_seconds / durationSeconds) * 100),
-          ),
+            Math.round((progress.position_seconds / durationSeconds) * 100)
+          )
         )
       : 0
   const mutationErrorMessage =
@@ -249,7 +248,7 @@ export default function MediaDetail({
     markWatchedMutation.error?.message ||
     favoriteMutation.error?.message
   const isFavorite = Boolean(
-    favoritesQuery.data?.some((entry) => entry.item.id === itemId),
+    favoritesQuery.data?.some((entry) => entry.item.id === itemId)
   )
 
   return (
@@ -278,12 +277,12 @@ export default function MediaDetail({
             return
           }
 
-          void navigate({ to: '/' })
+          void navigate({ to: "/" })
         }}
         onOpenPlaybackEntry={(options) => {
           const playbackItemId = options?.itemId ?? itemId
           void navigate({
-            to: '/play/$id',
+            to: "/play/$id",
             params: { id: String(playbackItemId) },
             search: {
               fromStart: Boolean(options?.fromStart),
@@ -293,7 +292,7 @@ export default function MediaDetail({
         }}
         onOpenAssetPlaybackEntry={(assetId) => {
           void navigate({
-            to: '/play/$id',
+            to: "/play/$id",
             params: { id: String(itemId) },
             search: { fromStart: false, assetId },
           })
@@ -308,7 +307,7 @@ export default function MediaDetail({
         isReprobePending={reprobeMutation.isPending}
         onManageMetadata={() => {
           void navigate({
-            to: '/settings/metadata/$id',
+            to: "/settings/metadata/$id",
             params: { id: String(itemId) },
           })
         }}

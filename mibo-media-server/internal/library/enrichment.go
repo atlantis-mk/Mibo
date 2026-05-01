@@ -3,10 +3,23 @@ package library
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
 )
+
+type CatalogMatchBatchPayload struct {
+	LibraryID uint   `json:"library_id"`
+	RootPath  string `json:"root_path,omitempty"`
+	ItemIDs   []uint `json:"item_ids"`
+}
+
+type InventoryProbeBatchPayload struct {
+	LibraryID uint   `json:"library_id"`
+	RootPath  string `json:"root_path,omitempty"`
+	FileIDs   []uint `json:"file_ids"`
+}
 
 func (s *Service) QueueCatalogItemMatch(ctx context.Context, itemID uint) (database.Job, error) {
 	if s.jobs == nil {
@@ -27,6 +40,56 @@ func (s *Service) QueueCatalogItemMatch(ctx context.Context, itemID uint) (datab
 	return s.jobs.EnqueueUnique(ctx, JobKindMatchCatalogItem, fmt.Sprintf("match_catalog_item:%d", targetID), map[string]any{
 		"item_id": targetID,
 	})
+}
+
+func (s *Service) QueueCatalogMatchBatch(ctx context.Context, libraryID uint, rootPath string, itemIDs []uint) (database.Job, error) {
+	if s.jobs == nil {
+		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	}
+	ids := normalizeUintIDs(itemIDs)
+	if len(ids) == 0 {
+		return database.Job{}, nil
+	}
+	return s.jobs.EnqueueUnique(ctx, JobKindCatalogMatchBatch, fmt.Sprintf("catalog_match_batch:%d:%s", libraryID, rootPath), CatalogMatchBatchPayload{
+		LibraryID: libraryID,
+		RootPath:  rootPath,
+		ItemIDs:   ids,
+	})
+}
+
+func (s *Service) QueueInventoryProbeBatch(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint) (database.Job, error) {
+	if s.jobs == nil {
+		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	}
+	ids := normalizeUintIDs(fileIDs)
+	if len(ids) == 0 {
+		return database.Job{}, nil
+	}
+	return s.jobs.EnqueueUnique(ctx, JobKindInventoryProbeBatch, fmt.Sprintf("inventory_probe_batch:%d:%s", libraryID, rootPath), InventoryProbeBatchPayload{
+		LibraryID: libraryID,
+		RootPath:  rootPath,
+		FileIDs:   ids,
+	})
+}
+
+func normalizeUintIDs(ids []uint) []uint {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[uint]struct{}, len(ids))
+	result := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 func (s *Service) catalogMatchTargetForQueue(ctx context.Context, itemID uint) (uint, bool, error) {

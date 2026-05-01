@@ -8,6 +8,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/inventory"
+	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
 )
@@ -40,6 +41,32 @@ type catalogGovernanceEpisodeNumberingInput struct {
 	EpisodeNumberEnd *int `json:"episode_number_end"`
 }
 
+type scanExclusionMarkInput struct {
+	Reason string `json:"reason"`
+}
+
+type filenameExclusionRestoreInput struct {
+	InventoryFileID uint `json:"inventory_file_id"`
+}
+
+type scanExclusionEnabledInput struct {
+	Enabled bool `json:"enabled"`
+}
+
+type scanExclusionRuleInput struct {
+	LibraryID   *uint  `json:"library_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	RuleType    string `json:"rule_type"`
+	Value       string `json:"value"`
+	Reason      string `json:"reason"`
+	Enabled     *bool  `json:"enabled"`
+}
+
+type replaceLibraryScanExclusionRulesInput struct {
+	Rules []scanExclusionRuleInput `json:"rules"`
+}
+
 func (r *Router) handleGetCatalogItem(w http.ResponseWriter, req *http.Request) {
 	if r.catalog == nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
@@ -61,6 +88,29 @@ func (r *Router) handleGetCatalogItem(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 	normalizeCatalogItemDetailArtworkURLs(req, &detail)
+	writeJSON(req.Context(), w, http.StatusOK, detail)
+}
+
+func (r *Router) handleGetMediaItem(w http.ResponseWriter, req *http.Request) {
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var userID *uint
+	if user, err := r.optionalUser(req); err == nil && user != nil {
+		id := user.ID
+		userID = &id
+	}
+	detail, err := r.catalog.GetMediaItemDTO(req.Context(), itemID, userID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
 	writeJSON(req.Context(), w, http.StatusOK, detail)
 }
 
@@ -576,7 +626,8 @@ func (r *Router) handleApplyCatalogItemMetadata(w http.ResponseWriter, req *http
 		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("external_id is required"))
 		return
 	}
-	if err := r.metadata.ApplyCatalogCandidate(req.Context(), itemID, input); err != nil {
+	operation, err := r.metadata.ApplyCatalogCandidateOperation(req.Context(), itemID, input)
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
@@ -585,6 +636,7 @@ func (r *Router) handleApplyCatalogItemMetadata(w http.ResponseWriter, req *http
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -603,7 +655,7 @@ func (r *Router) handleMatchCatalogItem(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	metadataResult, err := r.metadata.MatchCatalogItemWithResult(req.Context(), itemID)
+	operation, err := r.metadata.MatchCatalogItemOperation(req.Context(), itemID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -613,7 +665,8 @@ func (r *Router) handleMatchCatalogItem(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	workspace.MetadataResult = &metadataResult
+	operationResponse := metadata.OperationResponseFromResult(operation)
+	workspace.MetadataOperation = operationResponse
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -632,7 +685,7 @@ func (r *Router) handleRefetchCatalogItemMetadata(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	metadataResult, err := r.metadata.RefetchCatalogItemWithResult(req.Context(), itemID)
+	operation, err := r.metadata.RefetchCatalogItemOperation(req.Context(), itemID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -642,7 +695,8 @@ func (r *Router) handleRefetchCatalogItemMetadata(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	workspace.MetadataResult = &metadataResult
+	operationResponse := metadata.OperationResponseFromResult(operation)
+	workspace.MetadataOperation = operationResponse
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -667,6 +721,443 @@ func (r *Router) handleQueueInventoryFileProbe(w http.ResponseWriter, req *http.
 		return
 	}
 	writeJSON(req.Context(), w, http.StatusAccepted, job)
+}
+
+func (r *Router) handleMarkInventoryFileScanExclusion(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	fileID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.markScanExclusion(w, req, library.MarkScanExclusionInput{InventoryFileID: fileID, UserID: &user.ID})
+}
+
+func (r *Router) handlePreviewInventoryFileFilenameExclusion(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	fileID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.previewFilenameExclusion(w, req, library.FilenameExclusionTargetInput{InventoryFileID: fileID})
+}
+
+func (r *Router) handleMarkAssetScanExclusion(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	assetID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.markScanExclusion(w, req, library.MarkScanExclusionInput{AssetID: assetID, UserID: &user.ID})
+}
+
+func (r *Router) handlePreviewAssetFilenameExclusion(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	assetID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.previewFilenameExclusion(w, req, library.FilenameExclusionTargetInput{AssetID: assetID})
+}
+
+func (r *Router) handleMarkItemScanExclusion(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.markScanExclusion(w, req, library.MarkScanExclusionInput{ItemID: itemID, UserID: &user.ID})
+}
+
+func (r *Router) handlePreviewItemFilenameExclusion(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.previewFilenameExclusion(w, req, library.FilenameExclusionTargetInput{ItemID: itemID})
+}
+
+func (r *Router) previewFilenameExclusion(w http.ResponseWriter, req *http.Request, input library.FilenameExclusionTargetInput) {
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	preview, err := r.library.PreviewFilenameExclusion(req.Context(), input)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, preview)
+}
+
+func (r *Router) handleCreateItemFilenameExclusionRule(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var body scanExclusionMarkInput
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	rule, err := r.library.CreateFilenameExclusionRule(req.Context(), library.CreateFilenameExclusionRuleInput{FilenameExclusionTargetInput: library.FilenameExclusionTargetInput{ItemID: itemID}, Reason: body.Reason, UserID: &user.ID})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, rule)
+}
+
+func (r *Router) markScanExclusion(w http.ResponseWriter, req *http.Request, input library.MarkScanExclusionInput) {
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	var body scanExclusionMarkInput
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	input.Reason = body.Reason
+	exclusion, err := r.library.MarkScanExclusion(req.Context(), input)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, exclusion)
+}
+
+func (r *Router) handleSetScanExclusionEnabled(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	exclusionID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input scanExclusionEnabledInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	exclusion, err := r.library.SetScanExclusionEnabled(req.Context(), library.SetScanExclusionEnabledInput{ExclusionID: exclusionID, Enabled: input.Enabled, UserID: &user.ID})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, exclusion)
+}
+
+func (r *Router) handleListScanExclusions(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	libraryID, err := parseOptionalUintQuery(req, "library_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var enabled *bool
+	switch strings.ToLower(strings.TrimSpace(req.URL.Query().Get("enabled"))) {
+	case "true", "1", "yes":
+		value := true
+		enabled = &value
+	case "false", "0", "no":
+		value := false
+		enabled = &value
+	case "", "all":
+	default:
+		writeError(req.Context(), w, http.StatusBadRequest, errors.New("invalid query parameter \"enabled\""))
+		return
+	}
+	exclusions, err := r.library.ListScanExclusionsView(req.Context(), library.ListScanExclusionsInput{LibraryID: libraryID, Enabled: enabled})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, exclusions)
+}
+
+func (r *Router) handleListFilenameExclusionRules(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	libraryID, err := parseOptionalUintQuery(req, "library_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var enabled *bool
+	switch strings.ToLower(strings.TrimSpace(req.URL.Query().Get("enabled"))) {
+	case "true", "1", "yes":
+		value := true
+		enabled = &value
+	case "false", "0", "no":
+		value := false
+		enabled = &value
+	case "", "all":
+	default:
+		writeError(req.Context(), w, http.StatusBadRequest, errors.New("invalid query parameter \"enabled\""))
+		return
+	}
+	rules, err := r.library.ListFilenameExclusionRules(req.Context(), library.ListScanExclusionsInput{LibraryID: libraryID, Enabled: enabled})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, rules)
+}
+
+func (r *Router) handleSetFilenameExclusionRuleEnabled(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	ruleID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input scanExclusionEnabledInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	rule, err := r.library.SetFilenameExclusionRuleEnabled(req.Context(), library.SetFilenameExclusionRuleEnabledInput{RuleID: ruleID, Enabled: input.Enabled, UserID: &user.ID})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, rule)
+}
+
+func (r *Router) handleRestoreFilenameExclusionMatch(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	ruleID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input filenameExclusionRestoreInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	restore, err := r.library.RestoreFilenameExclusionMatch(req.Context(), library.RestoreFilenameExclusionMatchInput{RuleID: ruleID, InventoryFileID: input.InventoryFileID, UserID: &user.ID})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, restore)
+}
+
+func (r *Router) handleListScanExclusionRules(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	rules, err := r.library.ListScanExclusionRules(req.Context())
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, rules)
+}
+
+func (r *Router) handleCreateScanExclusionRule(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	var body scanExclusionRuleInput
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	rule, err := r.library.CreateScanExclusionRule(req.Context(), library.ScanExclusionRuleInput{LibraryID: body.LibraryID, Name: body.Name, Description: body.Description, RuleType: body.RuleType, Value: body.Value, Reason: body.Reason, Enabled: enabled, UserID: &user.ID})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusCreated, rule)
+}
+
+func (r *Router) handleUpdateScanExclusionRule(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	ruleID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var body scanExclusionRuleInput
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	if body.Enabled != nil && body.LibraryID == nil && strings.TrimSpace(body.Name) == "" && strings.TrimSpace(body.RuleType) == "" && strings.TrimSpace(body.Value) == "" && strings.TrimSpace(body.Reason) == "" && strings.TrimSpace(body.Description) == "" {
+		rule, err := r.library.SetScanExclusionRuleEnabled(req.Context(), library.SetScanExclusionRuleEnabledInput{RuleID: ruleID, Enabled: *body.Enabled, UserID: &user.ID})
+		if err != nil {
+			writeError(req.Context(), w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(req.Context(), w, http.StatusOK, rule)
+		return
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	rule, err := r.library.UpdateScanExclusionRule(req.Context(), library.UpdateScanExclusionRuleInput{RuleID: ruleID, LibraryID: body.LibraryID, Name: body.Name, Description: body.Description, RuleType: body.RuleType, Value: body.Value, Reason: body.Reason, Enabled: enabled, UserID: &user.ID})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, rule)
+}
+
+func (r *Router) handleDeleteScanExclusionRule(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	ruleID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	if err := r.library.DeleteScanExclusionRule(req.Context(), ruleID); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (r *Router) handleReplaceLibraryScanExclusionRules(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.library == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("library service unavailable"))
+		return
+	}
+	libraryID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var body replaceLibraryScanExclusionRulesInput
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	inputs := make([]library.ScanExclusionRuleInput, 0, len(body.Rules))
+	for _, rule := range body.Rules {
+		enabled := true
+		if rule.Enabled != nil {
+			enabled = *rule.Enabled
+		}
+		inputs = append(inputs, library.ScanExclusionRuleInput{Name: rule.Name, Description: rule.Description, RuleType: rule.RuleType, Value: rule.Value, Reason: rule.Reason, Enabled: enabled})
+	}
+	rules, err := r.library.ReplaceLibraryScanExclusionRules(req.Context(), libraryID, inputs, &user.ID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, rules)
 }
 
 func normalizeCatalogListItemsArtworkURLs(req *http.Request, items []catalog.CatalogListItem) {

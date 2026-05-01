@@ -19,6 +19,12 @@ func TestNormalize(t *testing.T) {
 		{name: "dense technical release", raw: "Dune.Part.Two.2024.2160p.UHD.BluRay.REMUX.HEVC.TrueHD.Atmos-GROUP", title: "Dune Part Two", year: 2024},
 		{name: "release group", raw: "Some.Movie.2024-GROUP", title: "Some Movie", year: 2024},
 		{name: "multi episode promo tail", raw: "黑袍纠察队.The.Boys.S05E01-02.6v电影 地址发布页 www.6v123.net 收藏不迷路", title: "黑袍纠察队 The Boys"},
+		{name: "chinese release watermark and tags", raw: "【高清剧集网发布 www.DDHDTV.com】魔幻手机[全42集][国语配音+中文字幕].Magic.Mobile.Phone.2008.WEB-DL.1080p.H265.AAC-Huawei", title: "魔幻手机 Magic Mobile Phone", year: 2008},
+		{name: "fps flac multi audio tail", raw: "飞驰人生3.Pegasus.3.2026.2160p.60fps.FLAC.5Audios", title: "飞驰人生3 Pegasus 3", year: 2026},
+		{name: "web bit depth yts watermark", raw: "Peaky.Blinders.The.Immortal.Man.2026.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.BZ].mkv", title: "Peaky Blinders The Immortal Man", year: 2026},
+		{name: "numeric title version and ddp71", raw: "M3GAN.2.0.2025.BluRay.1080p.x265.10bit.DDP7.1.-SSDSSE.mkv", title: "M3GAN 2.0", year: 2025},
+		{name: "split h264 codec", raw: "Back to the Past 2025 1080p WEB-DL H 264 AAC-HHWEB.mkv", title: "Back to the Past", year: 2025},
+		{name: "short release tag after year", raw: "Avatar.Fire.And.Ash.2025.MA.x264.WEB-DL.1080p-Jaskier.mkv", title: "Avatar Fire And Ash", year: 2025},
 		{name: "empty fallback", raw: "2024.2160p.WEB-DL.x265", title: "2024.2160p.WEB-DL.x265", year: 2024},
 	}
 
@@ -59,6 +65,29 @@ func TestNormalizeRecordsRemovedTokenReasons(t *testing.T) {
 	for reason, seen := range wantReasons {
 		if !seen {
 			t.Fatalf("expected removed token reason %q in %#v", reason, result.RemovedTokens)
+		}
+	}
+}
+
+func TestNormalizeExtractsHashtagTags(t *testing.T) {
+	t.Parallel()
+
+	result := Normalize(NormalizeInput{RawTitle: "Movie.Name.#IMAX #国语.2024.1080p"})
+	if result.Title != "Movie Name" {
+		t.Fatalf("expected hashtag tags removed from title, got %q", result.Title)
+	}
+	if len(result.Tags) != 2 || result.Tags[0] != "IMAX" || result.Tags[1] != "国语" {
+		t.Fatalf("expected extracted hashtag tags, got %#v", result.Tags)
+	}
+	wantHashtagEvidence := map[string]bool{"#IMAX": false, "#国语": false}
+	for _, token := range result.RemovedTokens {
+		if token.Reason == "hashtag" {
+			wantHashtagEvidence[token.Value] = true
+		}
+	}
+	for token, seen := range wantHashtagEvidence {
+		if !seen {
+			t.Fatalf("expected hashtag removal evidence for %q in %#v", token, result.RemovedTokens)
 		}
 	}
 }

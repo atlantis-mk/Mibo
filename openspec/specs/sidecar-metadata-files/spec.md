@@ -1,5 +1,6 @@
+## Purpose
+Defines how scanner-supported sidecar metadata and subtitle files are discovered, recorded, and applied safely during catalog scans.
 ## Requirements
-
 ### Requirement: Discover same-folder sidecar files
 The scanner SHALL discover supported sidecar files with `.srt`, `.ass`, `.nfo`, and `.json` extensions from the same storage folder as each scanned video file.
 
@@ -27,7 +28,7 @@ The scanner SHALL record associated `.srt` and `.ass` sidecars as local scanner 
 - **THEN** the scanner MUST pass enough sidecar path and association data to the catalog write path to bind that sidecar as an external subtitle track
 
 ### Requirement: Use metadata sidecar hints safely
-The scanner SHALL parse supported `.nfo` and `.json` sidecars for high-confidence local metadata hints and apply them only through existing catalog scan governance protections.
+The scanner SHALL parse supported `.nfo` and `.json` sidecars for high-confidence local metadata hints, including supported external identity fields, and apply them only through existing catalog scan governance protections.
 
 #### Scenario: JSON metadata improves movie classification
 - **WHEN** `Movie A.mkv` has a matching JSON sidecar with title and year fields
@@ -36,6 +37,10 @@ The scanner SHALL parse supported `.nfo` and `.json` sidecars for high-confidenc
 #### Scenario: NFO metadata improves episode classification
 - **WHEN** an episode video has a matching NFO sidecar with series title, season number, and episode number
 - **THEN** the scanner SHALL use those fields as local hints when creating or updating the episode hierarchy
+
+#### Scenario: Sidecar external identity seeds metadata enrichment
+- **WHEN** a matching metadata sidecar contains a supported external identity such as a TMDB or MetaTube identifier
+- **THEN** the scanner MUST persist that identity on the catalog item with scanner provenance so later metadata enrichment can fetch detail without first performing a remote search
 
 #### Scenario: Curated metadata is preserved
 - **WHEN** a catalog item is locked, manual, matched, or needs review
@@ -62,3 +67,21 @@ The scanner SHALL avoid applying folder-level sidecars to a video when the folde
 #### Scenario: Unambiguous folder metadata
 - **WHEN** a folder contains one video file and `metadata.json`
 - **THEN** the scanner MAY associate `metadata.json` with that video as folder-level metadata evidence
+
+### Requirement: Sidecars participate as resolver evidence
+The scanner SHALL treat supported sidecar metadata as resolver evidence at group and file levels before catalog projection.
+
+#### Scenario: TV folder has tvshow metadata
+- **WHEN** a TV work directory contains `tvshow.nfo` or supported group metadata declaring a series title or provider identity
+- **THEN** the scanner MUST use that sidecar as evidence for the series candidate while still preserving scanner identity for rescan reconciliation
+
+#### Scenario: Movie folder has movie metadata
+- **WHEN** a movie folder contains `movie.nfo` or supported group metadata declaring movie title, year, or provider identity
+- **THEN** the scanner MUST use that sidecar as evidence for the movie candidate and metadata source without forcing one catalog item per video file
+
+### Requirement: Sidecar hints respect field ownership
+The scanner SHALL apply sidecar hints through catalog field ownership and governance rules.
+
+#### Scenario: Manual field is locked
+- **WHEN** a sidecar contains a title, year, overview, or provider ID for an item whose corresponding field has been locked or manually curated
+- **THEN** the scanner MUST record sidecar evidence without overwriting the protected field

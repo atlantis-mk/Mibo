@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2Icon } from 'lucide-react'
+import { useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { CheckCircle2Icon } from "lucide-react"
 
 import {
   AlertDialog,
@@ -11,39 +11,48 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '#/components/ui/alert-dialog'
-import type { Library, MediaSource } from '#/lib/mibo-api'
+} from "#/components/ui/alert-dialog"
+import type { HealthIssue, Library, MediaSource } from "#/lib/mibo-api"
 import {
   createAuthedMiboApi,
+  healthIssuesQueryOptions,
   librariesQueryOptions,
   mediaSourcesQueryOptions,
+  metadataProviderInstancesQueryOptions,
+  metadataProfilesQueryOptions,
   miboQueryKeys,
-} from '#/lib/mibo-query'
+} from "#/lib/mibo-query"
 
-import { EMPTY_LIBRARY_FORM, type LibraryFormState } from './library-form'
-import { LibraryDrawer, MediaSourceDrawer } from './library-management-drawers'
-import { LibrariesTab } from './libraries-tab'
+import {
+  EMPTY_LIBRARY_FORM,
+  libraryFormMetadataStrategyInput,
+  libraryFormScanExclusionRuleInputs,
+  type LibraryFormState,
+} from "./library-form"
+import { LibraryDrawer, MediaSourceDrawer } from "./library-management-drawers"
+import { LibrariesTab } from "./libraries-tab"
+import { LibrarySettingsDrawer } from "./library-settings-drawer"
 import {
   buildMediaSourceDraft,
   DEFAULT_OPENLIST_BASE_URL,
   deriveLocalSourceName,
   EMPTY_SOURCE_FORM,
   type SourceFormState,
-} from './media-source-form'
-import { MediaSourcesTab } from './media-sources-tab'
+} from "./media-source-form"
+import { MediaSourcesTab } from "./media-sources-tab"
 
 export function LibraryManagementPanel({
   token,
   activeTab,
 }: {
   token: string | null
-  activeTab: 'sources' | 'libraries'
+  activeTab: "sources" | "libraries"
 }) {
   const queryClient = useQueryClient()
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
   const api = useMemo(
     () => (token ? createAuthedMiboApi(token) : null),
-    [token],
+    [token]
   )
 
   const [actionMessage, setActionMessage] = useState<string | null>(null)
@@ -58,6 +67,7 @@ export function LibraryManagementPanel({
     useState<SourceFormState>(EMPTY_SOURCE_FORM)
   const [deletingSource, setDeletingSource] = useState<MediaSource | null>(null)
   const [deletingLibrary, setDeletingLibrary] = useState<Library | null>(null)
+  const [editingLibrary, setEditingLibrary] = useState<Library | null>(null)
 
   const mediaSourcesQuery = useQuery({
     ...mediaSourcesQueryOptions(queryToken),
@@ -67,9 +77,24 @@ export function LibraryManagementPanel({
     ...librariesQueryOptions(queryToken),
     enabled: !!token,
   })
+  const metadataProfilesQuery = useQuery({
+    ...metadataProfilesQueryOptions(queryToken),
+    enabled: !!token,
+  })
+  const metadataProviderInstancesQuery = useQuery({
+    ...metadataProviderInstancesQueryOptions(queryToken),
+    enabled: !!token,
+  })
+  const healthIssuesQuery = useQuery({
+    ...healthIssuesQueryOptions(queryToken),
+    enabled: !!token,
+  })
 
   const mediaSources = mediaSourcesQuery.data ?? []
   const libraries = librariesQuery.data ?? []
+  const healthIssues = healthIssuesQuery.data ?? []
+  const metadataProfiles = metadataProfilesQuery.data ?? []
+  const metadataProviderInstances = metadataProviderInstancesQuery.data ?? []
 
   async function invalidateData() {
     await Promise.all([
@@ -84,17 +109,17 @@ export function LibraryManagementPanel({
 
   const createMediaSourceMutation = useMutation({
     mutationFn: async () => {
-      if (!api) throw new Error('当前未登录，无法创建媒体源。')
+      if (!api) throw new Error("当前未登录，无法创建媒体源。")
 
       return api.createMediaSource({
         provider: sourceDraft.provider,
         name:
-          sourceDraft.provider === 'local'
+          sourceDraft.provider === "local"
             ? deriveLocalSourceName(sourceDraft.rootPath)
             : sourceDraft.name,
         root_path: sourceDraft.rootPath,
         config:
-          sourceDraft.provider === 'openlist'
+          sourceDraft.provider === "openlist"
             ? {
                 openlist: {
                   base_url: sourceDraft.baseUrl || DEFAULT_OPENLIST_BASE_URL,
@@ -106,14 +131,14 @@ export function LibraryManagementPanel({
       })
     },
     onSuccess: async () => {
-      setActionMessage('媒体源已创建。')
+      setActionMessage("媒体源已创建。")
       setIsCreateSourceOpen(false)
       setSourceDraft(EMPTY_SOURCE_FORM)
       await invalidateData()
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : '创建媒体源失败。',
+        error instanceof Error ? error.message : "创建媒体源失败。"
       )
     },
   })
@@ -121,14 +146,17 @@ export function LibraryManagementPanel({
   const updateMediaSourceMutation = useMutation({
     mutationFn: async () => {
       if (!api || !editingSource) {
-        throw new Error('当前未选择要编辑的媒体源。')
+        throw new Error("当前未选择要编辑的媒体源。")
       }
 
       return api.updateMediaSource(editingSource.id, {
-        name: editingSourceDraft.name,
+        name:
+          editingSource.provider === "local"
+            ? deriveLocalSourceName(editingSourceDraft.rootPath)
+            : editingSourceDraft.name,
         root_path: editingSourceDraft.rootPath,
         config:
-          editingSource.provider === 'openlist'
+          editingSource.provider === "openlist"
             ? {
                 openlist: {
                   base_url:
@@ -141,14 +169,14 @@ export function LibraryManagementPanel({
       })
     },
     onSuccess: async () => {
-      setActionMessage('媒体源已更新。')
+      setActionMessage("媒体源已更新。")
       setEditingSource(null)
       setEditingSourceDraft(EMPTY_SOURCE_FORM)
       await invalidateData()
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : '更新媒体源失败。',
+        error instanceof Error ? error.message : "更新媒体源失败。"
       )
     },
   })
@@ -156,43 +184,49 @@ export function LibraryManagementPanel({
   const deleteMediaSourceMutation = useMutation({
     mutationFn: async () => {
       if (!api || !deletingSource) {
-        throw new Error('当前未选择要删除的媒体源。')
+        throw new Error("当前未选择要删除的媒体源。")
       }
 
       return api.deleteMediaSource(deletingSource.id)
     },
     onSuccess: async () => {
-      setActionMessage('媒体源已删除。')
+      setActionMessage("媒体源已删除。")
       setDeletingSource(null)
       await invalidateData()
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : '删除媒体源失败。',
+        error instanceof Error ? error.message : "删除媒体源失败。"
       )
     },
   })
 
   const createLibraryMutation = useMutation({
     mutationFn: async () => {
-      if (!api) throw new Error('当前未登录，无法创建媒体库。')
+      if (!api) throw new Error("当前未登录，无法创建媒体库。")
 
       return api.createLibrary({
         name: libraryDraft.name,
         type: libraryDraft.type,
         media_source_id: Number(libraryDraft.mediaSourceId),
         root_path: libraryDraft.rootPath,
+        scan: libraryDraft.scan,
+        metadata: libraryDraft.metadata,
+        metadata_strategy: libraryFormMetadataStrategyInput(libraryDraft),
+        playback: libraryDraft.playback,
+        subtitle: libraryDraft.subtitle,
+        scan_exclusion_rules: libraryFormScanExclusionRuleInputs(libraryDraft),
       })
     },
     onSuccess: async () => {
-      setActionMessage('媒体库已创建。')
+      setActionMessage("媒体库已创建。")
       setIsCreateLibraryOpen(false)
-      setLibraryDraft(EMPTY_LIBRARY_FORM)
+      setLibraryDraft({ ...EMPTY_LIBRARY_FORM })
       await invalidateData()
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : '创建媒体库失败。',
+        error instanceof Error ? error.message : "创建媒体库失败。"
       )
     },
   })
@@ -200,34 +234,34 @@ export function LibraryManagementPanel({
   const deleteLibraryMutation = useMutation({
     mutationFn: async () => {
       if (!api || !deletingLibrary) {
-        throw new Error('当前未选择要删除的媒体库。')
+        throw new Error("当前未选择要删除的媒体库。")
       }
 
       return api.deleteLibrary(deletingLibrary.id)
     },
     onSuccess: async () => {
-      setActionMessage('媒体库已删除。')
+      setActionMessage("媒体库已删除。")
       setDeletingLibrary(null)
       await invalidateData()
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : '删除媒体库失败。',
+        error instanceof Error ? error.message : "删除媒体库失败。"
       )
     },
   })
 
   const scanLibraryMutation = useMutation({
     mutationFn: async (libraryId: number) => {
-      if (!api) throw new Error('当前未登录，无法扫描媒体库。')
+      if (!api) throw new Error("当前未登录，无法扫描媒体库。")
       return api.scanLibrary(libraryId)
     },
     onSuccess: () => {
-      setActionMessage('媒体库扫描任务已提交。')
+      setActionMessage("媒体库扫描任务已提交。")
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : '提交扫描任务失败。',
+        error instanceof Error ? error.message : "提交扫描任务失败。"
       )
     },
   })
@@ -241,10 +275,11 @@ export function LibraryManagementPanel({
         </div>
       ) : null}
 
-      {activeTab === 'sources' ? (
+      {activeTab === "sources" ? (
         <div>
           <MediaSourcesTab
             mediaSources={mediaSources}
+            healthIssues={healthIssues}
             isLoading={mediaSourcesQuery.isLoading}
             onCreate={() => setIsCreateSourceOpen(true)}
             onEdit={(source) => {
@@ -256,14 +291,16 @@ export function LibraryManagementPanel({
         </div>
       ) : null}
 
-      {activeTab === 'libraries' ? (
+      {activeTab === "libraries" ? (
         <div>
           <LibrariesTab
             libraries={libraries}
             mediaSources={mediaSources}
+            healthIssues={healthIssues}
             isLoading={librariesQuery.isLoading}
             isScanning={scanLibraryMutation.isPending}
             onCreate={() => setIsCreateLibraryOpen(true)}
+            onEdit={setEditingLibrary}
             onScan={(libraryId) => scanLibraryMutation.mutate(libraryId)}
             onDelete={setDeletingLibrary}
           />
@@ -281,8 +318,8 @@ export function LibraryManagementPanel({
         disabled={
           createMediaSourceMutation.isPending ||
           !sourceDraft.rootPath ||
-          (sourceDraft.provider !== 'local' && !sourceDraft.name) ||
-          (sourceDraft.provider === 'openlist' && !sourceDraft.baseUrl)
+          (sourceDraft.provider !== "local" && !sourceDraft.name) ||
+          (sourceDraft.provider === "openlist" && !sourceDraft.baseUrl)
         }
         submitLabel="创建"
         onOpenChange={setIsCreateSourceOpen}
@@ -313,16 +350,29 @@ export function LibraryManagementPanel({
         draft={libraryDraft}
         onChange={setLibraryDraft}
         mediaSources={mediaSources}
+        metadataProfiles={metadataProfiles}
+        metadataProviderInstances={metadataProviderInstances}
         api={api}
         pending={createLibraryMutation.isPending}
         disabled={
           createLibraryMutation.isPending ||
-          !libraryDraft.name ||
+          !libraryDraft.name.trim() ||
           !libraryDraft.mediaSourceId ||
           !libraryDraft.rootPath
         }
         onOpenChange={setIsCreateLibraryOpen}
         onSubmit={() => createLibraryMutation.mutate()}
+      />
+
+      <LibrarySettingsDrawer
+        open={!!editingLibrary}
+        library={editingLibrary}
+        mediaSources={mediaSources}
+        api={api}
+        onOpenChange={(open) => {
+          if (!open) setEditingLibrary(null)
+        }}
+        onSaved={invalidateData}
       />
 
       <AlertDialog
@@ -335,7 +385,7 @@ export function LibraryManagementPanel({
             <AlertDialogDescription>
               {deletingSource
                 ? `确认删除媒体源“${deletingSource.name}”吗？该操作不可撤销。`
-                : ''}
+                : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -359,7 +409,7 @@ export function LibraryManagementPanel({
             <AlertDialogDescription>
               {deletingLibrary
                 ? `确认删除媒体库“${deletingLibrary.name}”吗？该操作不可撤销。`
-                : ''}
+                : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

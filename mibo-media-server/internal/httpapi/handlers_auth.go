@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/auth"
 	"github.com/atlan/mibo-media-server/internal/progress"
 )
 
@@ -37,7 +40,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	result, err := r.auth.Login(req.Context(), input.Username, input.Password)
+	result, err := r.auth.Login(req.Context(), input.Username, input.Password, loginMetadataFromRequest(req))
 	if err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -59,6 +62,73 @@ func (r *Router) handleLogout(w http.ResponseWriter, req *http.Request) {
 	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"status": "logged_out"})
 }
 
+func (r *Router) handleListAuthSessions(w http.ResponseWriter, req *http.Request) {
+	token, err := bearerToken(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	user, err := r.auth.Authenticate(req.Context(), token)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	sessions, err := r.auth.ListLoginSessions(req.Context(), user.ID, token)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, sessions)
+}
+
+func (r *Router) handleRevokeAuthSession(w http.ResponseWriter, req *http.Request) {
+	token, err := bearerToken(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	user, err := r.auth.Authenticate(req.Context(), token)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	sessionID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	if err := r.auth.RevokeLoginSession(req.Context(), user.ID, sessionID, token); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrCurrentSession):
+			writeError(req.Context(), w, http.StatusBadRequest, err)
+		case errors.Is(err, auth.ErrSessionNotFound):
+			writeError(req.Context(), w, http.StatusNotFound, err)
+		default:
+			writeError(req.Context(), w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"id": sessionID, "status": "revoked"})
+}
+
+func (r *Router) handleRevokeOtherAuthSessions(w http.ResponseWriter, req *http.Request) {
+	token, err := bearerToken(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	user, err := r.auth.Authenticate(req.Context(), token)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if err := r.auth.RevokeOtherLoginSessions(req.Context(), user.ID, token); err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, map[string]any{"status": "revoked"})
+}
+
 func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 	user, err := r.requireUser(req)
 	if err != nil {
@@ -66,6 +136,53 @@ func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(req.Context(), w, http.StatusOK, user)
+}
+
+func loginMetadataFromRequest(req *http.Request) auth.LoginMetadata {
+	userAgent := strings.TrimSpace(req.UserAgent())
+	return auth.LoginMetadata{
+		UserAgent:  userAgent,
+		RemoteAddr: requestRemoteAddr(req),
+		DeviceName: deviceNameFromUserAgent(userAgent),
+		ClientType: clientTypeFromUserAgent(userAgent),
+	}
+}
+
+func requestRemoteAddr(req *http.Request) string {
+	remoteAddr := strings.TrimSpace(req.RemoteAddr)
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
+func deviceNameFromUserAgent(userAgent string) string {
+	lower := strings.ToLower(userAgent)
+	switch {
+	case userAgent == "":
+		return ""
+	case strings.Contains(lower, "iphone"):
+		return "iPhone"
+	case strings.Contains(lower, "ipad"):
+		return "iPad"
+	case strings.Contains(lower, "android"):
+		return "Android device"
+	case strings.Contains(lower, "macintosh") || strings.Contains(lower, "mac os"):
+		return "Mac"
+	case strings.Contains(lower, "windows"):
+		return "Windows PC"
+	case strings.Contains(lower, "linux"):
+		return "Linux device"
+	default:
+		return "Unknown device"
+	}
+}
+
+func clientTypeFromUserAgent(userAgent string) string {
+	if strings.TrimSpace(userAgent) == "" {
+		return ""
+	}
+	return "Mibo Web"
 }
 
 func (r *Router) handleUpdateProgress(w http.ResponseWriter, req *http.Request) {

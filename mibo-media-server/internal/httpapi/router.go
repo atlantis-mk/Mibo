@@ -6,6 +6,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/auth"
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
+	"github.com/atlan/mibo-media-server/internal/health"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/listener"
@@ -16,6 +17,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
+	"github.com/atlan/mibo-media-server/internal/webui"
 	"gorm.io/gorm"
 )
 
@@ -46,6 +48,7 @@ type Router struct {
 	metadata *metadata.Service
 	schedule *schedule.Service
 	settings *settings.Service
+	health   *health.Service
 }
 
 type homeDiscoveryResponse struct {
@@ -56,8 +59,9 @@ type homeDiscoveryResponse struct {
 
 func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, jobsSvc *jobs.Service, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service, args ...any) http.Handler {
 	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
-	listenerSvc := listener.NewService(db, jobsSvc, librarySvc)
+	listenerSvc := listener.NewService(db, jobsSvc, librarySvc, registry)
 	var catalogSvc *catalog.Service
+	var healthSvc *health.Service
 	for _, arg := range args {
 		if provided, ok := arg.(*catalog.Service); ok && provided != nil {
 			catalogSvc = provided
@@ -68,6 +72,12 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 		if provided, ok := arg.(*listener.Service); ok && provided != nil {
 			listenerSvc = provided
 		}
+		if provided, ok := arg.(*health.Service); ok && provided != nil {
+			healthSvc = provided
+		}
+	}
+	if healthSvc == nil {
+		healthSvc = health.NewService(db, registry, librarySvc, jobsSvc, cfg.OpenList.BaseURL)
 	}
 	router := &Router{
 		cfg:      cfg,
@@ -85,6 +95,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 		metadata: metadataSvc,
 		schedule: scheduleSvc,
 		settings: settingsSvc,
+		health:   healthSvc,
 	}
 
 	mux := http.NewServeMux()
@@ -94,6 +105,9 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/auth/register", router.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", router.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", router.handleLogout)
+	mux.HandleFunc("GET /api/v1/auth/sessions", router.handleListAuthSessions)
+	mux.HandleFunc("DELETE /api/v1/auth/sessions/others", router.handleRevokeOtherAuthSessions)
+	mux.HandleFunc("DELETE /api/v1/auth/sessions/{id}", router.handleRevokeAuthSession)
 	mux.HandleFunc("GET /api/v1/me", router.handleMe)
 	mux.HandleFunc("POST /api/v1/me/progress", router.handleUpdateProgress)
 	mux.HandleFunc("GET /api/v1/me/continue-watching", router.handleContinueWatching)
@@ -104,18 +118,35 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/home/latest-by-library", router.handleLatestByLibrary)
 	mux.HandleFunc("GET /api/v1/home/recently-added", router.handleRecentlyAdded)
 	mux.HandleFunc("GET /api/v1/system/info", router.handleSystemInfo)
+	mux.HandleFunc("GET /api/v1/health/summary", router.handleHealthSummary)
+	mux.HandleFunc("GET /api/v1/health/issues", router.handleHealthIssues)
+	mux.HandleFunc("POST /api/v1/health/issues/{id}/ignore", router.handleIgnoreHealthIssue)
+	mux.HandleFunc("POST /api/v1/health/issues/{id}/rescan", router.handleRescanHealthIssueLibraries)
+	mux.HandleFunc("POST /api/v1/media-sources/{id}/validate", router.handleValidateMediaSource)
 	mux.HandleFunc("GET /api/v1/admin/console", router.handleAdminConsoleSummary)
 	mux.HandleFunc("POST /api/v1/admin/console/actions/scan-libraries", router.handleAdminConsoleScanLibraries)
 	mux.HandleFunc("POST /api/v1/admin/console/actions/catalog-consistency", router.handleAdminConsoleCatalogConsistency)
 	mux.HandleFunc("POST /api/v1/admin/console/actions/rebuild-projections", router.handleAdminConsoleRebuildProjections)
+	mux.HandleFunc("GET /api/v1/admin/users", router.handleListAdminUsers)
+	mux.HandleFunc("POST /api/v1/admin/users", router.handleCreateAdminUser)
 	mux.HandleFunc("GET /api/v1/admin/logs", router.handleListAdminLogs)
 	mux.HandleFunc("GET /api/v1/admin/logs/{name}", router.handleGetAdminLog)
 	mux.HandleFunc("GET /api/v1/admin/logs/{name}/download", router.handleDownloadAdminLog)
 	mux.HandleFunc("DELETE /api/v1/admin/logs/{name}", router.handleDeleteAdminLog)
-	mux.HandleFunc("GET /api/v1/settings/metadata", router.handleGetMetadataSettings)
-	mux.HandleFunc("PUT /api/v1/settings/metadata", router.handleUpdateMetadataSettings)
+	mux.HandleFunc("GET /api/v1/settings/metadata/providers", router.handleListMetadataProviderInstances)
+	mux.HandleFunc("POST /api/v1/settings/metadata/providers", router.handleCreateMetadataProviderInstance)
+	mux.HandleFunc("PATCH /api/v1/settings/metadata/providers/{provider_id}", router.handleUpdateMetadataProviderInstance)
+	mux.HandleFunc("GET /api/v1/settings/metadata/profiles", router.handleListMetadataProfiles)
+	mux.HandleFunc("POST /api/v1/settings/metadata/profiles", router.handleCreateMetadataProfile)
+	mux.HandleFunc("PATCH /api/v1/settings/metadata/profiles/{profile_id}", router.handleUpdateMetadataProfile)
+	mux.HandleFunc("GET /api/v1/settings/network", router.handleGetNetworkSettings)
+	mux.HandleFunc("PUT /api/v1/settings/network", router.handleUpdateNetworkSettings)
 	mux.HandleFunc("GET /api/v1/settings/scan", router.handleGetScanSettings)
 	mux.HandleFunc("PUT /api/v1/settings/scan", router.handleUpdateScanSettings)
+	mux.HandleFunc("GET /api/v1/settings/cleanup", router.handleGetCleanupSettings)
+	mux.HandleFunc("PUT /api/v1/settings/cleanup", router.handleUpdateCleanupSettings)
+	mux.HandleFunc("POST /api/v1/settings/cleanup/missing-media/run", router.handleRunMissingMediaCleanup)
+	mux.HandleFunc("GET /api/v1/storage-change/diagnostics", router.handleStorageChangeDiagnostics)
 	mux.HandleFunc("GET /api/v1/storage/providers/{provider}/browse", router.handleBrowseStorageProvider)
 	mux.HandleFunc("POST /api/v1/storage/openlist/test", router.handleTestTemporaryOpenList)
 	mux.HandleFunc("POST /api/v1/storage/openlist/browse", router.handleBrowseTemporaryOpenList)
@@ -128,10 +159,22 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/libraries", router.handleCreateLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{id}", router.handleGetLibrary)
 	mux.HandleFunc("DELETE /api/v1/libraries/{id}", router.handleDeleteLibrary)
+	mux.HandleFunc("GET /api/v1/libraries/{id}/paths", router.handleListLibraryPaths)
+	mux.HandleFunc("POST /api/v1/libraries/{id}/paths", router.handleAddLibraryPath)
+	mux.HandleFunc("PATCH /api/v1/libraries/{id}/paths/{path_id}", router.handleUpdateLibraryPath)
+	mux.HandleFunc("GET /api/v1/libraries/{id}/policies", router.handleGetLibraryPolicies)
+	mux.HandleFunc("GET /api/v1/libraries/{id}/metadata-strategy", router.handleGetLibraryMetadataStrategy)
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/metadata-strategy", router.handleUpdateLibraryMetadataStrategy)
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/scan", router.handleUpdateLibraryScanPolicy)
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/metadata", router.handleUpdateLibraryMetadataPolicy)
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/playback", router.handleUpdateLibraryPlaybackPolicy)
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/subtitle", router.handleUpdateLibrarySubtitlePolicy)
+	mux.HandleFunc("PUT /api/v1/libraries/{id}/scan-exclusion-rules", router.handleReplaceLibraryScanExclusionRules)
 	mux.HandleFunc("POST /api/v1/libraries/{id}/scan", router.handleQueueLibraryScan)
 	mux.HandleFunc("POST /api/v1/storage-events", router.handleStorageEvent)
 	mux.HandleFunc("GET /api/v1/libraries/{id}/items", router.handleListLibraryItems)
 	mux.HandleFunc("GET /api/v1/items/{id}", router.handleGetCatalogItem)
+	mux.HandleFunc("GET /api/v1/media/items/{id}", router.handleGetMediaItem)
 	mux.HandleFunc("GET /api/v1/people/{id}", router.handleGetCatalogPerson)
 	mux.HandleFunc("GET /api/v1/items/{id}/artwork/{kind}", router.handleGetCatalogItemArtwork)
 	mux.HandleFunc("GET /api/v1/items/{id}/children", router.handleListCatalogItemChildren)
@@ -142,7 +185,12 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/series/{id}/missing", router.handleListCatalogSeriesMissing)
 	mux.HandleFunc("GET /api/v1/series/{id}/next-up", router.handleGetCatalogSeriesNextUp)
 	mux.HandleFunc("GET /api/v1/assets/{id}/link", router.handleGetCatalogAssetLink)
+	mux.HandleFunc("POST /api/v1/assets/{id}/scan-exclusion", router.handleMarkAssetScanExclusion)
+	mux.HandleFunc("GET /api/v1/assets/{id}/scan-exclusion-preview", router.handlePreviewAssetFilenameExclusion)
 	mux.HandleFunc("GET /api/v1/items/{id}/governance", router.handleGetCatalogGovernanceWorkspace)
+	mux.HandleFunc("POST /api/v1/items/{id}/scan-exclusion", router.handleMarkItemScanExclusion)
+	mux.HandleFunc("GET /api/v1/items/{id}/scan-exclusion-preview", router.handlePreviewItemFilenameExclusion)
+	mux.HandleFunc("POST /api/v1/items/{id}/filename-exclusion-rule", router.handleCreateItemFilenameExclusionRule)
 	mux.HandleFunc("PUT /api/v1/items/{id}/governance/fields", router.handleUpdateCatalogGovernanceField)
 	mux.HandleFunc("PUT /api/v1/items/{id}/governance/images", router.handleSelectCatalogGovernanceImage)
 	mux.HandleFunc("PUT /api/v1/items/{id}/governance/episode-numbering", router.handleCorrectCatalogEpisodeNumbering)
@@ -158,8 +206,20 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("GET /api/v1/inventory-files/{id}/hls/{name}", router.handleGetInventoryHLSArtifact)
 	mux.HandleFunc("GET /api/v1/inventory-files/{id}/stream", router.handleStreamInventoryFile)
 	mux.HandleFunc("POST /api/v1/inventory-files/{id}/probe", router.handleQueueInventoryFileProbe)
+	mux.HandleFunc("POST /api/v1/inventory-files/{id}/scan-exclusion", router.handleMarkInventoryFileScanExclusion)
+	mux.HandleFunc("GET /api/v1/inventory-files/{id}/scan-exclusion-preview", router.handlePreviewInventoryFileFilenameExclusion)
+	mux.HandleFunc("GET /api/v1/scan-exclusions", router.handleListScanExclusions)
+	mux.HandleFunc("PATCH /api/v1/scan-exclusions/{id}", router.handleSetScanExclusionEnabled)
+	mux.HandleFunc("GET /api/v1/filename-exclusion-rules", router.handleListFilenameExclusionRules)
+	mux.HandleFunc("PATCH /api/v1/filename-exclusion-rules/{id}", router.handleSetFilenameExclusionRuleEnabled)
+	mux.HandleFunc("POST /api/v1/filename-exclusion-rules/{id}/restores", router.handleRestoreFilenameExclusionMatch)
+	mux.HandleFunc("GET /api/v1/scan-exclusion-rules", router.handleListScanExclusionRules)
+	mux.HandleFunc("POST /api/v1/scan-exclusion-rules", router.handleCreateScanExclusionRule)
+	mux.HandleFunc("PATCH /api/v1/scan-exclusion-rules/{id}", router.handleUpdateScanExclusionRule)
+	mux.HandleFunc("DELETE /api/v1/scan-exclusion-rules/{id}", router.handleDeleteScanExclusionRule)
 	mux.HandleFunc("GET /api/v1/jobs", router.handleListJobs)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", router.handleRetryJob)
+	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", router.handleCancelJob)
 	mux.HandleFunc("GET /api/v1/schedules", router.handleListSchedules)
 	mux.HandleFunc("POST /api/v1/schedules", router.handleCreateSchedule)
 	mux.HandleFunc("GET /api/v1/schedules/{id}", router.handleGetSchedule)
@@ -167,6 +227,7 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/schedules/{id}/toggle", router.handleToggleSchedule)
 	mux.HandleFunc("POST /api/v1/schedules/{id}/run", router.handleRunScheduleNow)
 	mux.HandleFunc("GET /api/v1/schedules/{id}/history", router.handleListScheduleHistory)
+	mux.Handle("/", newWebAppHandler(cfg.Web, webui.EmbeddedDist()))
 
 	return corsMiddleware(cfg.CORS, loggingMiddleware(mux))
 }

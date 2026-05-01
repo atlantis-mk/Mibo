@@ -16,6 +16,7 @@ func TestDatabaseOpenFreshCatalogDatabaseMigratesCatalogTables(t *testing.T) {
 	}
 
 	assertTablesExist(t, db, requiredFreshStartupModels())
+	assertLegacyMetadataSchemaRemoved(t, db)
 	assertCatalogIndexesExist(t, db)
 	assertMediaStreamTechnicalColumnsExist(t, db)
 }
@@ -24,8 +25,14 @@ func requiredFreshStartupModels() []any {
 	return []any{
 		&MediaSource{},
 		&Library{},
+		&LibraryPath{},
+		&LibraryScanPolicy{},
+		&LibraryMetadataPolicy{},
+		&LibraryPlaybackPolicy{},
+		&LibrarySubtitlePolicy{},
 		&CatalogItem{},
 		&CatalogExternalID{},
+		&CatalogIdentity{},
 		&MetadataSource{},
 		&MetadataFieldState{},
 		&ItemImage{},
@@ -74,6 +81,7 @@ func assertCatalogIndexesExist(t *testing.T, db *gorm.DB) {
 		{&CatalogItem{}, "idx_catalog_items_root_type_order"},
 		{&CatalogSearchDocument{}, "idx_catalog_search_documents_library_type_availability_title"},
 		{&CatalogExternalID{}, "idx_catalog_external_identity"},
+		{&CatalogIdentity{}, "idx_catalog_identity_key"},
 		{&MetadataFieldState{}, "idx_metadata_field_state_item_field"},
 		{&AssetItem{}, "idx_asset_items_item_role"},
 		{&AssetItem{}, "idx_asset_items_asset_item_role_segment"},
@@ -84,6 +92,7 @@ func assertCatalogIndexesExist(t *testing.T, db *gorm.DB) {
 		{&MediaStream{}, "idx_media_stream_file_index"},
 		{&UserItemData{}, "idx_user_item_data_user_item_asset"},
 		{&SystemSetting{}, "idx_system_setting_category_key"},
+		{&LibraryPath{}, "idx_library_paths_library_source_path"},
 	}
 
 	for _, index := range requiredIndexes {
@@ -113,6 +122,27 @@ func assertMediaStreamTechnicalColumnsExist(t *testing.T, db *gorm.DB) {
 	for _, column := range requiredColumns {
 		if !db.Migrator().HasColumn(&MediaStream{}, column) {
 			t.Fatalf("expected media_streams.%s column to exist", column)
+		}
+	}
+}
+
+func assertLegacyMetadataSchemaRemoved(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	if db.Migrator().HasTable("library_metadata_profile_bindings") {
+		t.Fatalf("expected legacy table library_metadata_profile_bindings to be removed")
+	}
+	for _, check := range []struct {
+		table  string
+		column string
+	}{
+		{table: "metadata_profiles", column: "local_only"},
+		{table: "library_metadata_policies", column: "tmdb_enabled"},
+		{table: "library_metadata_policies", column: "tvdb_enabled"},
+		{table: "library_metadata_policies", column: "provider_priority_json"},
+	} {
+		if db.Migrator().HasColumn(check.table, check.column) {
+			t.Fatalf("expected legacy column %s.%s to be removed", check.table, check.column)
 		}
 	}
 }

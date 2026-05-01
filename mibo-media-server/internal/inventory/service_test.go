@@ -55,8 +55,12 @@ func TestAssetLinksSupportMultiEpisodeFiles(t *testing.T) {
 		t.Fatalf("link second episode: %v", err)
 	}
 
-	links, err := inventorySvc.ListAssetItems(ctx, asset.ID)
-	if err != nil {
+	var links []database.AssetItem
+	if err := db.WithContext(ctx).
+		Where("asset_id = ?", asset.ID).
+		Order("segment_index asc").
+		Order("id asc").
+		Find(&links).Error; err != nil {
 		t.Fatalf("list asset items: %v", err)
 	}
 	if len(links) != 2 {

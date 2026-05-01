@@ -25,11 +25,10 @@ func TestCatalogDTOContractExportsRequiredTypes(t *testing.T) {
 		CatalogAssetFileSummary{},
 		CatalogMediaStreamSummary{},
 		CatalogGovernanceWorkspace{},
-		CatalogMetadataOperationResult{},
 	}
 
-	if len(exported) != 11 {
-		t.Fatalf("expected 11 exported catalog DTO types, got %d", len(exported))
+	if len(exported) != 10 {
+		t.Fatalf("expected 10 exported catalog DTO types, got %d", len(exported))
 	}
 }
 

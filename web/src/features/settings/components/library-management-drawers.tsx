@@ -1,6 +1,6 @@
-import { LoaderCircleIcon } from 'lucide-react'
+import { LoaderCircleIcon } from "lucide-react"
 
-import { Button } from '#/components/ui/button'
+import { Button } from "#/components/ui/button"
 import {
   Drawer,
   DrawerContent,
@@ -8,16 +8,20 @@ import {
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
-} from '#/components/ui/drawer'
-import type { MediaSource } from '#/lib/mibo-api'
-import { createAuthedMiboApi } from '#/lib/mibo-query'
-import { ScrollArea } from '#/components/ui/scroll-area'
+} from "#/components/ui/drawer"
+import type {
+  MediaSource,
+  MetadataProfile,
+  MetadataProviderInstance,
+} from "#/lib/mibo-api"
+import { createAuthedMiboApi } from "#/lib/mibo-query"
+import { ScrollArea } from "#/components/ui/scroll-area"
 
-import { LibraryForm, type LibraryFormState } from './library-form'
-import { SourceForm, type SourceFormState } from './media-source-form'
+import { LibraryForm, type LibraryFormState } from "./library-form"
+import { SourceForm, type SourceFormState } from "./media-source-form"
 
 const DRAWER_CLASS_NAME =
-  'h-[100vh] max-h-[100vh] data-[vaul-drawer-direction=right]:w-[960px] data-[vaul-drawer-direction=right]:max-w-[960px] data-[vaul-drawer-direction=right]:sm:max-w-[960px] max-sm:data-[vaul-drawer-direction=right]:w-full max-sm:data-[vaul-drawer-direction=right]:max-w-[100vw]'
+  "h-[100vh] max-h-[100vh] data-[vaul-drawer-direction=right]:w-[960px] data-[vaul-drawer-direction=right]:max-w-[960px] data-[vaul-drawer-direction=right]:sm:max-w-[960px] max-sm:data-[vaul-drawer-direction=right]:w-full max-sm:data-[vaul-drawer-direction=right]:max-w-[100vw]"
 
 export function MediaSourceDrawer({
   open,
@@ -84,6 +88,8 @@ export function LibraryDrawer({
   draft,
   onChange,
   mediaSources,
+  metadataProfiles,
+  metadataProviderInstances,
   api,
   pending,
   disabled,
@@ -94,6 +100,8 @@ export function LibraryDrawer({
   draft: LibraryFormState
   onChange: (nextDraft: LibraryFormState) => void
   mediaSources: MediaSource[]
+  metadataProfiles: MetadataProfile[]
+  metadataProviderInstances: MetadataProviderInstance[]
   api: ReturnType<typeof createAuthedMiboApi> | null
   pending: boolean
   disabled: boolean
@@ -115,6 +123,8 @@ export function LibraryDrawer({
               draft={draft}
               onChange={onChange}
               mediaSources={mediaSources}
+              metadataProfiles={metadataProfiles}
+              metadataProviderInstances={metadataProviderInstances}
               api={api}
             />
           </div>

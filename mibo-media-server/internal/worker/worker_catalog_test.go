@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,7 +15,9 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/settings"
 	"gorm.io/gorm"
 )
 
@@ -29,7 +33,7 @@ func TestRunOnceProcessesCatalogItemProjectionJob(t *testing.T) {
 		t.Fatalf("enqueue item projection job: %v", err)
 	}
 
-	runner.RunOnce(ctx)
+	runner.runOnce(ctx)
 
 	assertJobCompleted(t, ctx, db, job.ID)
 	assertCatalogSearchDocExists(t, ctx, db, item.ID, item.LibraryID)
@@ -47,7 +51,7 @@ func TestRunOnceProcessesCatalogLibraryProjectionJobOnEmptyCatalog(t *testing.T)
 		t.Fatalf("enqueue library projection job: %v", err)
 	}
 
-	runner.RunOnce(ctx)
+	runner.runOnce(ctx)
 
 	assertJobCompleted(t, ctx, db, job.ID)
 	assertCatalogProjectionCounts(t, ctx, db, 0, 0)
@@ -115,6 +119,64 @@ func TestRunTargetedRefreshQueuesCatalogLibraryProjectionRefresh(t *testing.T) {
 	assertQueuedJobKind(t, ctx, jobsSvc, library.JobKindCatalogRefreshLibraryProjection)
 }
 
+func TestRunOnceProcessesMetaTubeOnlyMatchWithoutTMDBConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	metatubeCalled := false
+	metatube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		metatubeCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/v1/movies/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"provider": "fanza", "id": "worker123", "title": "MetaTube Only", "release_date": "2024-02-02"}}})
+		case "/v1/movies/fanza/worker123":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"provider": "fanza", "id": "worker123", "title": "MetaTube Only", "summary": "Worker overview", "release_date": "2024-02-02", "runtime": 91}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer metatube.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	settingsSvc := settings.NewService(db, config.MetadataConfig{})
+	enabled := true
+	provider, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: "metatube-only", ProviderType: database.MetadataProviderTypeMetaTube, Enabled: &enabled, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, MetaTube: &settings.MetadataProviderInput{BaseURL: metatube.URL, UpstreamProviderFilter: "fanza", Timeout: "1s"}})
+	if err != nil {
+		t.Fatalf("configure metatube provider: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+	if _, err := settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{SearchProviderIDs: []uint{provider.ID}, DetailProviderIDs: []uint{provider.ID}, ImageProviderIDs: []uint{provider.ID}, PeopleProviderIDs: []uint{provider.ID}}); err != nil {
+		t.Fatalf("update metadata strategy: %v", err)
+	}
+	item := seedCatalogItem(t, ctx, db, seedCatalogItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Path: "/movies/metatube-only.mkv", Title: "MetaTube Only", AvailabilityStatus: catalog.AvailabilityAvailable})
+
+	jobsSvc := jobs.NewService(db)
+	job, err := jobsSvc.Enqueue(ctx, library.JobKindMatchCatalogItem, map[string]any{"item_id": item.ID})
+	if err != nil {
+		t.Fatalf("enqueue match job: %v", err)
+	}
+	runner := NewRunner(config.WorkerConfig{}, jobsSvc, nil, metadata.NewService(db, config.MetadataConfig{}, settingsSvc), nil, nil)
+	runner.runOnce(ctx)
+
+	assertJobCompleted(t, ctx, db, job.ID)
+	if !metatubeCalled {
+		t.Fatalf("expected worker to execute MetaTube-only match without TMDB config")
+	}
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload catalog item: %v", err)
+	}
+	if stored.GovernanceStatus != catalog.GovernanceMatched || stored.Overview != "Worker overview" {
+		t.Fatalf("expected worker match to apply metatube metadata, got %#v", stored)
+	}
+}
+
 func TestRunOnceProcessesCatalogLibraryProjectionJobRebuildsSeededScope(t *testing.T) {
 	t.Parallel()
 
@@ -139,7 +201,7 @@ func TestRunOnceProcessesCatalogLibraryProjectionJobRebuildsSeededScope(t *testi
 		t.Fatalf("enqueue library projection job: %v", err)
 	}
 
-	runner.RunOnce(ctx)
+	runner.runOnce(ctx)
 
 	assertJobCompleted(t, ctx, db, job.ID)
 	assertCatalogProjectionCounts(t, ctx, db, 4, 4)
@@ -221,6 +283,18 @@ func assertJobCompleted(t *testing.T, ctx context.Context, db *gorm.DB, jobID ui
 	}
 }
 
+func assertJobFailed(t *testing.T, ctx context.Context, db *gorm.DB, jobID uint) {
+	t.Helper()
+
+	var job database.Job
+	if err := db.WithContext(ctx).First(&job, jobID).Error; err != nil {
+		t.Fatalf("load job %d: %v", jobID, err)
+	}
+	if job.Status != jobs.StatusFailed {
+		t.Fatalf("expected job %d failed, got %q", jobID, job.Status)
+	}
+}
+
 func assertCatalogSearchDocExists(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint, libraryID uint) {
 	t.Helper()
 
@@ -292,7 +366,7 @@ func newScanProjectionFixture(t *testing.T) (*gorm.DB, *jobs.Service, *library.S
 func assertQueuedJobKind(t *testing.T, ctx context.Context, jobsSvc *jobs.Service, kind string) {
 	t.Helper()
 
-	queued, err := jobsSvc.List(ctx, 50, jobs.StatusQueued, kind)
+	queued, err := jobsSvc.List(ctx, 50, 0, jobs.StatusQueued, kind)
 	if err != nil {
 		t.Fatalf("list pending jobs: %v", err)
 	}

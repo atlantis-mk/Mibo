@@ -12,6 +12,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/storageindex"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -51,11 +53,20 @@ type Service struct {
 	db      *gorm.DB
 	jobs    *jobs.Service
 	library *library.Service
+	storage *providers.Registry
+	index   *storageindex.Service
+	planner *storageindex.Planner
 	now     func() time.Time
 }
 
-func NewService(db *gorm.DB, jobsSvc *jobs.Service, librarySvc *library.Service) *Service {
-	return &Service{db: db, jobs: jobsSvc, library: librarySvc, now: func() time.Time { return time.Now().UTC() }}
+func NewService(db *gorm.DB, jobsSvc *jobs.Service, librarySvc *library.Service, args ...any) *Service {
+	svc := &Service{db: db, jobs: jobsSvc, library: librarySvc, index: storageindex.NewService(db), planner: storageindex.NewPlanner(), now: func() time.Time { return time.Now().UTC() }}
+	for _, arg := range args {
+		if registry, ok := arg.(*providers.Registry); ok {
+			svc.storage = registry
+		}
+	}
+	return svc
 }
 
 func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput) (database.Job, error) {
@@ -70,9 +81,17 @@ func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput
 	if err := s.db.WithContext(ctx).First(&record, input.LibraryID).Error; err != nil {
 		return database.Job{}, err
 	}
+	if enabled, err := s.realtimeRefreshEnabled(ctx, record.ID); err != nil {
+		return database.Job{}, err
+	} else if !enabled {
+		return database.Job{}, nil
+	}
 
 	payload, err := buildStorageEventPayload(record, input, s.now())
 	if err != nil {
+		return database.Job{}, err
+	}
+	if err := s.recordStorageEventIndexHint(ctx, record, input); err != nil {
 		return database.Job{}, err
 	}
 
@@ -152,6 +171,48 @@ func (s *Service) RecordStorageEvent(ctx context.Context, input EventIngestInput
 		return database.Job{}, err
 	}
 	return stored, nil
+}
+
+func (s *Service) recordStorageEventIndexHint(ctx context.Context, record database.Library, input EventIngestInput) error {
+	if s.index == nil {
+		return nil
+	}
+	var source database.MediaSource
+	if err := s.db.WithContext(ctx).First(&source, record.MediaSourceID).Error; err != nil {
+		return err
+	}
+	provider := strings.TrimSpace(source.Provider)
+	kind := strings.TrimSpace(strings.ToLower(input.Kind))
+	currentPath := strings.TrimSpace(input.Path)
+	oldPath := strings.TrimSpace(input.OldPath)
+	if (kind == "move" || kind == "rename") && oldPath != "" {
+		if _, err := s.index.Find(ctx, record.ID, provider, oldPath); err == nil {
+			if _, err := s.index.MarkMissing(ctx, record.ID, provider, oldPath); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+	switch kind {
+	case "create", "update", "move", "rename":
+		if currentPath == "" {
+			return nil
+		}
+		_, err := s.index.UpsertPresent(ctx, storageindex.ObservationInput{LibraryID: record.ID, StorageProvider: provider, StoragePath: currentPath})
+		return err
+	case "delete":
+		if currentPath == "" {
+			return nil
+		}
+		if _, err := s.index.Find(ctx, record.ID, provider, currentPath); err == nil {
+			_, err = s.index.MarkMissing(ctx, record.ID, provider, currentPath)
+			return err
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) EnsureReconcileCoverage(ctx context.Context, libraries []database.Library) error {
@@ -244,6 +305,11 @@ func (s *Service) RunReconcile(ctx context.Context, job database.Job) error {
 }
 
 func (s *Service) ensureReconcileCoverageForLibrary(ctx context.Context, record database.Library) error {
+	if enabled, err := s.realtimeRefreshEnabled(ctx, record.ID); err != nil {
+		return err
+	} else if !enabled {
+		return nil
+	}
 	jobKey := reconcileJobKey(record.ID)
 	intentKey := reconcileActiveIntentKey(record.ID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -283,6 +349,17 @@ func (s *Service) ensureReconcileCoverageForLibrary(ctx context.Context, record 
 		}
 		return updateActiveIntentJob(tx, intentKey, job.ID)
 	})
+}
+
+func (s *Service) realtimeRefreshEnabled(ctx context.Context, libraryID uint) (bool, error) {
+	if s.library == nil {
+		return true, nil
+	}
+	config, err := s.library.EffectiveLibraryConfig(ctx, libraryID)
+	if err != nil {
+		return false, err
+	}
+	return config.ScanPolicy.RealtimeMonitorEnabled, nil
 }
 
 func refreshJobKey(libraryID uint, rootPath string, fallback bool) string {

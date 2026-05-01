@@ -336,6 +336,76 @@ func TestCatalogPlaybackIgnoresUnavailableSidecarSubtitleFailure(t *testing.T) {
 	}
 }
 
+func TestCatalogPlaybackAppliesSubtitleLanguagePolicy(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Movie A", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		fixture.t.Fatalf("create catalog item: %v", err)
+	}
+	asset, _ := createPlayablePlaybackAsset(t, fixture, item.ID, "movie-a.mp4")
+	for _, language := range []string{"eng", "chi"} {
+		subtitlePath := filepath.Join(fixture.rootPath, "movie-a."+language+".srt")
+		if err := os.WriteFile(subtitlePath, []byte("subtitle"), 0o644); err != nil {
+			fixture.t.Fatalf("write subtitle file: %v", err)
+		}
+		subtitleFile := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: subtitlePath, Container: "srt", Status: "available"}
+		if err := fixture.db.WithContext(context.Background()).Create(&subtitleFile).Error; err != nil {
+			fixture.t.Fatalf("create subtitle inventory file: %v", err)
+		}
+		if err := fixture.db.WithContext(context.Background()).Create(&database.AssetFile{AssetID: asset.ID, FileID: subtitleFile.ID, Role: "subtitle"}).Error; err != nil {
+			fixture.t.Fatalf("link subtitle asset file: %v", err)
+		}
+		if err := fixture.db.WithContext(context.Background()).Create(&database.MediaStream{FileID: subtitleFile.ID, StreamIndex: 0, StreamType: "subtitle", Codec: "srt", Language: language, DispositionJSON: `{"external":true,"managed_by":"scanner"}`}).Error; err != nil {
+			fixture.t.Fatalf("create subtitle stream: %v", err)
+		}
+	}
+	if err := database.EnsureLibraryPolicyDefaults(fixture.db, fixture.library.ID); err != nil {
+		fixture.t.Fatalf("ensure library defaults: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Model(&database.LibrarySubtitlePolicy{}).Where("library_id = ?", fixture.library.ID).Update("preferred_languages_json", `["chi"]`).Error; err != nil {
+		fixture.t.Fatalf("set subtitle policy: %v", err)
+	}
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: item.ID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get playback source: %v", err)
+	}
+	if len(source.SubtitleTracks) != 1 || source.SubtitleTracks[0].Language != "chi" {
+		fixture.t.Fatalf("expected only preferred subtitle, got %#v", source.SubtitleTracks)
+	}
+}
+
+func TestCatalogPlaybackCanHideUnavailableSubtitles(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Movie A", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		fixture.t.Fatalf("create catalog item: %v", err)
+	}
+	asset, _ := createPlayablePlaybackAsset(t, fixture, item.ID, "movie-a.mp4")
+	subtitleFile := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: filepath.Join(fixture.rootPath, "missing.srt"), Container: "srt", Status: "missing"}
+	if err := fixture.db.WithContext(context.Background()).Create(&subtitleFile).Error; err != nil {
+		fixture.t.Fatalf("create subtitle inventory file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetFile{AssetID: asset.ID, FileID: subtitleFile.ID, Role: "subtitle"}).Error; err != nil {
+		fixture.t.Fatalf("link subtitle asset file: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.MediaStream{FileID: subtitleFile.ID, StreamIndex: 0, StreamType: "subtitle", Codec: "srt", DispositionJSON: `{"external":true,"managed_by":"scanner"}`}).Error; err != nil {
+		fixture.t.Fatalf("create subtitle stream: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(fixture.db, fixture.library.ID); err != nil {
+		fixture.t.Fatalf("ensure library defaults: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Model(&database.LibrarySubtitlePolicy{}).Where("library_id = ?", fixture.library.ID).Update("tolerate_unavailable_subtitles", false).Error; err != nil {
+		fixture.t.Fatalf("set subtitle policy: %v", err)
+	}
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: item.ID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get playback source: %v", err)
+	}
+	if !source.Playable || len(source.SubtitleTracks) != 0 {
+		fixture.t.Fatalf("expected unavailable subtitle to be hidden without breaking playback, got %#v", source)
+	}
+}
+
 type playbackDecisionFixture struct {
 	t        *testing.T
 	db       *gorm.DB

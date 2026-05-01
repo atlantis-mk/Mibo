@@ -64,20 +64,28 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 	}
 
 	tmdbSettings := map[string]any{"configured": r.cfg.Metadata.TMDB.APIKey != "", "source": sourceLabel(r.cfg.Metadata.TMDB.APIKey)}
-	tvdbSettings := map[string]any{"configured": r.cfg.Metadata.TVDB.APIKey != "", "source": sourceLabel(r.cfg.Metadata.TVDB.APIKey)}
+	providerInstances := []map[string]any{}
 	if r.settings != nil {
-		resolved, err := r.settings.GetMetadataSettings(req.Context())
+		resolved, err := r.settings.ListMetadataProviderInstances(req.Context())
 		if err != nil {
 			writeError(req.Context(), w, http.StatusInternalServerError, err)
 			return
 		}
-		tmdbSettings = map[string]any{
-			"configured": resolved.TMDB.Configured,
-			"source":     resolved.TMDB.Source,
-		}
-		tvdbSettings = map[string]any{
-			"configured": resolved.TVDB.Configured,
-			"source":     resolved.TVDB.Source,
+		for _, instance := range resolved {
+			providerInstances = append(providerInstances, map[string]any{
+				"id":                  instance.ID,
+				"name":                instance.Name,
+				"provider_type":       instance.ProviderType,
+				"configured":          instance.Configured,
+				"enabled":             instance.Enabled,
+				"availability_status": instance.AvailabilityStatus,
+			})
+			if instance.ProviderType == database.MetadataProviderTypeTMDB && instance.Configured {
+				tmdbSettings = map[string]any{
+					"configured": true,
+					"source":     "database",
+				}
+			}
 		}
 	}
 
@@ -97,10 +105,7 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 			"jobs":    "active",
 			"metadata": map[string]any{
 				"tmdb_configured": tmdbSettings["configured"],
-				"providers": map[string]any{
-					"tmdb": tmdbSettings,
-					"tvdb": tvdbSettings,
-				},
+				"providers":       providerInstances,
 			},
 			"ffmpeg":   map[string]any{"enabled": r.cfg.FFmpeg.Enabled, "path": r.cfg.FFmpeg.Path},
 			"ffprobe":  map[string]any{"enabled": r.cfg.FFprobe.Enabled, "path": r.cfg.FFprobe.Path},
@@ -112,7 +117,7 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (r *Router) handleGetMetadataSettings(w http.ResponseWriter, req *http.Request) {
+func (r *Router) handleListMetadataProviderInstances(w http.ResponseWriter, req *http.Request) {
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -121,7 +126,111 @@ func (r *Router) handleGetMetadataSettings(w http.ResponseWriter, req *http.Requ
 		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
 		return
 	}
-	result, err := r.settings.GetMetadataSettings(req.Context())
+	result, err := r.settings.ListMetadataProviderInstances(req.Context())
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, result)
+}
+
+func (r *Router) handleCreateMetadataProviderInstance(w http.ResponseWriter, req *http.Request) {
+	r.upsertMetadataProviderInstance(w, req, 0, http.StatusCreated)
+}
+
+func (r *Router) handleUpdateMetadataProviderInstance(w http.ResponseWriter, req *http.Request) {
+	providerID, err := parseUintPathValue(req, "provider_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.upsertMetadataProviderInstance(w, req, providerID, http.StatusOK)
+}
+
+func (r *Router) upsertMetadataProviderInstance(w http.ResponseWriter, req *http.Request, providerID uint, status int) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.settings == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
+		return
+	}
+	var input settings.UpdateMetadataProviderInstanceInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := r.settings.UpsertMetadataProviderInstance(req.Context(), providerID, input)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, status, result)
+}
+
+func (r *Router) handleListMetadataProfiles(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.settings == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
+		return
+	}
+	result, err := r.settings.ListMetadataProfiles(req.Context())
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, result)
+}
+
+func (r *Router) handleCreateMetadataProfile(w http.ResponseWriter, req *http.Request) {
+	r.upsertMetadataProfile(w, req, 0, http.StatusCreated)
+}
+
+func (r *Router) handleUpdateMetadataProfile(w http.ResponseWriter, req *http.Request) {
+	profileID, err := parseUintPathValue(req, "profile_id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	r.upsertMetadataProfile(w, req, profileID, http.StatusOK)
+}
+
+func (r *Router) upsertMetadataProfile(w http.ResponseWriter, req *http.Request, profileID uint, status int) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.settings == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
+		return
+	}
+	var input settings.UpdateMetadataProfileInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := r.settings.UpsertMetadataProfile(req.Context(), profileID, input)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, status, result)
+}
+
+func (r *Router) handleGetNetworkSettings(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.settings == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
+		return
+	}
+	result, err := r.settings.GetNetworkSettings(req.Context())
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
@@ -129,7 +238,7 @@ func (r *Router) handleGetMetadataSettings(w http.ResponseWriter, req *http.Requ
 	writeJSON(req.Context(), w, http.StatusOK, result)
 }
 
-func (r *Router) handleUpdateMetadataSettings(w http.ResponseWriter, req *http.Request) {
+func (r *Router) handleUpdateNetworkSettings(w http.ResponseWriter, req *http.Request) {
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
@@ -138,12 +247,12 @@ func (r *Router) handleUpdateMetadataSettings(w http.ResponseWriter, req *http.R
 		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("settings service unavailable"))
 		return
 	}
-	var input settings.UpdateMetadataSettingsInput
+	var input settings.UpdateNetworkSettingsInput
 	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	result, err := r.settings.UpdateMetadataSettings(req.Context(), input)
+	result, err := r.settings.UpdateNetworkSettings(req.Context(), input)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return

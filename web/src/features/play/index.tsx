@@ -2,6 +2,8 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
+import Artplayer from 'artplayer'
+import type { PlaybackRate } from 'artplayer/types/player'
 import {
   AlertCircleIcon,
   ArrowLeftIcon,
@@ -44,6 +46,10 @@ import { useAuthStore } from '#/stores/auth-store'
 
 const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2] as const
 
+Artplayer.DEBUG = true
+
+type ArtPlayerRef = RefObject<Artplayer | null>
+
 type PlayExperienceProps = {
   itemId: number
   assetId?: number
@@ -62,7 +68,8 @@ export default function PlayExperience({
   const navigate = useNavigate()
   const queryToken = token ?? 'guest'
   const hasValidItemId = Number.isFinite(itemId) && itemId > 0
-  const playerRef = useRef<HTMLVideoElement | null>(null)
+  const playerRef = useRef<Artplayer | null>(null)
+  const playerContainerRef = useRef<HTMLDivElement | null>(null)
   const hideChromeTimerRef = useRef<number | null>(null)
   const restoreAppliedRef = useRef(false)
   const saveInFlightRef = useRef(false)
@@ -76,6 +83,7 @@ export default function PlayExperience({
   const [isMuted, setIsMuted] = useState(false)
   const [playbackRate, setPlaybackRate] = useState(1)
   const [isChromeVisible, setIsChromeVisible] = useState(true)
+  const [isVideoLoading, setIsVideoLoading] = useState(true)
 
   const itemQuery = useQuery({
     ...catalogItemDetailQueryOptions(queryToken, itemId),
@@ -93,6 +101,9 @@ export default function PlayExperience({
   const item = itemQuery.data ?? null
   const progress = progressQuery.data ?? null
   const playback = playbackQuery.data ?? null
+  const posterUrl = item
+    ? catalogImageUrl(item, 'backdrop') || catalogImageUrl(item, 'poster')
+    : undefined
   const displayDuration =
     duration || playback?.runtime_seconds || item?.runtime_seconds || 0
   const progressPercent =
@@ -144,9 +155,14 @@ export default function PlayExperience({
       saveInFlightRef.current = true
 
       try {
+        const progressItemId = playback.item_id ?? item.id
+        const progressAssetId =
+          typeof playback.asset_id === 'number' && playback.asset_id > 0
+            ? playback.asset_id
+            : undefined
         const nextProgress = await createAuthedMiboApi(token).updateProgress({
-          item_id: item.id,
-          asset_id: playback.asset_id,
+          item_id: progressItemId,
+          ...(progressAssetId ? { asset_id: progressAssetId } : {}),
           position_seconds:
             completed && durationSeconds ? durationSeconds : positionSeconds,
           duration_seconds: durationSeconds,
@@ -156,7 +172,7 @@ export default function PlayExperience({
         lastSavedPositionRef.current = nextProgress.position_seconds
         lastSavedAtRef.current = now
         queryClient.setQueryData(
-          miboQueryKeys.catalogItemProgress(queryToken, itemId),
+          miboQueryKeys.catalogItemProgress(queryToken, progressItemId),
           nextProgress,
         )
       } finally {
@@ -167,20 +183,18 @@ export default function PlayExperience({
 
   useEffect(() => {
     restoreAppliedRef.current = false
-    lastSavedPositionRef.current = progress?.position_seconds ?? 0
     lastSavedAtRef.current = 0
     setVideoError(null)
-  }, [itemId, assetId, progress?.position_seconds, playback?.url])
+    setIsVideoLoading(true)
+  }, [itemId, assetId, playback?.url])
 
   useEffect(() => {
+    lastSavedPositionRef.current = progress?.position_seconds ?? 0
+  }, [progress?.position_seconds])
+
+  const restoreProgress = useEffectEvent(() => {
     const player = playerRef.current
-    if (
-      !player ||
-      !playback ||
-      !progress ||
-      fromStart ||
-      restoreAppliedRef.current
-    ) {
+    if (!player || !progress || fromStart || restoreAppliedRef.current) {
       return
     }
 
@@ -189,46 +203,56 @@ export default function PlayExperience({
       return
     }
 
-    const restorePosition = () => {
-      if (restoreAppliedRef.current) {
-        return
-      }
-
-      const playerDuration = Number.isFinite(player.duration)
-        ? player.duration
-        : Infinity
-      const target = Math.min(savedPosition, Math.max(0, playerDuration - 3))
-      if (target <= 0) {
-        return
-      }
-
-      player.currentTime = target
-      setCurrentTime(target)
-      restoreAppliedRef.current = true
-    }
-
-    if (player.readyState >= 1) {
-      restorePosition()
+    const playerDuration = Number.isFinite(player.duration)
+      ? player.duration
+      : Infinity
+    const target = Math.min(savedPosition, Math.max(0, playerDuration - 3))
+    if (target <= 0) {
       return
     }
 
-    player.addEventListener('loadedmetadata', restorePosition)
-
-    return () => {
-      player.removeEventListener('loadedmetadata', restorePosition)
-    }
-  }, [fromStart, playback, progress])
+    player.currentTime = target
+    setCurrentTime(target)
+    restoreAppliedRef.current = true
+  })
 
   useEffect(() => {
-    const player = playerRef.current
-    if (!player || !playback) {
+    restoreProgress()
+  }, [progress?.position_seconds, fromStart])
+
+  useEffect(() => {
+    const container = playerContainerRef.current
+    if (!container || !item || !playback) {
       return
     }
+
+    const player = new Artplayer({
+      container,
+      url: playback.url,
+      ...(posterUrl ? { poster: posterUrl } : {}),
+      autoplay: true,
+      playsInline: true,
+      preload: 'metadata',
+      theme: '#ffffff',
+      setting: true,
+      playbackRate: true,
+      pip: true,
+      fullscreen: true,
+      fullscreenWeb: true,
+      miniProgressBar: true,
+      hotkey: true,
+      lock: true,
+      moreVideoAttr: {
+        crossOrigin: 'anonymous',
+      },
+    })
+
+    playerRef.current = player
 
     const syncState = () => {
       setCurrentTime(player.currentTime || 0)
       setDuration(Number.isFinite(player.duration) ? player.duration : 0)
-      setIsPaused(player.paused)
+      setIsPaused(!player.playing)
       setVolume(player.volume)
       setIsMuted(player.muted)
       setPlaybackRate(player.playbackRate)
@@ -243,10 +267,12 @@ export default function PlayExperience({
     }
     const handleTimeUpdate = () => {
       syncState()
+      setIsVideoLoading(false)
       void persistProgress()
     }
     const handleLoadedMetadata = () => {
       syncState()
+      restoreProgress()
     }
     const handleVolumeChange = () => {
       syncState()
@@ -254,35 +280,54 @@ export default function PlayExperience({
     const handleRateChange = () => {
       syncState()
     }
+    const handleLoadStart = () => {
+      setIsVideoLoading(true)
+    }
+    const handleWaiting = () => {
+      setIsVideoLoading(true)
+    }
+    const handleCanPlay = () => {
+      setIsVideoLoading(false)
+    }
+    const handlePlaying = () => {
+      setIsVideoLoading(false)
+      syncState()
+    }
     const handleEnded = () => {
       syncState()
       void persistProgress({ force: true, completed: true })
     }
     const handleError = () => {
+      setIsVideoLoading(false)
       setVideoError('视频流加载失败，请稍后重试或返回详情页切换播放方式。')
     }
 
     syncState()
-    player.addEventListener('pause', handlePause)
-    player.addEventListener('play', handlePlay)
-    player.addEventListener('timeupdate', handleTimeUpdate)
-    player.addEventListener('loadedmetadata', handleLoadedMetadata)
-    player.addEventListener('volumechange', handleVolumeChange)
-    player.addEventListener('ratechange', handleRateChange)
-    player.addEventListener('ended', handleEnded)
-    player.addEventListener('error', handleError)
+    setIsVideoLoading(true)
+    player.on('ready', handleLoadedMetadata)
+    player.on('video:loadstart', handleLoadStart)
+    player.on('video:waiting', handleWaiting)
+    player.on('video:stalled', handleWaiting)
+    player.on('video:seeking', handleWaiting)
+    player.on('video:canplay', handleCanPlay)
+    player.on('video:playing', handlePlaying)
+    player.on('video:loadeddata', handleCanPlay)
+    player.on('video:seeked', handleCanPlay)
+    player.on('video:pause', handlePause)
+    player.on('video:play', handlePlay)
+    player.on('video:timeupdate', handleTimeUpdate)
+    player.on('video:loadedmetadata', handleLoadedMetadata)
+    player.on('video:volumechange', handleVolumeChange)
+    player.on('video:ratechange', handleRateChange)
+    player.on('video:ended', handleEnded)
+    player.on('video:error', handleError)
+    player.on('error', handleError)
 
     return () => {
-      player.removeEventListener('pause', handlePause)
-      player.removeEventListener('play', handlePlay)
-      player.removeEventListener('timeupdate', handleTimeUpdate)
-      player.removeEventListener('loadedmetadata', handleLoadedMetadata)
-      player.removeEventListener('volumechange', handleVolumeChange)
-      player.removeEventListener('ratechange', handleRateChange)
-      player.removeEventListener('ended', handleEnded)
-      player.removeEventListener('error', handleError)
+      playerRef.current = null
+      player.destroy(false)
     }
-  }, [playback])
+  }, [item?.id, playback?.url, posterUrl])
 
   useEffect(() => {
     const player = playerRef.current
@@ -290,7 +335,7 @@ export default function PlayExperience({
       return
     }
 
-    player.playbackRate = playbackRate
+    player.playbackRate = playbackRate as PlaybackRate
   }, [playback?.url, playbackRate])
 
   useEffect(() => {
@@ -323,7 +368,7 @@ export default function PlayExperience({
       window.clearTimeout(hideChromeTimerRef.current)
     }
 
-    if (playerRef.current?.paused) {
+    if (!playerRef.current?.playing) {
       return
     }
 
@@ -434,33 +479,14 @@ export default function PlayExperience({
         revealChrome()
       }}
     >
-      <button
-        type="button"
-        aria-label={isPaused ? '播放视频' : '暂停视频'}
-        className="absolute inset-0 z-0 block bg-transparent"
-        onClick={() => {
-          void togglePlayback(playerRef)
-        }}
-      >
-        <video
-          ref={playerRef}
-          key={playback.url}
-          className="h-full w-full bg-black object-contain"
-          src={playback.url}
-          poster={
-            catalogImageUrl(item, 'backdrop') ||
-            catalogImageUrl(item, 'poster') ||
-            undefined
-          }
-          autoPlay
-          playsInline
-          preload="metadata"
-          crossOrigin="anonymous"
-          controls={false}
-        />
-      </button>
+      <div
+        ref={playerContainerRef}
+        className="absolute inset-0 z-0 [&_.artplayer]:h-full! [&_.artplayer]:w-full! [&_.art-video]:object-contain"
+      />
 
       <div className="pointer-events-none absolute inset-0 bg-black/10" />
+
+      {isVideoLoading && !videoError ? <PlayerLoadingOverlay /> : null}
 
       <div
         className={cn(
@@ -679,6 +705,19 @@ function PlayError({ message }: { message: string }) {
   )
 }
 
+function PlayerLoadingOverlay() {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/18 backdrop-blur-[1px]">
+      <div className="relative flex size-24 items-center justify-center rounded-full border border-white/10 bg-black/35 shadow-2xl shadow-black/40 backdrop-blur-xl">
+        <div className="absolute inset-2 rounded-full border border-white/10" />
+        <div className="absolute size-16 animate-ping rounded-full border border-white/20" />
+        <LoaderCircleIcon className="size-9 animate-spin text-white/90" />
+        <span className="sr-only">视频加载中</span>
+      </div>
+    </div>
+  )
+}
+
 function PlayerIconButton({
   children,
   onClick,
@@ -769,7 +808,7 @@ function PlaybackRateMenu({
   playbackRate,
   side,
 }: {
-  playerRef: RefObject<HTMLVideoElement | null>
+  playerRef: ArtPlayerRef
   playbackRate: number
   side: 'top' | 'bottom'
 }) {
@@ -838,13 +877,13 @@ function ControlButton({
   )
 }
 
-async function togglePlayback(playerRef: RefObject<HTMLVideoElement | null>) {
+async function togglePlayback(playerRef: ArtPlayerRef) {
   const player = playerRef.current
   if (!player) {
     return
   }
 
-  if (player.paused) {
+  if (!player.playing) {
     await player.play()
     return
   }
@@ -852,10 +891,7 @@ async function togglePlayback(playerRef: RefObject<HTMLVideoElement | null>) {
   player.pause()
 }
 
-function seekBy(
-  playerRef: RefObject<HTMLVideoElement | null>,
-  seconds: number,
-) {
+function seekBy(playerRef: ArtPlayerRef, seconds: number) {
   const player = playerRef.current
   if (!player) {
     return
@@ -865,10 +901,7 @@ function seekBy(
   player.currentTime = nextTime
 }
 
-function seekTo(
-  playerRef: RefObject<HTMLVideoElement | null>,
-  seconds: number,
-) {
+function seekTo(playerRef: ArtPlayerRef, seconds: number) {
   const player = playerRef.current
   if (!player) {
     return
@@ -877,10 +910,7 @@ function seekTo(
   player.currentTime = Math.max(0, seconds)
 }
 
-function setPlayerVolume(
-  playerRef: RefObject<HTMLVideoElement | null>,
-  nextVolume: number,
-) {
+function setPlayerVolume(playerRef: ArtPlayerRef, nextVolume: number) {
   const player = playerRef.current
   if (!player) {
     return
@@ -890,7 +920,7 @@ function setPlayerVolume(
   player.muted = nextVolume <= 0
 }
 
-function toggleMute(playerRef: RefObject<HTMLVideoElement | null>) {
+function toggleMute(playerRef: ArtPlayerRef) {
   const player = playerRef.current
   if (!player) {
     return
@@ -900,7 +930,7 @@ function toggleMute(playerRef: RefObject<HTMLVideoElement | null>) {
 }
 
 function setPlayerPlaybackRate(
-  playerRef: RefObject<HTMLVideoElement | null>,
+  playerRef: ArtPlayerRef,
   playbackRate: number,
 ) {
   const player = playerRef.current
@@ -908,38 +938,29 @@ function setPlayerPlaybackRate(
     return
   }
 
-  player.playbackRate = playbackRate
+  player.playbackRate = playbackRate as PlaybackRate
 }
 
 function formatPlaybackRate(rate: number) {
   return `${rate}x`
 }
 
-async function requestFullscreen(
-  playerRef: RefObject<HTMLVideoElement | null>,
-) {
+async function requestFullscreen(playerRef: ArtPlayerRef) {
   const player = playerRef.current
   if (!player) {
     return
   }
 
-  const host = player.parentElement
-  if (!host || !host.requestFullscreen) {
-    return
-  }
-
-  await host.requestFullscreen()
+  player.fullscreen = !player.fullscreen
 }
 
-async function requestPictureInPicture(
-  playerRef: RefObject<HTMLVideoElement | null>,
-) {
+async function requestPictureInPicture(playerRef: ArtPlayerRef) {
   const player = playerRef.current
-  if (!player || typeof player.requestPictureInPicture !== 'function') {
+  if (!player) {
     return
   }
 
-  await player.requestPictureInPicture()
+  player.pip = !player.pip
 }
 function formatClock(seconds?: number) {
   if (!seconds || seconds <= 0) {

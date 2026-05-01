@@ -113,6 +113,25 @@ func TestCatalogQueryAPIsReturnDetailAndGovernanceWorkspace(t *testing.T) {
 	}
 }
 
+func TestBrowseItemsHidesUnavailableItems(t *testing.T) {
+	svc, ctx := newTestService(t)
+	available, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Available Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create available item: %v", err)
+	}
+	if _, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Missing Movie", AvailabilityStatus: AvailabilityMissing}); err != nil {
+		t.Fatalf("create missing item: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != available.ID {
+		t.Fatalf("expected only available item in browse result, got %#v", result)
+	}
+}
+
 func TestGovernanceWorkspaceSurfacesSanitizedProviderDiagnostics(t *testing.T) {
 	svc, ctx := newTestService(t)
 	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Movie A", AvailabilityStatus: AvailabilityAvailable, GovernanceStatus: GovernanceNeedsReview})
@@ -342,6 +361,33 @@ func TestGetPersonDetailReturnsProfileAndOrderedRelatedWorks(t *testing.T) {
 	}
 	if len(detail.RelatedItems) != 3 || detail.RelatedItems[0].ID != availableNewer.ID || detail.RelatedItems[1].ID != availableOlder.ID || detail.RelatedItems[2].ID != missing.ID {
 		t.Fatalf("unexpected related item order: %#v", detail.RelatedItems)
+	}
+}
+
+func TestListRecentlyAddedOnlyIncludesActiveLibraries(t *testing.T) {
+	svc, ctx := newTestService(t)
+	activeLibrary := database.Library{Name: "Active", Type: "movies", MediaSourceID: 1, RootPath: "/active", Status: "active"}
+	inactiveLibrary := database.Library{Name: "Inactive", Type: "shows", MediaSourceID: 1, RootPath: "/inactive", Status: "deleted"}
+	if err := svc.db.WithContext(ctx).Create([]*database.Library{&activeLibrary, &inactiveLibrary}).Error; err != nil {
+		t.Fatalf("create libraries: %v", err)
+	}
+	activeItem, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: activeLibrary.ID, Type: ItemTypeMovie, Title: "Active Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create active item: %v", err)
+	}
+	if _, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: inactiveLibrary.ID, Type: ItemTypeSeries, Title: "Inactive Show", AvailabilityStatus: AvailabilityAvailable}); err != nil {
+		t.Fatalf("create inactive item: %v", err)
+	}
+	if _, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 999, Type: ItemTypeSeries, Title: "Orphan Show", AvailabilityStatus: AvailabilityAvailable}); err != nil {
+		t.Fatalf("create orphan item: %v", err)
+	}
+
+	items, err := svc.ListRecentlyAdded(ctx, 12)
+	if err != nil {
+		t.Fatalf("list recently added: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != activeItem.ID {
+		t.Fatalf("unexpected recently added items: %#v", items)
 	}
 }
 
@@ -589,6 +635,16 @@ func TestUserItemFavoritesAndContinueWatching(t *testing.T) {
 	}
 	if len(continueWatching[0].DisplayItem.SelectedImages) != 1 || continueWatching[0].DisplayItem.SelectedImages[0].URL != "https://example.com/show-poster.jpg" {
 		t.Fatalf("expected series poster on display item, got %#v", continueWatching[0].DisplayItem.SelectedImages)
+	}
+	if err := svc.db.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", episode.ID).Update("availability_status", AvailabilityMissing).Error; err != nil {
+		t.Fatalf("mark episode missing: %v", err)
+	}
+	continueWatching, err = svc.ListContinueWatching(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("list continue watching after missing: %v", err)
+	}
+	if len(continueWatching) != 0 {
+		t.Fatalf("expected missing item to be hidden from continue watching, got %#v", continueWatching)
 	}
 
 	if _, err := svc.SetFavorite(ctx, userID, movie.ID, false); err != nil {

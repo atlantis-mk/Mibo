@@ -2,9 +2,7 @@
 
 ## Purpose
 Define durable TV hierarchy metadata completion behavior for series, season, and episode descendants, including provider identity, evidence, artwork, availability, and hierarchy-specific reads.
-
 ## Requirements
-
 ### Requirement: Descendant TV catalog items retain durable provider identity and evidence
 The system SHALL persist season-level and episode-level provider identities, evidence snapshots, and artwork candidates for catalog descendants that are generated or updated from a series-root metadata match.
 
@@ -80,3 +78,42 @@ The system SHALL preserve complete provider-known TV hierarchy state while allow
 #### Scenario: Operational view reads complete hierarchy state
 - **WHEN** a missing-episode, metadata governance, or explicit availability query reads TV hierarchy state
 - **THEN** the system MUST expose the complete matching set of provider-known descendants including missing and unaired episodes
+
+### Requirement: TV hierarchy synchronization resolves the effective library metadata profile
+The system SHALL resolve the effective library metadata profile before executing rooted TV metadata synchronization for a series, season, or episode initiated action.
+
+#### Scenario: Episode-triggered match uses the library profile
+- **WHEN** a user triggers metadata matching from an episode that belongs to a library with a bound metadata profile
+- **THEN** the system MUST resolve that library profile and use its configured search, detail, hierarchy, and fallback behavior while still rooting the operation at the series catalog item
+
+### Requirement: TV descendant identities remain provider-normalized across profile stages
+The system SHALL preserve season and episode descendant identity and evidence semantics even when TV metadata stages are supplied by a profile-selected provider instance rather than a single global provider configuration.
+
+#### Scenario: Profile-selected provider sync populates descendants
+- **WHEN** a TV metadata profile selects a provider instance that returns normalized season and episode hierarchy detail
+- **THEN** the system MUST persist descendant identities, evidence, and artwork candidates for the generated or updated seasons and episodes using the same durable catalog hierarchy rules as the existing rooted sync flow
+
+### Requirement: TV profile fallback does not bypass hierarchy mismatch safeguards
+The system SHALL preserve existing hierarchy mismatch protections when a TV metadata profile falls back between configured provider instances.
+
+#### Scenario: Fallback provider lacks the local episode slot
+- **WHEN** a profile falls back to another provider instance and that provider's hierarchy does not contain the local episode's expected season or episode slot
+- **THEN** the system MUST preserve the local descendant, surface the mismatch for governance review, and MUST NOT silently link the episode to an unrelated provider slot
+
+### Requirement: TV hierarchy roots are scanner-identity stable
+The system SHALL create and update TV hierarchy descendants under a stable series root derived from scanner, sidecar, provider, or manual identity rather than from per-file title inference alone.
+
+#### Scenario: Files in one TV directory have inconsistent series titles
+- **WHEN** multiple files in the same TV work directory resolve to episode slots but expose different filename title prefixes
+- **THEN** the system MUST create or reuse one series root and place the episode descendants under that root
+
+#### Scenario: Provider sync enriches scanner-created hierarchy
+- **WHEN** a scanner-created series root is later matched to a TV metadata provider
+- **THEN** provider season and episode metadata MUST enrich descendants under the existing series root instead of creating a second provider-only hierarchy
+
+### Requirement: Episode metadata sync preserves local scanner slots
+The system SHALL preserve local episode slots created by scanner identity when provider hierarchy sync cannot find an exact provider descendant.
+
+#### Scenario: Provider lacks local episode slot
+- **WHEN** a local episode exists under a scanner-created series but the matched provider hierarchy does not contain that season and episode number
+- **THEN** the system MUST preserve the local episode and surface the mismatch for governance review instead of linking it to an unrelated provider episode or deleting it

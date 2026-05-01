@@ -42,7 +42,7 @@ func TestRunOnceProcessesProbeInventoryFileJob(t *testing.T) {
 		t.Fatalf("expected inventory_file_id=%d, got %d", fixture.file.ID, payload.InventoryFileID)
 	}
 
-	fixture.runner.RunOnce(ctx)
+	fixture.runner.runOnce(ctx)
 
 	assertJobCompleted(t, ctx, fixture.db, job.ID)
 
@@ -87,7 +87,7 @@ func TestRunOnceProcessesProbeInventoryFileJobsConcurrently(t *testing.T) {
 	}
 
 	startedAt := time.Now()
-	fixture.runner.RunOnce(ctx)
+	fixture.runner.runOnce(ctx)
 	elapsed := time.Since(startedAt)
 
 	assertJobCompleted(t, ctx, fixture.db, firstJob.ID)
@@ -95,6 +95,33 @@ func TestRunOnceProcessesProbeInventoryFileJobsConcurrently(t *testing.T) {
 	if elapsed >= 450*time.Millisecond {
 		t.Fatalf("expected concurrent probes to finish faster than serial execution, elapsed %s", elapsed)
 	}
+}
+
+func TestRunOnceBatchProbeFailureDoesNotChangeCompletedScanJob(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeRunnerFixture(t)
+	if err := fixture.db.WithContext(ctx).Where("id > 0").Delete(&database.Job{}).Error; err != nil {
+		t.Fatalf("clear queued setup jobs: %v", err)
+	}
+
+	scanJob, err := fixture.jobsSvc.Enqueue(ctx, library.JobKindSyncLibrary, map[string]any{"library_id": fixture.file.LibraryID})
+	if err != nil {
+		t.Fatalf("enqueue scan job: %v", err)
+	}
+	if err := fixture.jobsSvc.Complete(ctx, scanJob.ID); err != nil {
+		t.Fatalf("complete scan job: %v", err)
+	}
+	batchJob, err := fixture.jobsSvc.Enqueue(ctx, library.JobKindInventoryProbeBatch, library.InventoryProbeBatchPayload{LibraryID: fixture.file.LibraryID, FileIDs: []uint{999999}})
+	if err != nil {
+		t.Fatalf("enqueue probe batch: %v", err)
+	}
+
+	fixture.runner.runOnce(ctx)
+
+	assertJobCompleted(t, ctx, fixture.db, scanJob.ID)
+	assertJobFailed(t, ctx, fixture.db, batchJob.ID)
 }
 
 type inventoryProbeRunnerFixture struct {

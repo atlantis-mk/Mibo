@@ -64,8 +64,491 @@ func TestRunSyncLibraryWritesCatalogRows(t *testing.T) {
 		Find(&matchJobs).Error; err != nil {
 		t.Fatalf("list catalog match jobs: %v", err)
 	}
-	if len(matchJobs) != 2 {
-		t.Fatalf("expected one catalog match job per canonical movie/series target, got %#v", matchJobs)
+	if len(matchJobs) != 0 {
+		t.Fatalf("expected scan to defer per-item catalog match jobs to batches, got %#v", matchJobs)
+	}
+	var batchJobs []database.Job
+	if err := db.WithContext(ctx).
+		Where("kind = ?", JobKindCatalogMatchBatch).
+		Order("id asc").
+		Find(&batchJobs).Error; err != nil {
+		t.Fatalf("list catalog match batch jobs: %v", err)
+	}
+	if len(batchJobs) != 2 {
+		t.Fatalf("expected one catalog match batch per scan, got %#v", batchJobs)
+	}
+}
+
+func TestRunSyncLibraryPersistsHashtagTags(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	mustWriteFixtureFile(t, filepath.Join(moviesRoot, "Movie.Name.#IMAX.#国语.2024.mkv"))
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movie database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).First(&movie).Error; err != nil {
+		t.Fatalf("load movie: %v", err)
+	}
+	if movie.Title != "Movie Name" {
+		t.Fatalf("expected hashtags removed from title, got %q", movie.Title)
+	}
+
+	var rows []struct {
+		Kind string
+		Name string
+	}
+	if err := db.WithContext(ctx).
+		Table("item_tags").
+		Select("tags.kind, tags.name").
+		Joins("JOIN tags ON tags.id = item_tags.tag_id").
+		Where("item_tags.item_id = ?", movie.ID).
+		Order("tags.name asc").
+		Scan(&rows).Error; err != nil {
+		t.Fatalf("load hashtag tags: %v", err)
+	}
+	if len(rows) != 2 || rows[0].Kind != "hashtag" || rows[0].Name != "IMAX" || rows[1].Kind != "hashtag" || rows[1].Name != "国语" {
+		t.Fatalf("unexpected hashtag tags: %#v", rows)
+	}
+
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ? AND source_name = ?", movie.ID, "scanner").First(&source).Error; err != nil {
+		t.Fatalf("load scanner source: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(source.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode scanner payload: %v", err)
+	}
+	if _, ok := payload["hashtag_tags"].([]any); !ok {
+		t.Fatalf("expected hashtag_tags evidence in %#v", payload)
+	}
+}
+
+func TestRunSyncLibraryGroupsFlatTVFolderIntoSingleSeries(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	showDir := filepath.Join(showsRoot, "灵笼第二季")
+	mustWriteFixtureFile(t, filepath.Join(showDir, "灵笼 第二季.S02E01.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "Incarnation.S02E02.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "第03集.mp4"))
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
+	}
+
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Order("id asc").Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("expected one series for flat TV folder, got %#v", series)
+	}
+
+	var episodes []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("index_number asc").Find(&episodes).Error; err != nil {
+		t.Fatalf("load episodes: %v", err)
+	}
+	if len(episodes) != 3 {
+		t.Fatalf("expected three episodes, got %#v", episodes)
+	}
+	for idx, episode := range episodes {
+		expectedEpisode := idx + 1
+		if episode.RootID == nil || *episode.RootID != series[0].ID || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 2 || episode.IndexNumber == nil || *episode.IndexNumber != expectedEpisode {
+			t.Fatalf("unexpected episode hierarchy at %d: %#v series=%#v", idx, episode, series[0])
+		}
+	}
+
+	var assets int64
+	if err := db.WithContext(ctx).Model(&database.MediaAsset{}).Count(&assets).Error; err != nil {
+		t.Fatalf("count assets: %v", err)
+	}
+	if assets != 3 {
+		t.Fatalf("expected one asset per flat folder episode, got %d", assets)
+	}
+}
+
+func TestRunSyncLibraryGroupsNoisySeasonDirectoriesUnderSeries(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	showDir := filepath.Join(showsRoot, "魔幻手机 (2008)")
+	mustWriteFixtureFile(t, filepath.Join(showDir, "第 1 季 - 1080p H265 10bit AAC", "魔幻手机 S01E01 - 第 1 集.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "第 2 季 - 2160p WEB-DL HEVC DDP 2Audios", "魔幻手机2：傻妞归来 S02E01 - 第 1 集 - 2160p WEB-DL HEVC DDP 2Audios.mp4"))
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
+	}
+
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 || series[0].Title != "魔幻手机" {
+		t.Fatalf("expected one normalized series, got %#v", series)
+	}
+
+	var seasons []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeason).Order("index_number asc").Find(&seasons).Error; err != nil {
+		t.Fatalf("load seasons: %v", err)
+	}
+	if len(seasons) != 2 {
+		t.Fatalf("expected two seasons, got %#v", seasons)
+	}
+	for idx, season := range seasons {
+		expected := idx + 1
+		if season.ParentID == nil || *season.ParentID != series[0].ID || season.IndexNumber == nil || *season.IndexNumber != expected {
+			t.Fatalf("unexpected season hierarchy at %d: %#v series=%#v", idx, season, series[0])
+		}
+	}
+
+	var episodes []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("parent_index_number asc, index_number asc").Find(&episodes).Error; err != nil {
+		t.Fatalf("load episodes: %v", err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("expected two episodes, got %#v", episodes)
+	}
+	for idx, episode := range episodes {
+		expectedSeason := idx + 1
+		if episode.RootID == nil || *episode.RootID != series[0].ID || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != expectedSeason || episode.IndexNumber == nil || *episode.IndexNumber != 1 {
+			t.Fatalf("unexpected episode hierarchy at %d: %#v series=%#v", idx, episode, series[0])
+		}
+	}
+}
+
+func TestRunSyncLibraryInfersUnnamedTVEpisodesAfterSkippingExtras(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	showDir := filepath.Join(showsRoot, "Unsorted Show")
+	mustWriteFixtureFile(t, filepath.Join(showDir, "trailer.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "behind-the-scenes.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "alpha.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "episode.mkv"))
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
+	}
+
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("expected one series, got %#v", series)
+	}
+
+	var episodes []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("index_number asc").Find(&episodes).Error; err != nil {
+		t.Fatalf("load episodes: %v", err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("expected only non-extra files as episodes, got %#v", episodes)
+	}
+	for idx, episode := range episodes {
+		expected := idx + 1
+		if episode.IndexNumber == nil || *episode.IndexNumber != expected || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 {
+			t.Fatalf("unexpected fallback episode %d: %#v", idx, episode)
+		}
+	}
+
+	var movies int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&movies).Error; err != nil {
+		t.Fatalf("count movie pollution: %v", err)
+	}
+	if movies != 0 {
+		t.Fatalf("expected skipped TV extras not to create movie items, got %d", movies)
+	}
+}
+
+func TestRunSyncLibraryGroupsMovieFolderVersionsIntoSingleMovie(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Inception (2010)")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Inception.1080p.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Inception.2160p.mkv"))
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected one movie for folder versions, got %#v", movies)
+	}
+	if movies[0].Path != movieDir {
+		t.Fatalf("expected movie path to use folder %q, got %q", movieDir, movies[0].Path)
+	}
+
+	var assets []database.MediaAsset
+	if err := db.WithContext(ctx).Where("library_id = ?", movieLibrary.ID).Order("asset_type asc, id asc").Find(&assets).Error; err != nil {
+		t.Fatalf("load assets: %v", err)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("expected two assets for movie versions, got %#v", assets)
+	}
+	roles := map[string]bool{}
+	for _, asset := range assets {
+		var link database.AssetItem
+		if err := db.WithContext(ctx).Where("asset_id = ? AND item_id = ?", asset.ID, movies[0].ID).First(&link).Error; err != nil {
+			t.Fatalf("load asset link: %v", err)
+		}
+		roles[link.Role] = true
+	}
+	if !roles[inventory.AssetItemRolePrimary] || !roles[inventory.AssetItemRoleVersion] {
+		t.Fatalf("expected primary and version roles for movie folder versions, got %#v", roles)
+	}
+}
+
+func TestRunSyncLibraryAssociatesMovieExtrasWithMovieFolder(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Inception (2010)")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Inception.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "trailer.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "behind-the-scenes.mkv"))
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected one movie for main and extras, got %#v", movies)
+	}
+
+	var assets []database.MediaAsset
+	if err := db.WithContext(ctx).Where("library_id = ?", movieLibrary.ID).Find(&assets).Error; err != nil {
+		t.Fatalf("load assets: %v", err)
+	}
+	if len(assets) != 3 {
+		t.Fatalf("expected main plus two extra assets, got %#v", assets)
+	}
+	types := map[string]bool{}
+	roles := map[string]bool{}
+	for _, asset := range assets {
+		types[asset.AssetType] = true
+		var link database.AssetItem
+		if err := db.WithContext(ctx).Where("asset_id = ? AND item_id = ?", asset.ID, movies[0].ID).First(&link).Error; err != nil {
+			t.Fatalf("load asset link: %v", err)
+		}
+		roles[link.Role] = true
+	}
+	if !types[inventory.AssetTypeMain] || !types[inventory.AssetTypeTrailer] || !types[inventory.AssetTypeExtra] {
+		t.Fatalf("expected main, trailer, and extra asset types, got %#v", types)
+	}
+	if !roles[inventory.AssetItemRolePrimary] || !roles[inventory.AssetItemRoleTrailer] || !roles[inventory.AssetItemRoleExtra] {
+		t.Fatalf("expected primary, trailer, and extra roles, got %#v", roles)
+	}
+}
+
+func TestRunSyncLibraryMixedClassifiesSingleNonExtraVideoAsMovie(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	mixedRoot := filepath.Join(rootPath, "mixed")
+	movieDir := filepath.Join(mixedRoot, "Inception (2010)")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Inception.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "trailer.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "behind-the-scenes.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "sample.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "featurette.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "interview.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "deleted scene.mkv"))
+
+	mixedLibrary := createDirectScanLibrary(t, ctx, svc, "Mixed", "mixed", mixedRoot)
+	if mixedLibrary.Type != LibraryTypeMixed {
+		t.Fatalf("expected normalized mixed library type, got %q", mixedLibrary.Type)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(mixedLibrary.ID, mixedLibrary.RootPath)); err != nil {
+		t.Fatalf("run mixed sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected one movie for mixed folder with extras, got %#v", movies)
+	}
+	if movies[0].Path != movieDir {
+		t.Fatalf("expected mixed movie path to use folder %q, got %q", movieDir, movies[0].Path)
+	}
+
+	var seriesCount int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeSeries).Count(&seriesCount).Error; err != nil {
+		t.Fatalf("count series: %v", err)
+	}
+	if seriesCount != 0 {
+		t.Fatalf("expected no series for one non-extra mixed folder, got %d", seriesCount)
+	}
+
+	var assets []database.MediaAsset
+	if err := db.WithContext(ctx).Where("library_id = ?", mixedLibrary.ID).Find(&assets).Error; err != nil {
+		t.Fatalf("load assets: %v", err)
+	}
+	if len(assets) != 7 {
+		t.Fatalf("expected main plus six extra assets, got %#v", assets)
+	}
+	roles := map[string]bool{}
+	for _, asset := range assets {
+		var link database.AssetItem
+		if err := db.WithContext(ctx).Where("asset_id = ? AND item_id = ?", asset.ID, movies[0].ID).First(&link).Error; err != nil {
+			t.Fatalf("load mixed movie asset link: %v", err)
+		}
+		roles[link.Role] = true
+	}
+	if !roles[inventory.AssetItemRolePrimary] || !roles[inventory.AssetItemRoleTrailer] || !roles[inventory.AssetItemRoleExtra] {
+		t.Fatalf("expected primary, trailer, and extra roles, got %#v", roles)
+	}
+}
+
+func TestRunSyncLibraryMixedClassifiesMultipleNonExtraVideosAsSeries(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	mixedRoot := filepath.Join(rootPath, "mixed")
+	showDir := filepath.Join(mixedRoot, "Unsorted Show")
+	mustWriteFixtureFile(t, filepath.Join(showDir, "trailer.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "behind-the-scenes.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "alpha.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "episode.mkv"))
+
+	mixedLibrary := createDirectScanLibrary(t, ctx, svc, "Mixed", "mixed", mixedRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(mixedLibrary.ID, mixedLibrary.RootPath)); err != nil {
+		t.Fatalf("run mixed sync: %v", err)
+	}
+
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("expected one series for mixed multi-video folder, got %#v", series)
+	}
+
+	var episodes []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("index_number asc").Find(&episodes).Error; err != nil {
+		t.Fatalf("load episodes: %v", err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("expected only non-extra files as mixed episodes, got %#v", episodes)
+	}
+	for idx, episode := range episodes {
+		expected := idx + 1
+		if episode.IndexNumber == nil || *episode.IndexNumber != expected || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 {
+			t.Fatalf("unexpected mixed fallback episode %d: %#v", idx, episode)
+		}
+	}
+
+	var movies int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&movies).Error; err != nil {
+		t.Fatalf("count movies: %v", err)
+	}
+	if movies != 0 {
+		t.Fatalf("expected no movies for mixed multi-video folder, got %d", movies)
+	}
+}
+
+func TestRunSyncLibraryMixedIgnoresExcludedFilesForDirectoryShape(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	mixedRoot := filepath.Join(rootPath, "mixed")
+	movieDir := filepath.Join(mixedRoot, "Ambiguous Folder")
+	mainPath := filepath.Join(movieDir, "Main Feature.mkv")
+	ignoredPath := filepath.Join(movieDir, "Second Feature.mkv")
+	mustWriteFixtureFile(t, mainPath)
+	mustWriteFixtureFile(t, ignoredPath)
+
+	mixedLibrary := createDirectScanLibrary(t, ctx, svc, "Mixed", "mixed", mixedRoot)
+	if err := db.WithContext(ctx).Create(&database.ScanExclusion{LibraryID: mixedLibrary.ID, StorageProvider: "local", StoragePath: ignoredPath, Reason: ScanExclusionReasonWrongImport, Enabled: true}).Error; err != nil {
+		t.Fatalf("create scan exclusion: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(mixedLibrary.ID, mixedLibrary.RootPath)); err != nil {
+		t.Fatalf("run mixed sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected ignored mixed sibling to leave one movie, got %#v", movies)
+	}
+
+	var episodes int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeEpisode).Count(&episodes).Error; err != nil {
+		t.Fatalf("count episodes: %v", err)
+	}
+	if episodes != 0 {
+		t.Fatalf("expected no episodes after ignored sibling is excluded from shape, got %d", episodes)
+	}
+}
+
+func TestRunSyncLibraryAppliesMovieFolderMetadataToGroupedVersions(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Inception (2010)")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Inception.1080p.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Inception.2160p.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "movie.json"), `{"title":"盗梦空间","year":2010}`)
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movie database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).First(&movie).Error; err != nil {
+		t.Fatalf("load movie: %v", err)
+	}
+	if movie.Title != "盗梦空间" || movie.Year == nil || *movie.Year != 2010 {
+		t.Fatalf("expected folder metadata to apply to grouped movie, got %#v", movie)
+	}
+
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ? AND source_name = ?", movie.ID, "scanner").First(&source).Error; err != nil {
+		t.Fatalf("load scanner source: %v", err)
+	}
+	if !strings.Contains(source.PayloadJSON, "movie.json") {
+		t.Fatalf("expected movie folder sidecar evidence, got %s", source.PayloadJSON)
 	}
 }
 
@@ -252,6 +735,45 @@ func TestRunSyncLibraryMarksMissingInventoryWithoutDeletingCatalogItem(t *testin
 	}
 }
 
+func TestRunSyncLibraryMarksMissingBeforeEnrichmentRuns(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	moviePath := filepath.Join(moviesRoot, "Movie A (2024)", "Movie.A.2024.mkv")
+	mustWriteFixtureFile(t, moviePath)
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run initial sync: %v", err)
+	}
+	if err := os.Remove(moviePath); err != nil {
+		t.Fatalf("remove movie: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run delete sync: %v", err)
+	}
+
+	var file database.InventoryFile
+	if err := db.WithContext(ctx).Where("storage_path = ?", moviePath).First(&file).Error; err != nil {
+		t.Fatalf("load inventory file: %v", err)
+	}
+	if file.Status != inventory.FileStatusMissing {
+		t.Fatalf("expected missing inventory before enrichment runs, got %#v", file)
+	}
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ? AND type = ?", movieLibrary.ID, catalog.ItemTypeMovie).First(&item).Error; err != nil {
+		t.Fatalf("load catalog item: %v", err)
+	}
+	if item.AvailabilityStatus != catalog.AvailabilityMissing {
+		t.Fatalf("expected missing catalog availability before enrichment runs, got %#v", item)
+	}
+
+	assertJobCount(t, ctx, db, JobKindMatchCatalogItem, 0)
+	assertJobCount(t, ctx, db, JobKindProbeInventoryFile, 0)
+}
+
 func TestRunSyncLibraryKeepsEpisodeAvailableWhenAnotherVersionRemains(t *testing.T) {
 	t.Parallel()
 
@@ -390,6 +912,143 @@ func TestRunSyncLibraryReusesStableIdentityCatalogRowsOnRename(t *testing.T) {
 	}
 }
 
+func TestRunSyncLibraryScansEnabledLibraryPathsOnly(t *testing.T) {
+	rootPath := t.TempDir()
+	pathA := filepath.Join(rootPath, "a")
+	pathB := filepath.Join(rootPath, "b")
+	pathC := filepath.Join(rootPath, "c")
+	mustWriteFixtureFile(t, filepath.Join(pathA, "Movie A (2020).mkv"))
+	mustWriteFixtureFile(t, filepath.Join(pathB, "Movie B (2021).mkv"))
+	mustWriteFixtureFile(t, filepath.Join(pathC, "Movie C (2022).mkv"))
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	source, err := svc.CreateMediaSource(ctx, CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: rootPath})
+	if err != nil {
+		t.Fatalf("create media source: %v", err)
+	}
+	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: "Movies", Type: LibraryTypeMovies, MediaSourceID: source.ID, RootPath: pathA})
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	enabledPath, err := svc.AddLibraryPath(ctx, libraryRecord.ID, LibraryPathInput{MediaSourceID: source.ID, RootPath: pathC})
+	if err != nil {
+		t.Fatalf("add enabled path: %v", err)
+	}
+	if enabledPath.RootPath != pathC {
+		t.Fatalf("unexpected enabled path: %#v", enabledPath)
+	}
+	falseValue := false
+	if _, err := svc.AddLibraryPath(ctx, libraryRecord.ID, LibraryPathInput{MediaSourceID: source.ID, RootPath: pathB, Enabled: &falseValue}); err != nil {
+		t.Fatalf("add disabled path: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, database.Job{PayloadJSON: fmt.Sprintf(`{"library_id":%d}`, libraryRecord.ID)}); err != nil {
+		t.Fatalf("run sync library: %v", err)
+	}
+
+	var files []database.InventoryFile
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("storage_path asc").Find(&files).Error; err != nil {
+		t.Fatalf("list inventory files: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected two files from enabled paths, got %#v", files)
+	}
+	for _, file := range files {
+		if strings.Contains(file.StoragePath, string(filepath.Separator)+"b"+string(filepath.Separator)) {
+			t.Fatalf("disabled path file was scanned: %#v", files)
+		}
+	}
+}
+
+func TestScanPolicyIgnoresExtensionsAndPreservesManualExclusionPrecedence(t *testing.T) {
+	rootPath := t.TempDir()
+	filePath := filepath.Join(rootPath, "Movie A (2020).mkv")
+	mustWriteFixtureFile(t, filePath)
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Updates(map[string]any{"scanner_enabled": true, "realtime_monitor_enabled": true, "scheduled_refresh_enabled": true, "refresh_interval_hours": 24, "ignore_hidden_files": true, "ignore_file_extensions_json": `[".mkv"]`, "configurable_exclusion_rules": true}).Error; err != nil {
+		t.Fatalf("set scan policy: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.ScanExclusion{LibraryID: libraryRecord.ID, StorageProvider: "local", StoragePath: filePath, Reason: ScanExclusionReasonWrongImport, Enabled: true}).Error; err != nil {
+		t.Fatalf("create scan exclusion: %v", err)
+	}
+	_, provider, err := svc.providerForSource(ctx, libraryRecord.MediaSourceID)
+	if err != nil {
+		t.Fatalf("provider for library: %v", err)
+	}
+	result, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath)
+	if err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	if result.ExcludedFilesSkippedByReason[scanExclusionSkipUserExclusion] != 1 {
+		t.Fatalf("expected manual exclusion to win over policy ignore, got %#v", result.ExcludedFilesSkippedByReason)
+	}
+}
+
+func TestScanPolicyCanDisableConfigurableExclusionRules(t *testing.T) {
+	rootPath := t.TempDir()
+	mustWriteFixtureFile(t, filepath.Join(rootPath, "Movie ad (2020).mkv"))
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	if _, err := svc.CreateScanExclusionRule(ctx, ScanExclusionRuleInput{LibraryID: &libraryRecord.ID, Name: "Scoped ad", RuleType: ScanExclusionRuleTypeFilenameToken, Value: "ad", Reason: ScanExclusionReasonAdvertisement, Enabled: true}); err != nil {
+		t.Fatalf("create scoped exclusion rule: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Updates(map[string]any{"scanner_enabled": true, "realtime_monitor_enabled": true, "scheduled_refresh_enabled": true, "refresh_interval_hours": 24, "ignore_hidden_files": true, "ignore_file_extensions_json": `[]`, "configurable_exclusion_rules": false}).Error; err != nil {
+		t.Fatalf("set scan policy: %v", err)
+	}
+	_, provider, err := svc.providerForSource(ctx, libraryRecord.MediaSourceID)
+	if err != nil {
+		t.Fatalf("provider for library: %v", err)
+	}
+	result, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath)
+	if err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	if result.FilesSeen != 1 || result.ExcludedFilesSkipped != 0 {
+		t.Fatalf("expected configurable rule to be disabled, got %#v", result)
+	}
+}
+
+func TestScanPolicySkipsFilesBelowMinimumSize(t *testing.T) {
+	rootPath := t.TempDir()
+	mustWriteFixtureFile(t, filepath.Join(rootPath, "Tiny Movie (2020).mkv"))
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Update("min_file_size_bytes", int64(1024)).Error; err != nil {
+		t.Fatalf("set min file size policy: %v", err)
+	}
+	_, provider, err := svc.providerForSource(ctx, libraryRecord.MediaSourceID)
+	if err != nil {
+		t.Fatalf("provider for library: %v", err)
+	}
+	result, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath)
+	if err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	if result.FilesSeen != 0 || result.ExcludedFilesSkippedByReason["policy_min_size"] != 1 {
+		t.Fatalf("expected tiny file to be skipped by min size policy, got %#v", result)
+	}
+}
+
+func TestScanPolicyMinimumSizeZeroDoesNotLimit(t *testing.T) {
+	rootPath := t.TempDir()
+	mustWriteFixtureFile(t, filepath.Join(rootPath, "Tiny Movie (2020).mkv"))
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Update("min_file_size_bytes", int64(0)).Error; err != nil {
+		t.Fatalf("set min file size policy: %v", err)
+	}
+	_, provider, err := svc.providerForSource(ctx, libraryRecord.MediaSourceID)
+	if err != nil {
+		t.Fatalf("provider for library: %v", err)
+	}
+	result, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath)
+	if err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	if result.FilesSeen != 1 || result.ExcludedFilesSkipped != 0 {
+		t.Fatalf("expected zero min size to allow tiny file, got %#v", result)
+	}
+}
+
 func TestRunSyncLibraryDeduplicatesScannerMetadataSourcesOnRescan(t *testing.T) {
 	t.Parallel()
 
@@ -498,6 +1157,23 @@ func TestRunSyncLibraryBindsMovieSubtitleSidecars(t *testing.T) {
 	}
 }
 
+func TestRunSyncLibraryRespectsExternalSubtitleDisabledPolicy(t *testing.T) {
+	rootPath := t.TempDir()
+	movieDir := filepath.Join(rootPath, "Movie A (2024)")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie A.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.srt"), "subtitle")
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	if err := db.WithContext(ctx).Model(&database.LibrarySubtitlePolicy{}).Where("library_id = ?", libraryRecord.ID).Update("external_sidecars_enabled", false).Error; err != nil {
+		t.Fatalf("disable external subtitles: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync library: %v", err)
+	}
+	assertRawTableCount(t, db, "asset_files", "role = ?", 0, inventory.FileRoleSubtitle)
+	assertRawTableCount(t, db, "media_streams", "stream_type = ?", 0, inventory.MediaStreamTypeSubtitle)
+}
+
 func TestRunSyncLibraryBindsEpisodeSubtitleSidecar(t *testing.T) {
 	t.Parallel()
 
@@ -592,6 +1268,118 @@ func TestRunSyncLibraryUsesJSONSidecarMovieHints(t *testing.T) {
 	hints, ok := metadata[0]["hints"].(map[string]any)
 	if !ok || hints["title"] != "Sidecar Movie" {
 		t.Fatalf("expected metadata hints in evidence, got %#v", metadata[0])
+	}
+
+	var externalID database.CatalogExternalID
+	if err := db.WithContext(ctx).Where("item_id = ? AND provider = ? AND provider_type = ?", item.ID, "tmdb", "movie").First(&externalID).Error; err != nil {
+		t.Fatalf("load sidecar external id: %v", err)
+	}
+	if externalID.ExternalID != "movie:12345" || externalID.Source != "scanner" {
+		t.Fatalf("expected scanner TMDB external id, got %#v", externalID)
+	}
+}
+
+func TestRunSyncLibraryPreselectsSiblingArtworkDuringFirstScan(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	svc.cfg.FFmpeg.ArtworkRootPath = filepath.Join(rootPath, "artwork")
+	moviesRoot := filepath.Join(rootPath, "movies")
+	movieDir := filepath.Join(moviesRoot, "Movie A")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie A.mkv"))
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "poster.jpg"), "poster-bytes")
+	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "backdrop.jpg"), "backdrop-bytes")
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).First(&item).Error; err != nil {
+		t.Fatalf("load item: %v", err)
+	}
+	selected := selectedImagesByType(t, ctx, db, item.ID)
+	if selected["poster"].URL != fmt.Sprintf("/api/v1/items/%d/artwork/poster", item.ID) || !selected["poster"].IsSelected {
+		t.Fatalf("expected selected scan poster, got %#v", selected["poster"])
+	}
+	if selected["backdrop"].URL != fmt.Sprintf("/api/v1/items/%d/artwork/backdrop", item.ID) || !selected["backdrop"].IsSelected {
+		t.Fatalf("expected selected scan backdrop, got %#v", selected["backdrop"])
+	}
+	posterBytes, err := os.ReadFile(filepath.Join(svc.cfg.FFmpeg.ArtworkRootPath, "catalog", fmt.Sprint(item.ID), "poster.jpg"))
+	if err != nil || string(posterBytes) != "poster-bytes" {
+		t.Fatalf("expected copied poster artwork, bytes=%q err=%v", string(posterBytes), err)
+	}
+}
+
+func TestCatalogScanUsesProviderThumbnailAsProvisionalArtwork(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	artifact := applyCatalogScanArtworkCandidates(nil, catalogScanArtifact{ItemType: catalog.ItemTypeMovie, ItemPath: "movie-a", SourcePath: "/library/Movie A.mkv", Title: "Movie A"}, storage.Object{Path: "/library/Movie A.mkv", ThumbnailURL: "https://cdn.example.test/movie-thumb.jpg"}, scanDirectorySnapshot{})
+	result, err := svc.writeCatalogScanMovie(ctx, libraryRecord, artifact)
+	if err != nil {
+		t.Fatalf("write scan movie: %v", err)
+	}
+
+	selected := selectedImagesByType(t, ctx, db, result.Item.ID)
+	if selected["poster"].URL != "https://cdn.example.test/movie-thumb.jpg" || !selected["poster"].IsSelected {
+		t.Fatalf("expected provider thumbnail poster, got %#v", selected["poster"])
+	}
+
+	seasonNumber := 1
+	episodeArtifact := applyCatalogScanArtworkCandidates(nil, catalogScanArtifact{ItemType: catalog.ItemTypeEpisode, SourcePath: "/library/Show/Season 1/Show.S01E01.mkv", SeriesPath: "show", SeasonPath: "show/season-01", Title: "Pilot", SeriesTitle: "Show", SeasonNumber: &seasonNumber, EpisodeSlots: []catalogEpisodeSlot{{EpisodeNumber: 1, ItemPath: "show/season-01/episode-0001"}}}, storage.Object{Path: "/library/Show/Season 1/Show.S01E01.mkv", ThumbnailURL: "https://cdn.example.test/episode-thumb.jpg"}, scanDirectorySnapshot{})
+	episodeResult, err := svc.writeCatalogScanEpisodeHierarchy(ctx, libraryRecord, episodeArtifact)
+	if err != nil {
+		t.Fatalf("write scan episode: %v", err)
+	}
+	selected = selectedImagesByType(t, ctx, db, episodeResult.Item.ID)
+	if selected["still"].URL != "https://cdn.example.test/episode-thumb.jpg" || !selected["still"].IsSelected {
+		t.Fatalf("expected provider thumbnail still, got %#v", selected["still"])
+	}
+
+	var series database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ? AND title = ?", catalog.ItemTypeSeries, "Show").First(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	selected = selectedImagesByType(t, ctx, db, series.ID)
+	if selected["poster"].URL != "https://cdn.example.test/episode-thumb.jpg" || !selected["poster"].IsSelected {
+		t.Fatalf("expected episode thumbnail as provisional series poster, got %#v", selected["poster"])
+	}
+	if selected["backdrop"].URL != "https://cdn.example.test/episode-thumb.jpg" || !selected["backdrop"].IsSelected {
+		t.Fatalf("expected episode thumbnail as provisional series backdrop, got %#v", selected["backdrop"])
+	}
+	if selected["poster"].SourceID == nil || selected["backdrop"].SourceID == nil {
+		t.Fatalf("expected provisional series artwork to retain scanner source, got poster=%#v backdrop=%#v", selected["poster"], selected["backdrop"])
+	}
+}
+
+func TestCatalogScanPreservesExistingSelectedArtwork(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	artifact := catalogScanArtifact{ItemType: catalog.ItemTypeMovie, ItemPath: "movie-a", SourcePath: "/library/Movie A.mkv", Title: "Movie A", ImageCandidates: []catalogScanImageCandidate{{ImageType: "poster", URL: "https://cdn.example.test/scanner-poster.jpg", Source: catalogScanArtworkSourceProviderThumb, Priority: 100, Provisional: true}}}
+	result, err := svc.writeCatalogScanMovie(ctx, libraryRecord, artifact)
+	if err != nil {
+		t.Fatalf("write scan movie: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.ItemImage{}).Where("item_id = ? AND image_type = ?", result.Item.ID, "poster").Update("is_selected", false).Error; err != nil {
+		t.Fatalf("clear scanner poster selection: %v", err)
+	}
+	remote := database.ItemImage{ItemID: result.Item.ID, ImageType: "poster", URL: "https://image.example.test/remote-poster.jpg", IsSelected: true}
+	if err := db.WithContext(ctx).Create(&remote).Error; err != nil {
+		t.Fatalf("seed remote poster: %v", err)
+	}
+
+	artifact.ImageCandidates = []catalogScanImageCandidate{{ImageType: "poster", URL: "https://cdn.example.test/new-scanner-poster.jpg", Source: catalogScanArtworkSourceProviderThumb, Priority: 100, Provisional: true}}
+	if _, err := svc.writeCatalogScanMovie(ctx, libraryRecord, artifact); err != nil {
+		t.Fatalf("rescan movie: %v", err)
+	}
+
+	selected := selectedImagesByType(t, ctx, db, result.Item.ID)
+	if selected["poster"].URL != remote.URL {
+		t.Fatalf("expected existing selected remote poster to stay selected, got %#v", selected["poster"])
 	}
 }
 
@@ -735,6 +1523,50 @@ func TestRunSyncLibraryMarksAncestorAvailabilityMissingWhenEpisodesDeleted(t *te
 	}
 	if items[0].Type != catalog.ItemTypeSeries || items[1].Type != catalog.ItemTypeSeason || items[2].Type != catalog.ItemTypeEpisode {
 		t.Fatalf("unexpected item ordering for hierarchy: %#v", items)
+	}
+}
+
+func TestCatalogItemAvailabilityKeepsSeriesAvailableWithRemainingEpisode(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, _, libraryRecord := newScanCatalogWriterHarness(t)
+	catalogSvc := catalog.NewService(db)
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeSeries, Title: "Show", AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonNumber := 1
+	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	availableEpisodeNumber := 1
+	availableEpisode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 1", IndexNumber: &availableEpisodeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create available episode: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: libraryRecord.ID, AssetType: inventory.AssetTypeMain, Status: inventory.AssetStatusAvailable, ProbeStatus: "ready"}
+	if err := db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: availableEpisode.ID, Role: inventory.AssetItemRolePrimary, Source: "scanner"}).Error; err != nil {
+		t.Fatalf("link asset: %v", err)
+	}
+	missingEpisodeNumber := 2
+	if _, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 2", IndexNumber: &missingEpisodeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityMissing}); err != nil {
+		t.Fatalf("create missing episode: %v", err)
+	}
+
+	seriesAvailability, err := catalogItemAvailabilityStatus(ctx, db, series.ID)
+	if err != nil {
+		t.Fatalf("series availability: %v", err)
+	}
+	seasonAvailability, err := catalogItemAvailabilityStatus(ctx, db, season.ID)
+	if err != nil {
+		t.Fatalf("season availability: %v", err)
+	}
+	if seriesAvailability != catalog.AvailabilityAvailable || seasonAvailability != catalog.AvailabilityAvailable {
+		t.Fatalf("expected remaining available episode to keep ancestors available, got series=%s season=%s", seriesAvailability, seasonAvailability)
 	}
 }
 
@@ -896,7 +1728,7 @@ func TestScanCatalogWriterCreatesEpisodeHierarchyWithLocalEvidence(t *testing.T)
 		t.Fatalf("write episode artifact: %v", err)
 	}
 
-	assertCatalogCounts(t, ctx, db, 3, 1, 1, 1, 1, 1)
+	assertCatalogCounts(t, ctx, db, 3, 1, 1, 1, 1, 2)
 
 	var items []database.CatalogItem
 	if err := db.WithContext(ctx).Where("library_id = ?", libraryRecord.ID).Order("id asc").Find(&items).Error; err != nil {
@@ -1032,7 +1864,7 @@ func TestScanCatalogWriterReusesProviderCreatedDescendantsByHierarchyIdentity(t 
 		t.Fatalf("write scan hierarchy: %v", err)
 	}
 
-	assertCatalogCounts(t, ctx, db, 3, 1, 1, 1, 1, 2)
+	assertCatalogCounts(t, ctx, db, 3, 1, 1, 1, 1, 3)
 	if result.Item.ID != episode.ID {
 		t.Fatalf("expected scanner to reuse provider-created episode %d, got %#v", episode.ID, result.Item)
 	}
@@ -1080,6 +1912,21 @@ func newScanCatalogWriterHarness(t *testing.T) (context.Context, *gorm.DB, *Serv
 	}
 
 	return ctx, db, svc, libraryRecord
+}
+
+func selectedImagesByType(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint) map[string]database.ItemImage {
+	t.Helper()
+	var images []database.ItemImage
+	if err := db.WithContext(ctx).Where("item_id = ?", itemID).Order("image_type asc, id asc").Find(&images).Error; err != nil {
+		t.Fatalf("load item images: %v", err)
+	}
+	selected := make(map[string]database.ItemImage, len(images))
+	for _, image := range images {
+		if image.IsSelected {
+			selected[image.ImageType] = image
+		}
+	}
+	return selected
 }
 
 func newDirectScanHarness(t *testing.T, rootPath string) (context.Context, *gorm.DB, *Service) {

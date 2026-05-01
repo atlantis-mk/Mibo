@@ -12,16 +12,32 @@ import (
 )
 
 const (
-	StatusQueued    = "queued"
-	StatusRunning   = "running"
-	StatusCompleted = "completed"
-	StatusFailed    = "failed"
+	StatusQueued          = "queued"
+	StatusRunning         = "running"
+	StatusCancelRequested = "cancel_requested"
+	StatusCancelled       = "cancelled"
+	StatusCompleted       = "completed"
+	StatusFailed          = "failed"
 )
 
 var ErrNoAvailableJob = errors.New("no available job")
 
 type Service struct {
 	db *gorm.DB
+}
+
+var jobKindPriority = map[string]int{
+	"sync_library":                       0,
+	"targeted_refresh":                   0,
+	"listener_reconcile":                 0,
+	"apply_storage_event_refresh":        0,
+	"missing_media_cleanup":              0,
+	"catalog_refresh_item_projection":    1,
+	"catalog_refresh_library_projection": 1,
+	"catalog_match_batch":                2,
+	"inventory_probe_batch":              2,
+	"match_catalog_item":                 3,
+	"probe_inventory_file":               3,
 }
 
 func NewService(db *gorm.DB) *Service {
@@ -67,12 +83,15 @@ func (s *Service) EnqueueUnique(ctx context.Context, kind, jobKey string, payloa
 	return job, nil
 }
 
-func (s *Service) List(ctx context.Context, limit int, status string, kind string) ([]database.Job, error) {
+func (s *Service) List(ctx context.Context, limit int, offset int, status string, kind string) ([]database.Job, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	if offset < 0 {
+		offset = 0
+	}
 
-	query := s.db.WithContext(ctx).Order("created_at desc").Limit(limit)
+	query := s.db.WithContext(ctx).Order("created_at desc").Limit(limit).Offset(offset)
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -111,6 +130,55 @@ func (s *Service) Retry(ctx context.Context, jobID uint) (database.Job, error) {
 		return database.Job{}, err
 	}
 	return existing, nil
+}
+
+func (s *Service) Cancel(ctx context.Context, jobID uint) (database.Job, error) {
+	var existing database.Job
+	if err := s.db.WithContext(ctx).First(&existing, jobID).Error; err != nil {
+		return database.Job{}, err
+	}
+
+	now := time.Now().UTC()
+	updates := map[string]any{}
+	switch existing.Status {
+	case StatusQueued:
+		updates["status"] = StatusCancelled
+		updates["finished_at"] = now
+		updates["error_message"] = "cancelled by administrator"
+	case StatusRunning, StatusCancelRequested:
+		updates["status"] = StatusCancelRequested
+		updates["error_message"] = "cancellation requested by administrator"
+	default:
+		return database.Job{}, fmt.Errorf("job status %q cannot be cancelled", existing.Status)
+	}
+
+	if err := s.db.WithContext(ctx).Model(&database.Job{}).Where("id = ?", jobID).Updates(updates).Error; err != nil {
+		return database.Job{}, err
+	}
+	if err := s.db.WithContext(ctx).First(&existing, jobID).Error; err != nil {
+		return database.Job{}, err
+	}
+	return existing, nil
+}
+
+func (s *Service) CancellationRequested(ctx context.Context, jobID uint) (bool, error) {
+	var job database.Job
+	if err := s.db.WithContext(ctx).Select("status").First(&job, jobID).Error; err != nil {
+		return false, err
+	}
+	return job.Status == StatusCancelRequested || job.Status == StatusCancelled, nil
+}
+
+func (s *Service) Cancelled(ctx context.Context, jobID uint) error {
+	now := time.Now().UTC()
+	return s.db.WithContext(ctx).
+		Model(&database.Job{}).
+		Where("id = ? AND status IN ?", jobID, []string{StatusRunning, StatusCancelRequested}).
+		Updates(map[string]any{
+			"status":        StatusCancelled,
+			"finished_at":   now,
+			"error_message": "cancelled by administrator",
+		}).Error
 }
 
 func (s *Service) ClaimNext(ctx context.Context) (database.Job, error) {
@@ -162,10 +230,11 @@ func (s *Service) claimNextOnce(ctx context.Context, now time.Time) (database.Jo
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job database.Job
-		if err := tx.
+		query := tx.
 			Where("status = ? AND available_at <= ?", StatusQueued, now).
-			Order("available_at asc, id asc").
-			First(&job).Error; err != nil {
+			Order(jobPriorityOrderClause()).
+			Order("available_at asc, id asc")
+		if err := query.First(&job).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNoAvailableJob
 			}
@@ -198,4 +267,12 @@ func (s *Service) claimNextOnce(ctx context.Context, now time.Time) (database.Jo
 	}
 
 	return claimed, nil
+}
+
+func jobPriorityOrderClause() string {
+	clause := "CASE kind"
+	for kind, priority := range jobKindPriority {
+		clause += fmt.Sprintf(" WHEN '%s' THEN %d", kind, priority)
+	}
+	return clause + " ELSE 4 END asc"
 }

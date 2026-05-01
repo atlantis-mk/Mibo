@@ -125,9 +125,17 @@ func (s *Service) UpsertFile(ctx context.Context, input UpsertFileInput) (databa
 		Container:         strings.TrimSpace(input.Container),
 		Status:            defaultString(input.Status, FileStatusAvailable),
 	}
+	if file.Status == FileStatusMissing {
+		now := time.Now().UTC()
+		file.MissingSince = &now
+	}
+	updateColumns := []string{"library_id", "stable_identity_key", "hashes_json", "size_bytes", "modified_at", "container", "status", "updated_at"}
+	if file.Status == FileStatusAvailable {
+		updateColumns = append(updateColumns, "missing_since")
+	}
 	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "storage_provider"}, {Name: "storage_path"}},
-		DoUpdates: clause.AssignmentColumns([]string{"library_id", "stable_identity_key", "hashes_json", "size_bytes", "modified_at", "container", "status", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns(updateColumns),
 	}).Create(&file).Error
 	if err != nil {
 		return database.InventoryFile{}, err
@@ -173,16 +181,6 @@ func (s *Service) LinkAssetToFile(ctx context.Context, input LinkAssetFileInput)
 		DoUpdates: clause.AssignmentColumns([]string{"updated_at"}),
 	}).Create(&link).Error
 	return link, err
-}
-
-func (s *Service) ListAssetItems(ctx context.Context, assetID uint) ([]database.AssetItem, error) {
-	var links []database.AssetItem
-	err := s.db.WithContext(ctx).
-		Where("asset_id = ?", assetID).
-		Order("segment_index asc").
-		Order("id asc").
-		Find(&links).Error
-	return links, err
 }
 
 func (s *Service) UnlinkAssetFromItem(ctx context.Context, assetID uint, itemID uint) error {

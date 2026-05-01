@@ -2,6 +2,7 @@ package progress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -74,6 +75,13 @@ func (s *Service) updateCatalog(ctx context.Context, userID uint, input UpdateIn
 	if duration == nil {
 		duration = item.RuntimeSeconds
 	}
+	policy, err := s.playbackPolicy(ctx, item.LibraryID)
+	if err != nil {
+		return State{}, err
+	}
+	if !input.Completed && !policy.shouldRecordResume(duration) {
+		return State{UserID: userID, ItemID: input.ItemID, AssetID: input.AssetID, DurationSeconds: duration, Watched: false}, nil
+	}
 
 	var data database.UserItemData
 	lookup := s.db.WithContext(ctx).Where("user_id = ? AND item_id = ?", userID, input.ItemID)
@@ -82,7 +90,7 @@ func (s *Service) updateCatalog(ctx context.Context, userID uint, input UpdateIn
 	} else {
 		lookup = lookup.Where("asset_id = ?", *input.AssetID)
 	}
-	err := lookup.First(&data).Error
+	err = lookup.First(&data).Error
 	created := false
 	if err != nil {
 		if err != gorm.ErrRecordNotFound {
@@ -93,7 +101,7 @@ func (s *Service) updateCatalog(ctx context.Context, userID uint, input UpdateIn
 	}
 
 	now := time.Now().UTC()
-	data = mergeCatalogProgress(data, input, duration, now)
+	data = mergeCatalogProgress(data, input, duration, now, policy)
 	if created {
 		if err := s.db.WithContext(ctx).Create(&data).Error; err != nil {
 			return State{}, err
@@ -107,8 +115,8 @@ func (s *Service) updateCatalog(ctx context.Context, userID uint, input UpdateIn
 	return toCatalogState(data, duration), nil
 }
 
-func mergeCatalogProgress(data database.UserItemData, input UpdateInput, duration *int, now time.Time) database.UserItemData {
-	completed := input.Completed || isCompleted(input.PositionSeconds, duration)
+func mergeCatalogProgress(data database.UserItemData, input UpdateInput, duration *int, now time.Time, policy playbackPolicy) database.UserItemData {
+	completed := input.Completed || policy.isCompleted(input.PositionSeconds, duration)
 	data.LastPlayedAt = &now
 	data.PlayedPercentage = playedPercentage(input.PositionSeconds, duration)
 	if input.AssetID != nil {
@@ -133,18 +141,61 @@ func mergeCatalogProgress(data database.UserItemData, input UpdateInput, duratio
 	return data
 }
 
+type playbackPolicy struct {
+	ResumeEnabled            bool
+	MinResumePct             int
+	MaxResumePct             int
+	MinResumeDurationSeconds int
+}
+
+func (s *Service) playbackPolicy(ctx context.Context, libraryID uint) (playbackPolicy, error) {
+	if err := database.EnsureLibraryPolicyDefaults(s.db.WithContext(ctx), libraryID); err != nil {
+		return playbackPolicy{}, err
+	}
+	var policy database.LibraryPlaybackPolicy
+	if err := s.db.WithContext(ctx).Where("library_id = ?", libraryID).First(&policy).Error; err != nil {
+		return playbackPolicy{}, err
+	}
+	return playbackPolicy{ResumeEnabled: policy.ResumeEnabled, MinResumePct: policy.MinResumePct, MaxResumePct: policy.MaxResumePct, MinResumeDurationSeconds: policy.MinResumeDurationSeconds}, nil
+}
+
+func (p playbackPolicy) shouldRecordResume(duration *int) bool {
+	if !p.ResumeEnabled {
+		return false
+	}
+	if duration == nil || *duration <= 0 {
+		return true
+	}
+	return *duration >= p.MinResumeDurationSeconds
+}
+
+func (p playbackPolicy) isCompleted(positionSeconds int, durationSeconds *int) bool {
+	if durationSeconds == nil || *durationSeconds <= 0 {
+		return false
+	}
+	threshold := *durationSeconds * p.MaxResumePct / 100
+	if threshold <= 0 {
+		threshold = *durationSeconds * 90 / 100
+	}
+	return positionSeconds >= threshold
+}
+
 func (s *Service) GetCatalogState(ctx context.Context, userID, itemID uint) (State, error) {
+	var item database.CatalogItem
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", itemID).
+		First(&item).Error; err != nil {
+		return State{}, err
+	}
+
 	var data database.UserItemData
 	if err := s.db.WithContext(ctx).
 		Where("user_id = ? AND item_id = ?", userID, itemID).
 		Order("last_played_at desc, id desc").
 		First(&data).Error; err != nil {
-		return State{}, err
-	}
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", itemID).
-		First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return State{UserID: userID, ItemID: itemID, DurationSeconds: item.RuntimeSeconds, Watched: false}, nil
+		}
 		return State{}, err
 	}
 	return toCatalogState(data, item.RuntimeSeconds), nil

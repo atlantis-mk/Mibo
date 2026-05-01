@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -33,6 +34,14 @@ type Runner struct {
 	settings *settings.Service
 	interval time.Duration
 	probeSem chan struct{}
+}
+
+type jobCancelledError struct {
+	jobID uint
+}
+
+func (e jobCancelledError) Error() string {
+	return fmt.Sprintf("job %d cancelled", e.jobID)
 }
 
 func NewRunner(cfg config.WorkerConfig, jobsSvc *jobs.Service, librarySvc *library.Service, metadataSvc *metadata.Service, probeSvc *probe.Service, settingsSvc *settings.Service, args ...any) *Runner {
@@ -90,38 +99,6 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 
-func (r *Runner) getRefreshInterval(ctx context.Context) time.Duration {
-	if r.settings != nil {
-		scanSettings, err := r.settings.GetScanSettings(ctx)
-		if err == nil && scanSettings.RefreshIntervalHours > 0 {
-			return time.Duration(scanSettings.RefreshIntervalHours) * time.Hour
-		}
-	}
-	if r.cfg.RefreshIntervalHours > 0 {
-		return time.Duration(r.cfg.RefreshIntervalHours) * time.Hour
-	}
-	return 0
-}
-
-func (r *Runner) triggerScheduledScans(ctx context.Context) {
-	libraries, err := r.library.ListActiveLibraries(ctx)
-	if err != nil {
-		log.Printf("worker: failed to list active libraries for scheduled scan: %v", err)
-		return
-	}
-	for _, lib := range libraries {
-		if _, err := r.library.QueueLibraryScan(ctx, lib.ID); err != nil {
-			log.Printf("worker: scheduled scan triggered for library %d: %v", lib.ID, err)
-		} else {
-			log.Printf("worker: scheduled scan triggered for library %d", lib.ID)
-		}
-	}
-}
-
-func (r *Runner) RunOnce(ctx context.Context) {
-	r.runOnce(ctx)
-}
-
 func (r *Runner) runOnce(ctx context.Context) {
 	r.enqueueDueSchedules(ctx)
 	r.ensureListenerReconcileCoverage(ctx)
@@ -146,13 +123,13 @@ func (r *Runner) runOnce(ctx context.Context) {
 			go func(probeJob database.Job) {
 				defer probeWG.Done()
 				defer func() { <-r.probeSem }()
-				r.finishJob(ctx, probeJob, r.handleJob(ctx, probeJob))
+				r.finishJob(ctx, probeJob, r.runCancellableJob(ctx, probeJob))
 			}(job)
 			continue
 		}
 
 		waitForProbes()
-		r.finishJob(ctx, job, r.handleJob(ctx, job))
+		r.finishJob(ctx, job, r.runCancellableJob(ctx, job))
 	}
 }
 
@@ -161,6 +138,15 @@ func (r *Runner) shouldRunProbeConcurrently(job database.Job) bool {
 }
 
 func (r *Runner) finishJob(ctx context.Context, job database.Job, err error) {
+	var cancelled jobCancelledError
+	if errors.As(err, &cancelled) {
+		log.Printf("worker: job %d (%s) cancelled", job.ID, job.Kind)
+		r.markScheduleRunFinished(ctx, job, schedule.StatusFailed, "cancelled by administrator")
+		if cancelErr := r.jobs.Cancelled(ctx, job.ID); cancelErr != nil {
+			log.Printf("worker: mark job %d cancelled: %v", job.ID, cancelErr)
+		}
+		return
+	}
 	if err != nil {
 		log.Printf("worker: job %d (%s) failed: %v", job.ID, job.Kind, err)
 		r.markScheduleRunFinished(ctx, job, schedule.StatusFailed, err.Error())
@@ -174,6 +160,47 @@ func (r *Runner) finishJob(ctx context.Context, job database.Job, err error) {
 		log.Printf("worker: mark job %d completed: %v", job.ID, err)
 	}
 	r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, "completed")
+}
+
+func (r *Runner) runCancellableJob(ctx context.Context, job database.Job) error {
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(750 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-jobCtx.Done():
+				return
+			case <-ticker.C:
+				requested, err := r.jobs.CancellationRequested(ctx, job.ID)
+				if err != nil {
+					log.Printf("worker: check job %d cancellation: %v", job.ID, err)
+					continue
+				}
+				if requested {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	err := r.handleJob(jobCtx, job)
+	cancel()
+	<-done
+	if errors.Is(err, context.Canceled) {
+		requested, checkErr := r.jobs.CancellationRequested(ctx, job.ID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if requested {
+			return jobCancelledError{jobID: job.ID}
+		}
+	}
+	return err
 }
 
 func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
@@ -197,20 +224,31 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 		if r.metadata == nil {
 			return nil
 		}
-		configured, err := r.metadata.CatalogMatchingConfigured(ctx)
-		if err != nil {
-			return err
-		}
-		if !configured {
-			return nil
-		}
 		var payload struct {
 			ItemID uint `json:"item_id"`
 		}
 		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
 			return err
 		}
-		return r.metadata.MatchCatalogItem(ctx, payload.ItemID)
+		_, err := r.metadata.MatchCatalogItemOperation(ctx, payload.ItemID)
+		return err
+	case library.JobKindCatalogMatchBatch:
+		if r.metadata == nil {
+			return nil
+		}
+		var payload library.CatalogMatchBatchPayload
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		for _, itemID := range payload.ItemIDs {
+			if itemID == 0 {
+				continue
+			}
+			if _, err := r.metadata.MatchCatalogItemOperation(ctx, itemID); err != nil {
+				return err
+			}
+		}
+		return nil
 	case library.JobKindCatalogRefreshItemProjection:
 		if r.catalog == nil {
 			return errors.New("catalog service unavailable")
@@ -240,26 +278,59 @@ func (r *Runner) handleJob(ctx context.Context, job database.Job) error {
 			return err
 		}
 		return r.probe.ProbeInventoryFile(ctx, payload.InventoryFileID)
+	case library.JobKindInventoryProbeBatch:
+		if r.probe == nil {
+			return errors.New("probe service unavailable")
+		}
+		var payload library.InventoryProbeBatchPayload
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		for _, fileID := range payload.FileIDs {
+			if fileID == 0 {
+				continue
+			}
+			if err := r.probe.ProbeInventoryFile(ctx, fileID); err != nil {
+				return err
+			}
+		}
+		return nil
+	case library.JobKindMissingMediaCleanup:
+		var payload library.MissingMediaCleanupPayload
+		if err := decodeJobPayload(job.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		_, err := r.library.RunMissingMediaCleanupJob(ctx, payload)
+		return err
 	case schedule.JobKindForSchedule(schedule.KindScan):
 		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
 		if err != nil {
 			return err
 		}
-		_, err = r.library.RunScheduledScan(ctx, due)
+		result, err := r.library.RunScheduledScan(ctx, due)
+		if err == nil {
+			r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, result.Summary)
+		}
 		return err
 	case schedule.JobKindForSchedule(schedule.KindLibraryCleanup):
 		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
 		if err != nil {
 			return err
 		}
-		_, err = r.library.RunScheduledCleanup(ctx, due)
+		result, err := r.library.RunScheduledCleanup(ctx, due)
+		if err == nil {
+			r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, result.Summary)
+		}
 		return err
 	case schedule.JobKindForSchedule(schedule.KindInvalidLinkCheck):
 		due, err := schedule.ParseSchedulePayload(job.PayloadJSON)
 		if err != nil {
 			return err
 		}
-		_, err = r.library.RunScheduledInvalidLinkCheck(ctx, due)
+		result, err := r.library.RunScheduledInvalidLinkCheck(ctx, due)
+		if err == nil {
+			r.markScheduleRunFinished(ctx, job, schedule.StatusCompleted, result.Summary)
+		}
 		return err
 	default:
 		return errors.New("unsupported job kind: " + job.Kind)

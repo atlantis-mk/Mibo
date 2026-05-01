@@ -29,14 +29,19 @@ type CatalogExternalIdentity struct {
 }
 
 type CatalogSourceEvidence struct {
-	SourceType string     `json:"source_type"`
-	SourceName string     `json:"source_name"`
-	Language   string     `json:"language,omitempty"`
-	ExternalID string     `json:"external_id,omitempty"`
-	Confidence *float64   `json:"confidence,omitempty"`
-	FetchedAt  time.Time  `json:"fetched_at"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
-	Summary    any        `json:"summary,omitempty"`
+	SourceType           string     `json:"source_type"`
+	SourceName           string     `json:"source_name"`
+	Language             string     `json:"language,omitempty"`
+	ExternalID           string     `json:"external_id,omitempty"`
+	MetadataProfileID    *uint      `json:"metadata_profile_id,omitempty"`
+	MetadataProfileName  string     `json:"metadata_profile_name,omitempty"`
+	ProviderInstanceID   *uint      `json:"provider_instance_id,omitempty"`
+	ProviderInstanceName string     `json:"provider_instance_name,omitempty"`
+	FallbackSummary      any        `json:"fallback_summary,omitempty"`
+	Confidence           *float64   `json:"confidence,omitempty"`
+	FetchedAt            time.Time  `json:"fetched_at"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	Summary              any        `json:"summary,omitempty"`
 }
 
 type CatalogFieldState struct {
@@ -217,6 +222,7 @@ type CatalogItemDetail struct {
 	ID                   uint                         `json:"id"`
 	LibraryID            uint                         `json:"library_id"`
 	Type                 string                       `json:"type"`
+	Path                 string                       `json:"path,omitempty"`
 	Title                string                       `json:"title"`
 	OriginalTitle        string                       `json:"original_title,omitempty"`
 	SortTitle            string                       `json:"sort_title,omitempty"`
@@ -224,6 +230,8 @@ type CatalogItemDetail struct {
 	Year                 *int                         `json:"year,omitempty"`
 	EndYear              *int                         `json:"end_year,omitempty"`
 	RuntimeSeconds       *int                         `json:"runtime_seconds,omitempty"`
+	IndexNumber          *int                         `json:"index_number,omitempty"`
+	ParentIndexNumber    *int                         `json:"parent_index_number,omitempty"`
 	CommunityRating      *float64                     `json:"community_rating,omitempty"`
 	OfficialRating       string                       `json:"official_rating,omitempty"`
 	SeriesStatus         string                       `json:"series_status,omitempty"`
@@ -317,33 +325,20 @@ type CatalogAssetDetail struct {
 }
 
 type CatalogGovernanceWorkspace struct {
-	ItemID              uint                            `json:"item_id"`
-	LibraryID           uint                            `json:"library_id"`
-	Type                string                          `json:"type"`
-	Title               string                          `json:"title"`
-	AvailabilityStatus  string                          `json:"availability_status"`
-	GovernanceStatus    string                          `json:"governance_status"`
-	SelectedImages      []CatalogSelectedImage          `json:"selected_images,omitempty"`
-	ImageCandidates     []CatalogSelectedImage          `json:"image_candidates,omitempty"`
-	ExternalIdentities  []CatalogExternalIdentity       `json:"external_identities,omitempty"`
-	SourceEvidence      []CatalogSourceEvidence         `json:"source_evidence"`
-	FieldStates         []CatalogFieldState             `json:"field_states"`
-	Assets              []CatalogAssetDetail            `json:"assets"`
-	RecommendedChildren []CatalogListItem               `json:"recommended_children"`
-	MetadataResult      *CatalogMetadataOperationResult `json:"metadata_result,omitempty"`
-}
-
-type CatalogMetadataOperationResult struct {
-	OriginItemID       uint   `json:"origin_item_id"`
-	TargetItemID       uint   `json:"target_item_id"`
-	TargetType         string `json:"target_type"`
-	Action             string `json:"action"`
-	DescendantStatus   string `json:"descendant_status,omitempty"`
-	DescendantItemID   *uint  `json:"descendant_item_id,omitempty"`
-	SeasonNumber       *int   `json:"season_number,omitempty"`
-	EpisodeNumber      *int   `json:"episode_number,omitempty"`
-	ProviderExternalID string `json:"provider_external_id,omitempty"`
-	Message            string `json:"message,omitempty"`
+	ItemID              uint                      `json:"item_id"`
+	LibraryID           uint                      `json:"library_id"`
+	Type                string                    `json:"type"`
+	Title               string                    `json:"title"`
+	AvailabilityStatus  string                    `json:"availability_status"`
+	GovernanceStatus    string                    `json:"governance_status"`
+	SelectedImages      []CatalogSelectedImage    `json:"selected_images,omitempty"`
+	ImageCandidates     []CatalogSelectedImage    `json:"image_candidates,omitempty"`
+	ExternalIdentities  []CatalogExternalIdentity `json:"external_identities,omitempty"`
+	SourceEvidence      []CatalogSourceEvidence   `json:"source_evidence"`
+	FieldStates         []CatalogFieldState       `json:"field_states"`
+	Assets              []CatalogAssetDetail      `json:"assets"`
+	RecommendedChildren []CatalogListItem         `json:"recommended_children"`
+	MetadataOperation   any                       `json:"metadata_operation,omitempty"`
 }
 
 type CatalogListItemInput struct {
@@ -447,6 +442,7 @@ func BuildCatalogItemDetail(input CatalogItemDetailInput) CatalogItemDetail {
 		ID:                   item.ID,
 		LibraryID:            item.LibraryID,
 		Type:                 normalizeCatalogType(item.Type),
+		Path:                 strings.TrimSpace(item.Path),
 		Title:                strings.TrimSpace(item.Title),
 		OriginalTitle:        strings.TrimSpace(item.OriginalTitle),
 		SortTitle:            strings.TrimSpace(item.SortTitle),
@@ -454,6 +450,8 @@ func BuildCatalogItemDetail(input CatalogItemDetailInput) CatalogItemDetail {
 		Year:                 item.Year,
 		EndYear:              item.EndYear,
 		RuntimeSeconds:       item.RuntimeSeconds,
+		IndexNumber:          item.IndexNumber,
+		ParentIndexNumber:    item.ParentIndexNumber,
 		CommunityRating:      item.CommunityRating,
 		OfficialRating:       strings.TrimSpace(item.OfficialRating),
 		SeriesStatus:         strings.TrimSpace(item.SeriesStatus),
@@ -737,17 +735,30 @@ func buildCatalogSourceEvidence(sources []database.MetadataSource) []CatalogSour
 	evidence := make([]CatalogSourceEvidence, 0, len(sources))
 	for _, source := range sources {
 		evidence = append(evidence, CatalogSourceEvidence{
-			SourceType: strings.TrimSpace(source.SourceType),
-			SourceName: strings.TrimSpace(source.SourceName),
-			Language:   strings.TrimSpace(source.Language),
-			ExternalID: strings.TrimSpace(source.ExternalID),
-			Confidence: source.Confidence,
-			FetchedAt:  source.FetchedAt,
-			ExpiresAt:  source.ExpiresAt,
-			Summary:    projectCatalogSourceSummary(source.PayloadJSON),
+			SourceType:           strings.TrimSpace(source.SourceType),
+			SourceName:           strings.TrimSpace(source.SourceName),
+			Language:             strings.TrimSpace(source.Language),
+			ExternalID:           strings.TrimSpace(source.ExternalID),
+			MetadataProfileID:    source.MetadataProfileID,
+			MetadataProfileName:  strings.TrimSpace(source.MetadataProfileName),
+			ProviderInstanceID:   source.ProviderInstanceID,
+			ProviderInstanceName: strings.TrimSpace(source.ProviderInstanceName),
+			FallbackSummary:      decodeCatalogSummaryPayload(source.FallbackSummaryJSON),
+			Confidence:           source.Confidence,
+			FetchedAt:            source.FetchedAt,
+			ExpiresAt:            source.ExpiresAt,
+			Summary:              projectCatalogSourceSummary(source.PayloadJSON),
 		})
 	}
 	return evidence
+}
+
+func decodeCatalogSummaryPayload(raw string) any {
+	decoded, ok := decodeCatalogJSONValue(raw)
+	if !ok {
+		return nil
+	}
+	return decoded
 }
 
 func buildCatalogFieldStates(states []database.MetadataFieldState) []CatalogFieldState {

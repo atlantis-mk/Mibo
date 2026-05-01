@@ -33,6 +33,7 @@ func (r *Router) serveGeneratedArtwork(w http.ResponseWriter, req *http.Request,
 		writeError(req.Context(), w, http.StatusNotFound, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "public, max-age=604800")
 	http.ServeFile(w, req, artworkPath)
 }
 

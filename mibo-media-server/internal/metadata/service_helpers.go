@@ -148,6 +148,41 @@ func extractEpisodeCast(episode seasonEpisodeResponse, cfg config.TMDBConfig, ma
 	return result
 }
 
+func extractSeasonCast(season seasonDetailResponse, cfg config.TMDBConfig, max int) []library.PersonDetail {
+	limit := len(season.Credits.Cast)
+	if max > 0 && limit > max {
+		limit = max
+	}
+	result := make([]library.PersonDetail, 0, limit)
+	for i := 0; i < limit; i++ {
+		member := season.Credits.Cast[i]
+		name := strings.TrimSpace(member.Name)
+		if name == "" {
+			continue
+		}
+		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Character), AvatarURL: imageURL(cfg, member.ProfilePath), TMDBPersonID: intPointerIfPositive(member.ID)})
+	}
+	return result
+}
+
+func extractSeasonDirectors(season seasonDetailResponse, cfg config.TMDBConfig) []library.PersonDetail {
+	result := make([]library.PersonDetail, 0, 2)
+	for _, member := range season.Credits.Crew {
+		if member.Job != "Director" && member.Department != "Directing" {
+			continue
+		}
+		name := strings.TrimSpace(member.Name)
+		if name == "" {
+			continue
+		}
+		result = append(result, library.PersonDetail{Name: name, Role: strings.TrimSpace(member.Job), AvatarURL: imageURL(cfg, member.ProfilePath), TMDBPersonID: intPointerIfPositive(member.ID)})
+		if len(result) == 4 {
+			return result
+		}
+	}
+	return result
+}
+
 func extractEpisodeDirectors(episode seasonEpisodeResponse, cfg config.TMDBConfig) []library.PersonDetail {
 	result := make([]library.PersonDetail, 0, 2)
 	for _, member := range episode.Crew {
@@ -387,6 +422,15 @@ func detailToCandidate(cfg config.TMDBConfig, mediaType string, detail detailRes
 		releaseDate = detail.FirstAirDate
 	}
 	return SearchCandidate{Provider: "tmdb", MediaType: mediaType, ExternalID: mediaType + ":" + strconv.Itoa(detail.ID), Title: title, OriginalTitle: originalTitle, Overview: detail.Overview, PosterURL: imageURL(cfg, detail.PosterPath), BackdropURL: imageURL(cfg, detail.BackdropPath), ReleaseDate: releaseDate, Year: parseYear(releaseDate), Confidence: confidence}
+}
+
+func sortSearchCandidates(candidates []SearchCandidate) {
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Confidence == candidates[j].Confidence {
+			return candidates[i].ExternalID < candidates[j].ExternalID
+		}
+		return candidates[i].Confidence > candidates[j].Confidence
+	})
 }
 
 func parseExternalID(value string) (string, int, error) {

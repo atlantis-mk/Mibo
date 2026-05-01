@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
+	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
@@ -56,12 +57,16 @@ func buildSidecarIndex(providerName string, objects []storage.Object) sidecarInd
 }
 
 func (idx sidecarIndex) matchesForVideo(videoPath string) []sidecarMatch {
+	return idx.matchesForVideoWithFolderMetadata(videoPath, false)
+}
+
+func (idx sidecarIndex) matchesForVideoWithFolderMetadata(videoPath string, allowFolderMetadata bool) []sidecarMatch {
 	base := sidecarBaseName(videoPath)
 	matches := make([]sidecarMatch, 0, len(idx.byBase[base])+len(idx.folderMeta))
 	for _, object := range idx.byBase[base] {
 		matches = append(matches, sidecarMatch{object: object, extension: sidecarExtension(object.Path), associationSource: "basename"})
 	}
-	if idx.videoCount == 1 {
+	if idx.videoCount == 1 || allowFolderMetadata {
 		for _, object := range idx.folderMeta {
 			if sidecarBaseName(object.Path) == base {
 				continue
@@ -98,11 +103,14 @@ func isFolderLevelMetadataName(base string, ext string) bool {
 	}
 }
 
-func (s *Service) applyCatalogScanSidecars(ctx context.Context, provider storage.Provider, artifact catalogScanArtifact, matches []sidecarMatch) catalogScanArtifact {
+func (s *Service) applyCatalogScanSidecars(ctx context.Context, provider storage.Provider, artifact catalogScanArtifact, matches []sidecarMatch, subtitlePolicy database.LibrarySubtitlePolicy) catalogScanArtifact {
 	for _, match := range matches {
 		sidecar := catalogScanSidecar{Path: strings.TrimSpace(match.object.Path), Extension: match.extension, AssociationSource: match.associationSource, SizeBytes: match.object.Size, ModifiedAt: match.object.Modified, StableIdentityKey: strings.TrimSpace(match.object.StableIdentity)}
 		switch match.extension {
 		case ".srt", ".ass":
+			if !subtitlePolicy.ExternalSidecarsEnabled {
+				continue
+			}
 			artifact.SubtitleSidecars = append(artifact.SubtitleSidecars, sidecar)
 		case ".nfo", ".json":
 			metadata := catalogScanMetadataSidecar{catalogScanSidecar: sidecar, ParseStatus: "skipped"}
@@ -119,12 +127,96 @@ func (s *Service) applyCatalogScanSidecars(ctx context.Context, provider storage
 				metadata.ParseStatus = "parsed"
 				metadata.Hints = hints
 				metadata.ExternalIDs = externalIDs
+				artifact.ExternalIDs = appendCatalogScanExternalIDs(artifact.ExternalIDs, catalogScanExternalIDsFromMap(artifact.ItemType, externalIDs)...)
 				artifact = applySidecarMetadataHints(artifact, hints)
 			}
 			artifact.MetadataSidecars = append(artifact.MetadataSidecars, metadata)
 		}
 	}
 	return artifact
+}
+
+func catalogScanExternalIDsFromMap(itemType string, externalIDs map[string]string) []catalogScanExternalID {
+	if len(externalIDs) == 0 {
+		return nil
+	}
+	providerType := catalogScanProviderType(itemType)
+	confidence := 1.0
+	result := make([]catalogScanExternalID, 0, len(externalIDs))
+	for provider, value := range externalIDs {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		value = strings.TrimSpace(value)
+		if provider == "" || value == "" {
+			continue
+		}
+		externalID := value
+		currentProviderType := providerType
+		switch provider {
+		case "tmdb":
+			if currentProviderType == "" {
+				continue
+			}
+			if !strings.Contains(value, ":") {
+				externalID = currentProviderType + ":" + value
+			}
+		case "metatube":
+			if !strings.HasPrefix(value, "metatube:") {
+				continue
+			}
+			currentProviderType = "movie"
+		default:
+			continue
+		}
+		result = append(result, catalogScanExternalID{Provider: provider, ProviderType: currentProviderType, ExternalID: externalID, Confidence: &confidence})
+	}
+	return result
+}
+
+func appendCatalogScanExternalIDs(existing []catalogScanExternalID, values ...catalogScanExternalID) []catalogScanExternalID {
+	seen := make(map[string]struct{}, len(existing)+len(values))
+	for _, value := range existing {
+		key := catalogScanExternalIDKey(value)
+		if key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	for _, value := range values {
+		key := catalogScanExternalIDKey(value)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		existing = append(existing, value)
+	}
+	return existing
+}
+
+func catalogScanExternalIDKey(value catalogScanExternalID) string {
+	provider := strings.TrimSpace(value.Provider)
+	providerType := strings.TrimSpace(value.ProviderType)
+	externalID := strings.TrimSpace(value.ExternalID)
+	if provider == "" || providerType == "" || externalID == "" {
+		return ""
+	}
+	return provider + "\x00" + providerType + "\x00" + externalID
+}
+
+func catalogScanProviderType(itemType string) string {
+	switch strings.TrimSpace(itemType) {
+	case catalog.ItemTypeMovie:
+		return "movie"
+	case catalog.ItemTypeSeries:
+		return "tv"
+	case catalog.ItemTypeSeason:
+		return "tv_season"
+	case catalog.ItemTypeEpisode:
+		return "tv_episode"
+	default:
+		return ""
+	}
 }
 
 func readSidecarMetadataContent(ctx context.Context, provider storage.Provider, object storage.Object) ([]byte, error) {

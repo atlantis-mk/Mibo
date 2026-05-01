@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by syncing change tvg-catalog-kernel-remaining. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Media discovery APIs read from catalog projections
 The system SHALL serve library lists, item detail, series season hierarchies, and home or discovery-style media responses from catalog-backed DTOs instead of legacy `MediaItem` query shapes.
 
@@ -186,3 +184,15 @@ The system SHALL include bound external sidecar subtitles in catalog asset detai
 #### Scenario: Detail item has no subtitles
 - **WHEN** a client requests item detail for a catalog item with no embedded or bound external subtitles
 - **THEN** the asset detail MUST remain valid and omit subtitle stream rows rather than fabricating unavailable subtitle placeholders
+
+### Requirement: Catalog APIs expose mixed-library results as standard media items
+The system SHALL expose items scanned from mixed content libraries through existing catalog movie and series response semantics without requiring clients to handle a new catalog item type.
+
+#### Scenario: Client browses a mixed content library
+- **WHEN** a client requests the item list for a mixed content library after scanning has produced movie and series catalog items
+- **THEN** the API SHALL return standard catalog list items for those movies and series with the same identity, availability, artwork, and child summary fields used by dedicated movie and show libraries
+
+#### Scenario: Client opens a mixed-library item detail
+- **WHEN** a client requests detail or playback for a movie or series produced from a mixed content library
+- **THEN** the API SHALL use the existing movie or series detail and playback contracts for that item type
+

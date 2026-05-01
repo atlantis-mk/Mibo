@@ -1,44 +1,112 @@
-import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
-import { HelpCircleIcon, KeyRoundIcon } from 'lucide-react'
+import { Link } from "@tanstack/react-router"
+import { lazy, Suspense, useState } from "react"
+import { HelpCircleIcon, KeyRoundIcon } from "lucide-react"
 
-import { Button } from '#/components/ui/button'
-import { Tabs, TabsList, TabsTrigger } from '#/components/ui/tabs'
-import ConsolePage from '#/features/console'
-import { useAuthStore } from '#/stores/auth-store'
+import { Button } from "#/components/ui/button"
+import { useAuthStore } from "#/stores/auth-store"
 
-import { DatabaseSettingsPanel } from './components/database-settings-panel'
-import { DeviceManagementPanel } from './components/device-management-panel'
-import { DlnaManagementPanel } from './components/dlna-management-panel'
-import { LibraryManagementPanel } from './components/library-management-panel'
-import { LiveTvSettingsPanel } from './components/live-tv-settings-panel'
-import { MetadataProviderSettingsPanel } from './components/metadata-provider-settings-panel'
-import { NetworkSettingsPanel } from './components/network-settings-panel'
-import {
-  GeneralSettingsPanel,
-  NotificationSettingsPanel,
-  SecuritySettingsPanel,
-} from './components/preference-panels'
-import { SettingsPageShell } from './components/settings-page-shell'
-import { TranscodingSettingsPanel } from './components/transcoding-settings-panel'
-import { UserManagementPanel } from './components/user-management-panel'
-import { SETTINGS_SECTIONS } from './sections'
+import { SettingsPageShell } from "./components/settings-page-shell"
+import { SETTINGS_SECTIONS } from "./sections"
+
+const ConsolePage = lazy(() => import("#/features/console"))
+const HealthCenter = lazy(() => import("#/features/health"))
+const GeneralSettingsPanel = lazy(() =>
+  import("./components/preference-panels").then((module) => ({
+    default: module.GeneralSettingsPanel,
+  }))
+)
+const NotificationSettingsPanel = lazy(() =>
+  import("./components/preference-panels").then((module) => ({
+    default: module.NotificationSettingsPanel,
+  }))
+)
+const SecuritySettingsPanel = lazy(() =>
+  import("./components/preference-panels").then((module) => ({
+    default: module.SecuritySettingsPanel,
+  }))
+)
+const UserManagementPanel = lazy(() =>
+  import("./components/user-management-panel").then((module) => ({
+    default: module.UserManagementPanel,
+  }))
+)
+const DeviceManagementPanel = lazy(() =>
+  import("./components/device-management-panel").then((module) => ({
+    default: module.DeviceManagementPanel,
+  }))
+)
+const DlnaManagementPanel = lazy(() =>
+  import("./components/dlna-management-panel").then((module) => ({
+    default: module.DlnaManagementPanel,
+  }))
+)
+const LibraryManagementPanel = lazy(() =>
+  import("./components/library-management-panel").then((module) => ({
+    default: module.LibraryManagementPanel,
+  }))
+)
+const ScanExclusionsPanel = lazy(() =>
+  import("./components/scan-exclusions-panel").then((module) => ({
+    default: module.ScanExclusionsPanel,
+  }))
+)
+const CleanupSettingsPanel = lazy(() =>
+  import("./components/cleanup-settings-panel").then((module) => ({
+    default: module.CleanupSettingsPanel,
+  }))
+)
+const TranscodingSettingsPanel = lazy(() =>
+  import("./components/transcoding-settings-panel").then((module) => ({
+    default: module.TranscodingSettingsPanel,
+  }))
+)
+const NetworkSettingsPanel = lazy(() =>
+  import("./components/network-settings-panel").then((module) => ({
+    default: module.NetworkSettingsPanel,
+  }))
+)
+const DatabaseSettingsPanel = lazy(() =>
+  import("./components/database-settings-panel").then((module) => ({
+    default: module.DatabaseSettingsPanel,
+  }))
+)
+const LiveTvSettingsPanel = lazy(() =>
+  import("./components/live-tv-settings-panel").then((module) => ({
+    default: module.LiveTvSettingsPanel,
+  }))
+)
+const MetadataProviderSettingsPanel = lazy(() =>
+  import("./components/metadata-provider-settings-panel").then((module) => ({
+    default: module.MetadataProviderSettingsPanel,
+  }))
+)
 
 export function SettingsGeneralPage() {
   return (
     <SettingsSectionPanel
       sectionKey="general"
-      panel={<GeneralSettingsPanel />}
+      panel={
+        <LazyPanel>
+          <GeneralSettingsPanel />
+        </LazyPanel>
+      }
     />
   )
 }
 
-export function SettingsConsolePage() {
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === 'console')
+export function SettingsHealthPage() {
+  return (
+    <SettingsNamedPage sectionKey="health">
+      <LazyPanel>
+        <HealthCenter />
+      </LazyPanel>
+    </SettingsNamedPage>
+  )
+}
 
-  if (!section) {
-    return null
-  }
+export function SettingsConsolePage() {
+  const section = SETTINGS_SECTIONS.find(({ key }) => key === "console")
+  if (!section) return null
 
   return (
     <SettingsPageShell
@@ -46,41 +114,27 @@ export function SettingsConsolePage() {
       title={section.title}
       description={section.description}
     >
-      <ConsolePage embedded />
+      <LazyPanel>
+        <ConsolePage embedded />
+      </LazyPanel>
     </SettingsPageShell>
   )
 }
 
 export function SettingsUsersPage() {
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === 'users')
-
-  if (!section) {
-    return null
-  }
-
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
-    >
-      <UserManagementPanel />
-    </SettingsPageShell>
+    <SettingsNamedPage sectionKey="users">
+      <LazyPanel>
+        <UserManagementPanel />
+      </LazyPanel>
+    </SettingsNamedPage>
   )
 }
 
 export function SettingsDevicesPage() {
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === 'devices')
-
-  if (!section) {
-    return null
-  }
-
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
+    <SettingsNamedPage
+      sectionKey="devices"
       actions={
         <Button variant="ghost" size="icon" className="rounded-full">
           <span className="sr-only">设备帮助</span>
@@ -88,23 +142,17 @@ export function SettingsDevicesPage() {
         </Button>
       }
     >
-      <DeviceManagementPanel />
-    </SettingsPageShell>
+      <LazyPanel>
+        <DeviceManagementPanel />
+      </LazyPanel>
+    </SettingsNamedPage>
   )
 }
 
 export function SettingsDlnaPage() {
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === 'dlna')
-
-  if (!section) {
-    return null
-  }
-
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
+    <SettingsNamedPage
+      sectionKey="dlna"
       actions={
         <Button variant="ghost" size="icon" className="rounded-full">
           <span className="sr-only">DLNA 帮助</span>
@@ -112,43 +160,75 @@ export function SettingsDlnaPage() {
         </Button>
       }
     >
-      <DlnaManagementPanel />
-    </SettingsPageShell>
+      <LazyPanel>
+        <DlnaManagementPanel />
+      </LazyPanel>
+    </SettingsNamedPage>
   )
 }
 
 export function SettingsLibraryPage() {
   const token = useAuthStore((state) => state.token)
   const [activeLibraryTab, setActiveLibraryTab] = useState<
-    'sources' | 'libraries'
-  >('sources')
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === 'library')
-
-  if (!section) {
-    return null
-  }
+    "sources" | "libraries"
+  >("sources")
 
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
+    <SettingsNamedPage
+      sectionKey="library"
       actions={
-        <Tabs
+        <SegmentedControl
           value={activeLibraryTab}
-          onValueChange={(value) =>
-            setActiveLibraryTab(value as 'sources' | 'libraries')
-          }
-        >
-          <TabsList>
-            <TabsTrigger value="sources">媒体源</TabsTrigger>
-            <TabsTrigger value="libraries">媒体库</TabsTrigger>
-          </TabsList>
-        </Tabs>
+          options={[
+            { value: "sources", label: "媒体源" },
+            { value: "libraries", label: "媒体库" },
+          ]}
+          onChange={setActiveLibraryTab}
+        />
       }
     >
-      <LibraryManagementPanel token={token} activeTab={activeLibraryTab} />
-    </SettingsPageShell>
+      <LazyPanel>
+        <LibraryManagementPanel token={token} activeTab={activeLibraryTab} />
+      </LazyPanel>
+    </SettingsNamedPage>
+  )
+}
+
+export function SettingsScanExclusionsPage() {
+  const token = useAuthStore((state) => state.token)
+  const [activeScanTab, setActiveScanTab] = useState<"rules" | "exclusions">(
+    "rules"
+  )
+
+  return (
+    <SettingsNamedPage
+      sectionKey="scan-exclusions"
+      actions={
+        <SegmentedControl
+          value={activeScanTab}
+          options={[
+            { value: "rules", label: "自动规则" },
+            { value: "exclusions", label: "排除项" },
+          ]}
+          onChange={setActiveScanTab}
+        />
+      }
+    >
+      <LazyPanel>
+        <ScanExclusionsPanel token={token} activeTab={activeScanTab} />
+      </LazyPanel>
+    </SettingsNamedPage>
+  )
+}
+
+export function SettingsCleanupPage() {
+  const token = useAuthStore((state) => state.token)
+  return (
+    <SettingsNamedPage sectionKey="cleanup">
+      <LazyPanel>
+        <CleanupSettingsPanel token={token} />
+      </LazyPanel>
+    </SettingsNamedPage>
   )
 }
 
@@ -156,16 +236,25 @@ export function SettingsPlaybackPage() {
   return (
     <SettingsSectionPanel
       sectionKey="playback"
-      panel={<TranscodingSettingsPanel />}
+      panel={
+        <LazyPanel>
+          <TranscodingSettingsPanel />
+        </LazyPanel>
+      }
     />
   )
 }
 
 export function SettingsNetworkPage() {
+  const token = useAuthStore((state) => state.token)
   return (
     <SettingsSectionPanel
       sectionKey="network"
-      panel={<NetworkSettingsPanel />}
+      panel={
+        <LazyPanel>
+          <NetworkSettingsPanel token={token} />
+        </LazyPanel>
+      }
     />
   )
 }
@@ -174,7 +263,11 @@ export function SettingsDatabasePage() {
   return (
     <SettingsSectionPanel
       sectionKey="database"
-      panel={<DatabaseSettingsPanel />}
+      panel={
+        <LazyPanel>
+          <DatabaseSettingsPanel />
+        </LazyPanel>
+      }
     />
   )
 }
@@ -183,7 +276,11 @@ export function SettingsLiveTvPage() {
   return (
     <SettingsSectionPanel
       sectionKey="live-tv"
-      panel={<LiveTvSettingsPanel />}
+      panel={
+        <LazyPanel>
+          <LiveTvSettingsPanel />
+        </LazyPanel>
+      }
     />
   )
 }
@@ -192,7 +289,11 @@ export function SettingsNotificationsPage() {
   return (
     <SettingsSectionPanel
       sectionKey="notifications"
-      panel={<NotificationSettingsPanel />}
+      panel={
+        <LazyPanel>
+          <NotificationSettingsPanel />
+        </LazyPanel>
+      }
     />
   )
 }
@@ -201,26 +302,21 @@ export function SettingsSecurityPage() {
   return (
     <SettingsSectionPanel
       sectionKey="security"
-      panel={<SecuritySettingsPanel />}
+      panel={
+        <LazyPanel>
+          <SecuritySettingsPanel />
+        </LazyPanel>
+      }
     />
   )
 }
 
 export function SettingsMetadataSourcesPage() {
   const token = useAuthStore((state) => state.token)
-  const section = SETTINGS_SECTIONS.find(
-    ({ key }) => key === 'metadata-sources',
-  )
-
-  if (!section) {
-    return null
-  }
 
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
+    <SettingsNamedPage
+      sectionKey="metadata-sources"
       actions={
         <Button asChild variant="outline">
           <Link to="/settings/metadata">
@@ -230,7 +326,33 @@ export function SettingsMetadataSourcesPage() {
         </Button>
       }
     >
-      <MetadataProviderSettingsPanel token={token} />
+      <LazyPanel>
+        <MetadataProviderSettingsPanel token={token} />
+      </LazyPanel>
+    </SettingsNamedPage>
+  )
+}
+
+function SettingsNamedPage({
+  sectionKey,
+  actions,
+  children,
+}: {
+  sectionKey: string
+  actions?: React.ReactNode
+  children: React.ReactNode
+}) {
+  const section = SETTINGS_SECTIONS.find(({ key }) => key === sectionKey)
+  if (!section) return null
+
+  return (
+    <SettingsPageShell
+      icon={section.icon}
+      title={section.title}
+      description={section.description}
+      actions={actions}
+    >
+      {children}
     </SettingsPageShell>
   )
 }
@@ -240,20 +362,17 @@ function SettingsSectionPanel({
   panel,
 }: {
   sectionKey:
-    | 'general'
-    | 'network'
-    | 'database'
-    | 'playback'
-    | 'notifications'
-    | 'security'
-    | 'live-tv'
+    | "general"
+    | "network"
+    | "database"
+    | "playback"
+    | "notifications"
+    | "security"
+    | "live-tv"
   panel: React.ReactNode
 }) {
   const section = SETTINGS_SECTIONS.find(({ key }) => key === sectionKey)
-
-  if (!section) {
-    return null
-  }
+  if (!section) return null
 
   return (
     <SettingsPageShell
@@ -263,5 +382,48 @@ function SettingsSectionPanel({
     >
       {panel}
     </SettingsPageShell>
+  )
+}
+
+function LazyPanel({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="rounded-[1.25rem] border border-border/60 bg-card/80 px-4 py-6 text-sm text-muted-foreground shadow-sm">
+          正在加载设置面板
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
+  )
+}
+
+function SegmentedControl<Value extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: Value
+  options: Array<{ value: Value; label: string }>
+  onChange: (value: Value) => void
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-border/60 bg-muted/30 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={`rounded-md px-3 py-1.5 text-sm transition ${
+            value === option.value
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   )
 }

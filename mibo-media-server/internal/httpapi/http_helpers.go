@@ -149,6 +149,10 @@ func codeForStatus(status int) string {
 		return "bad_request"
 	case http.StatusUnauthorized:
 		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
 	case http.StatusServiceUnavailable:
 		return "service_unavailable"
 	default:

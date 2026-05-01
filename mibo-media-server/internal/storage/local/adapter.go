@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/storage"
@@ -47,11 +48,13 @@ func (a *Adapter) List(_ context.Context, req storage.ListRequest) ([]storage.Ob
 		}
 		itemPath := filepath.Join(resolved, entry.Name())
 		object := storage.Object{
-			Name:   entry.Name(),
-			Path:   itemPath,
-			IsDir:  entry.IsDir(),
-			RawURL: itemPath,
+			Name:         entry.Name(),
+			Path:         itemPath,
+			IsDir:        entry.IsDir(),
+			RawURL:       itemPath,
+			ProviderMeta: localProviderMeta(info),
 		}
+		object.StableIdentity = localStableIdentity(info)
 		if !entry.IsDir() {
 			object.Size = info.Size()
 		}
@@ -94,11 +97,13 @@ func (a *Adapter) Get(_ context.Context, req storage.GetRequest) (storage.Object
 	}
 
 	object := storage.Object{
-		Name:   filepath.Base(resolved),
-		Path:   resolved,
-		IsDir:  info.IsDir(),
-		Size:   info.Size(),
-		RawURL: resolved,
+		Name:           filepath.Base(resolved),
+		Path:           resolved,
+		IsDir:          info.IsDir(),
+		Size:           info.Size(),
+		RawURL:         resolved,
+		StableIdentity: localStableIdentity(info),
+		ProviderMeta:   localProviderMeta(info),
 	}
 	modified := info.ModTime().UTC()
 	object.Modified = &modified
@@ -169,4 +174,23 @@ func isWithinRoot(rootPath, targetPath string) bool {
 		return false
 	}
 	return rel == "." || (!strings.HasPrefix(rel, "..") && rel != "..")
+}
+
+func localStableIdentity(info os.FileInfo) string {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return ""
+	}
+	return fmt.Sprintf("local:%d:%d", stat.Dev, stat.Ino)
+}
+
+func localProviderMeta(info os.FileInfo) map[string]string {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return nil
+	}
+	return map[string]string{
+		"device": fmt.Sprintf("%d", stat.Dev),
+		"inode":  fmt.Sprintf("%d", stat.Ino),
+	}
 }

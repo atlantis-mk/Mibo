@@ -100,6 +100,33 @@ func TestRecordStorageEventConcurrentDuplicatesKeepOneActiveIntent(t *testing.T)
 	}
 }
 
+func TestRecordStorageEventUpdatesStorageIndexHint(t *testing.T) {
+	t.Parallel()
+
+	svc, db, record := newListenerTestService(t)
+	ctx := context.Background()
+	pathValue := filepath.Join(record.RootPath, "Movies", "MovieA.2024.mkv")
+	if _, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "create", Path: pathValue}); err != nil {
+		t.Fatalf("record create event: %v", err)
+	}
+	var entry database.StorageIndexEntry
+	if err := db.WithContext(ctx).Where("library_id = ? AND storage_path = ?", record.ID, pathValue).First(&entry).Error; err != nil {
+		t.Fatalf("load storage index entry: %v", err)
+	}
+	if entry.ObservationStatus != "present" || entry.StorageProvider != "local" {
+		t.Fatalf("expected present local index hint, got %#v", entry)
+	}
+	if _, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "delete", Path: pathValue}); err != nil {
+		t.Fatalf("record delete event: %v", err)
+	}
+	if err := db.WithContext(ctx).First(&entry, entry.ID).Error; err != nil {
+		t.Fatalf("reload storage index entry: %v", err)
+	}
+	if entry.ObservationStatus != "missing" || entry.MissingSince == nil {
+		t.Fatalf("expected missing index hint, got %#v", entry)
+	}
+}
+
 func TestEnsureReconcileCoverageConcurrentCallsKeepOneActiveIntent(t *testing.T) {
 	t.Parallel()
 
@@ -308,6 +335,29 @@ func TestRunReconcileQueuesLibrarySyncAndReseedsNextWindow(t *testing.T) {
 	}
 	if reconcileJobs[0].AvailableAt.Sub(baseNow) != 6*time.Hour {
 		t.Fatalf("expected next reconcile 6h later, got %s", reconcileJobs[0].AvailableAt.Sub(baseNow))
+	}
+}
+
+func TestRecordStorageEventSkipsRefreshWhenRealtimePolicyDisabled(t *testing.T) {
+	svc, db, record := newListenerIntegrationService(t)
+	ctx := context.Background()
+	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", record.ID).Updates(map[string]any{"scanner_enabled": true, "realtime_monitor_enabled": false, "scheduled_refresh_enabled": true, "refresh_interval_hours": 24, "ignore_hidden_files": true, "ignore_file_extensions_json": `[]`, "configurable_exclusion_rules": true}).Error; err != nil {
+		t.Fatalf("disable realtime policy: %v", err)
+	}
+
+	job, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "update", Path: filepath.Join(record.RootPath, "Movies", "MovieA.2024.mkv")})
+	if err != nil {
+		t.Fatalf("record storage event: %v", err)
+	}
+	if job.ID != 0 {
+		t.Fatalf("expected no listener job when realtime is disabled, got %#v", job)
+	}
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.Job{}).Where("kind = ?", JobKindApplyStorageEventRefresh).Count(&count).Error; err != nil {
+		t.Fatalf("count listener jobs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no listener refresh jobs, got %d", count)
 	}
 }
 

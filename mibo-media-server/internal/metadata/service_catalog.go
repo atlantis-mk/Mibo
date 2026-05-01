@@ -10,82 +10,66 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
-	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/settings"
 	"gorm.io/gorm"
 )
 
 func (s *Service) MatchCatalogItem(ctx context.Context, itemID uint) error {
-	_, err := s.MatchCatalogItemWithResult(ctx, itemID)
+	_, err := s.MatchCatalogItemOperation(ctx, itemID)
 	return err
 }
 
-func (s *Service) MatchCatalogItemWithResult(ctx context.Context, itemID uint) (catalog.CatalogMetadataOperationResult, error) {
-	tmdbCfg, err := s.tmdbConfig(ctx)
+func (s *Service) MatchCatalogItemOperation(ctx context.Context, itemID uint) (MetadataOperationResult, error) {
+	operation, err := s.runMetadataOperation(ctx, MetadataOperationRequest{Operation: OperationTypeMatch, OriginItemID: itemID})
 	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
+		return MetadataOperationResult{}, err
 	}
-	if strings.TrimSpace(tmdbCfg.APIKey) == "" {
-		return catalog.CatalogMetadataOperationResult{}, fmt.Errorf("tmdb 未配置，无法匹配 catalog 元数据")
-	}
-
-	origin, err := s.loadCatalogMetadataOrigin(ctx, itemID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	target, err := s.resolveCatalogMatchTarget(ctx, itemID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-
-	mediaType := catalogTMDBMediaType(target.Type)
-	searchItem := catalogItemToSearchItem(target)
-	searchMatch, err := s.searchBestMatch(ctx, tmdbCfg, searchItem, mediaType)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	if searchMatch == nil {
-		if err := s.applyCatalogGovernanceStatus(ctx, target.ID, catalog.GovernanceUnmatched); err != nil {
-			return catalog.CatalogMetadataOperationResult{}, err
-		}
-		return s.buildCatalogMetadataOperationResult(ctx, origin, target, "match")
-	}
-
-	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, searchMatch.result.ID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-
-	if err := s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, searchMatch.confidence, false); err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	return s.buildCatalogMetadataOperationResult(ctx, origin, target, "match")
-}
-
-func (s *Service) CatalogMatchingConfigured(ctx context.Context) (bool, error) {
-	tmdbCfg, err := s.tmdbConfig(ctx)
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(tmdbCfg.APIKey) != "", nil
+	return operation, nil
 }
 
 func (s *Service) SearchCatalogCandidates(ctx context.Context, itemID uint, input ManualSearchInput) ([]SearchCandidate, error) {
-	tmdbCfg, err := s.tmdbConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(tmdbCfg.APIKey) == "" {
-		return nil, fmt.Errorf("tmdb 未配置，无法搜索 catalog 元数据")
-	}
-
 	target, err := s.resolveCatalogMatchTarget(ctx, itemID)
 	if err != nil {
 		return nil, err
 	}
+	profile, err := s.resolvedCatalogProfile(ctx, target.LibraryID)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := s.selectProviderForStage(profile, "search", "")
+	if err != nil {
+		return nil, err
+	}
+	if selection.Provider.Record.ID == 0 {
+		return nil, fmt.Errorf("当前媒体库没有可用于 search 阶段的远程元数据 provider")
+	}
+	tmdbCfg := selection.Provider.TMDB
+	if language := strings.TrimSpace(profile.PreferredMetadataLanguage); language != "" {
+		tmdbCfg.Language = language
+	}
 	mediaType := catalogTMDBMediaType(target.Type)
 	searchItem := catalogItemToSearchItem(target)
+	if selection.Provider.Record.ProviderType == database.MetadataProviderTypeMetaTube {
+		if mediaType != "movie" {
+			return nil, fmt.Errorf("MetaTube provider only supports movie catalog metadata")
+		}
+		if strings.TrimSpace(input.TMDBID) != "" || strings.TrimSpace(input.TVDBID) != "" {
+			return nil, fmt.Errorf("MetaTube search does not support tmdb_id or tvdb_id lookup")
+		}
+		queries := buildManualSearchQueries(input, searchItem, mediaType)
+		if len(queries) == 0 {
+			return nil, fmt.Errorf("标题不能为空")
+		}
+		results, attempt, err := s.executeMetaTubeSearchStage(ctx, selection.Provider, queries, searchItem)
+		if err != nil {
+			s.recordProviderFailure(ctx, selection.Provider, err)
+			return nil, err
+		}
+		_ = attempt
+		return searchCandidatesFromNormalized(results), nil
+	}
 
 	if tmdbID := strings.TrimSpace(input.TMDBID); tmdbID != "" {
 		id, err := strconv.Atoi(tmdbID)
@@ -94,6 +78,7 @@ func (s *Service) SearchCatalogCandidates(ctx context.Context, itemID uint, inpu
 		}
 		detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, id)
 		if err != nil {
+			s.recordProviderFailure(ctx, selection.Provider, err)
 			return nil, err
 		}
 		candidate := detailToCandidate(tmdbCfg, mediaType, detail, 1)
@@ -106,74 +91,41 @@ func (s *Service) SearchCatalogCandidates(ctx context.Context, itemID uint, inpu
 	if len(queries) == 0 {
 		return nil, fmt.Errorf("标题不能为空")
 	}
-	return s.searchCandidates(ctx, tmdbCfg, mediaType, queries, searchItem)
+	providerForSearch := selection.Provider
+	providerForSearch.TMDB = tmdbCfg
+	results, attempt, err := s.executeTMDBSearchStage(ctx, providerForSearch, mediaType, queries, searchItem)
+	if err != nil {
+		s.recordProviderFailure(ctx, selection.Provider, err)
+		return nil, err
+	}
+	_ = attempt
+	return searchCandidatesFromNormalized(results), nil
 }
 
 func (s *Service) ApplyCatalogCandidate(ctx context.Context, itemID uint, input ApplyCandidateInput) error {
-	tmdbCfg, err := s.tmdbConfig(ctx)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(tmdbCfg.APIKey) == "" {
-		return fmt.Errorf("tmdb 未配置，无法应用 catalog 元数据")
-	}
-
-	target, err := s.resolveCatalogMatchTarget(ctx, itemID)
-	if err != nil {
-		return err
-	}
-	mediaType, id, err := parseExternalID(input.ExternalID)
-	if err != nil {
-		return err
-	}
-	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, id)
-	if err != nil {
-		return err
-	}
-	return s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, 1, true)
-}
-
-func (s *Service) RefetchCatalogItem(ctx context.Context, itemID uint) error {
-	_, err := s.RefetchCatalogItemWithResult(ctx, itemID)
+	_, err := s.ApplyCatalogCandidateOperation(ctx, itemID, input)
 	return err
 }
 
-func (s *Service) RefetchCatalogItemWithResult(ctx context.Context, itemID uint) (catalog.CatalogMetadataOperationResult, error) {
-	tmdbCfg, err := s.tmdbConfig(ctx)
+func (s *Service) ApplyCatalogCandidateOperation(ctx context.Context, itemID uint, input ApplyCandidateInput) (MetadataOperationResult, error) {
+	operation, err := s.runMetadataOperation(ctx, MetadataOperationRequest{Operation: OperationTypeManualApply, OriginItemID: itemID, ManualCandidateExternalID: input.ExternalID})
 	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
+		return MetadataOperationResult{}, err
 	}
-	if strings.TrimSpace(tmdbCfg.APIKey) == "" {
-		return catalog.CatalogMetadataOperationResult{}, fmt.Errorf("tmdb 未配置，无法重抓 catalog 元数据")
-	}
+	return operation, nil
+}
 
-	origin, err := s.loadCatalogMetadataOrigin(ctx, itemID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	target, err := s.resolveCatalogMatchTarget(ctx, itemID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
+func (s *Service) RefetchCatalogItem(ctx context.Context, itemID uint) error {
+	_, err := s.RefetchCatalogItemOperation(ctx, itemID)
+	return err
+}
 
-	mediaType := catalogTMDBMediaType(target.Type)
-	externalID, confidence, err := s.loadCatalogTMDBIdentity(ctx, target.ID, mediaType)
+func (s *Service) RefetchCatalogItemOperation(ctx context.Context, itemID uint) (MetadataOperationResult, error) {
+	operation, err := s.runMetadataOperation(ctx, MetadataOperationRequest{Operation: OperationTypeRefetch, OriginItemID: itemID})
 	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
+		return MetadataOperationResult{}, err
 	}
-	_, tmdbID, err := parseExternalID(externalID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-
-	detail, err := s.fetchDetail(ctx, tmdbCfg, mediaType, tmdbID)
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	if err := s.applyCatalogDetail(ctx, target, tmdbCfg, mediaType, detail, confidence, false); err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	return s.buildCatalogMetadataOperationResult(ctx, origin, target, "refetch")
+	return operation, nil
 }
 
 func (s *Service) loadCatalogMetadataOrigin(ctx context.Context, itemID uint) (database.CatalogItem, error) {
@@ -202,20 +154,45 @@ func (s *Service) resolveCatalogMatchTarget(ctx context.Context, itemID uint) (d
 	return item, nil
 }
 
-func (s *Service) loadCatalogTMDBIdentity(ctx context.Context, itemID uint, mediaType string) (string, float64, error) {
+func (s *Service) loadCatalogTMDBIdentity(ctx context.Context, itemID uint, mediaType string) (string, string, float64, error) {
 	var identity database.CatalogExternalID
 	if err := s.db.WithContext(ctx).
 		Where("item_id = ? AND provider = ? AND provider_type = ?", itemID, "tmdb", mediaType).
 		Order("is_primary desc, id asc").
 		First(&identity).Error; err != nil {
-		return "", 0, fmt.Errorf("当前 catalog 条目没有可重抓的 TMDB 匹配结果: %w", err)
+		return "", "", 0, fmt.Errorf("当前 catalog 条目没有可重抓的 TMDB 匹配结果: %w", err)
 	}
 
 	confidence := 1.0
 	if identity.Confidence != nil && *identity.Confidence > 0 {
 		confidence = *identity.Confidence
 	}
-	return strings.TrimSpace(identity.ExternalID), confidence, nil
+	providerInstanceName := ""
+	var source database.MetadataSource
+	if err := s.db.WithContext(ctx).Where("item_id = ? AND external_id = ?", itemID, strings.TrimSpace(identity.ExternalID)).Order("id desc").First(&source).Error; err == nil {
+		providerInstanceName = strings.TrimSpace(source.ProviderInstanceName)
+	}
+	return providerInstanceName, strings.TrimSpace(identity.ExternalID), confidence, nil
+}
+
+func (s *Service) loadCatalogMetaTubeIdentity(ctx context.Context, itemID uint) (string, string, float64, error) {
+	var identity database.CatalogExternalID
+	if err := s.db.WithContext(ctx).
+		Where("item_id = ? AND provider = ?", itemID, database.MetadataProviderTypeMetaTube).
+		Order("is_primary desc, id asc").
+		First(&identity).Error; err != nil {
+		return "", "", 0, err
+	}
+	confidence := 1.0
+	if identity.Confidence != nil && *identity.Confidence > 0 {
+		confidence = *identity.Confidence
+	}
+	providerInstanceName := ""
+	var source database.MetadataSource
+	if err := s.db.WithContext(ctx).Where("item_id = ? AND source_name = ? AND external_id = ?", itemID, database.MetadataProviderTypeMetaTube, strings.TrimSpace(identity.ExternalID)).Order("id desc").First(&source).Error; err == nil {
+		providerInstanceName = strings.TrimSpace(source.ProviderInstanceName)
+	}
+	return providerInstanceName, strings.TrimSpace(identity.ExternalID), confidence, nil
 }
 
 func (s *Service) loadCatalogTMDBIdentityOptional(ctx context.Context, itemID uint, mediaType string) (string, bool, error) {
@@ -230,156 +207,6 @@ func (s *Service) loadCatalogTMDBIdentityOptional(ctx context.Context, itemID ui
 		return "", false, err
 	}
 	return strings.TrimSpace(identity.ExternalID), true, nil
-}
-
-func (s *Service) buildCatalogMetadataOperationResult(ctx context.Context, origin database.CatalogItem, target database.CatalogItem, action string) (catalog.CatalogMetadataOperationResult, error) {
-	result := catalog.CatalogMetadataOperationResult{
-		OriginItemID: origin.ID,
-		TargetItemID: target.ID,
-		TargetType:   target.Type,
-		Action:       action,
-	}
-	if origin.ID == 0 || origin.ID == target.ID || origin.Type != catalog.ItemTypeEpisode {
-		return result, nil
-	}
-	result.SeasonNumber = origin.ParentIndexNumber
-	result.EpisodeNumber = origin.IndexNumber
-	if origin.RootID == nil || *origin.RootID != target.ID || origin.ParentIndexNumber == nil || origin.IndexNumber == nil {
-		result.DescendantStatus = "hierarchy_mismatch"
-		result.Message = "Origin episode lacks complete series, season, or episode hierarchy context."
-		return result, nil
-	}
-
-	var slot database.CatalogItem
-	err := s.db.WithContext(ctx).
-		Where("root_id = ? AND type = ? AND parent_index_number = ? AND index_number = ? AND deleted_at IS NULL", target.ID, catalog.ItemTypeEpisode, *origin.ParentIndexNumber, *origin.IndexNumber).
-		Order("id asc").
-		First(&slot).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	if err == nil {
-		result.DescendantItemID = &slot.ID
-		if slot.ID != origin.ID {
-			result.DescendantStatus = "hierarchy_mismatch"
-			result.Message = "Provider slot resolved to a different catalog episode descendant."
-			return result, nil
-		}
-	}
-
-	externalID, ok, err := s.loadCatalogTMDBIdentityOptional(ctx, origin.ID, "tv_episode")
-	if err != nil {
-		return catalog.CatalogMetadataOperationResult{}, err
-	}
-	if !ok {
-		result.DescendantStatus = "provider_slot_missing"
-		result.Message = "Provider hierarchy did not return a matching episode slot for the opened episode."
-		return result, nil
-	}
-	result.ProviderExternalID = externalID
-	result.DescendantStatus = "identity_retained"
-	result.Message = "Opened episode retained a provider descendant identity after metadata sync."
-	return result, nil
-}
-
-func (s *Service) applyCatalogDetail(ctx context.Context, item database.CatalogItem, tmdbCfg config.TMDBConfig, mediaType string, detail detailResponse, confidence float64, forceSelectImages bool) error {
-	status := catalog.GovernanceMatched
-	if confidence < 0.85 {
-		status = catalog.GovernanceNeedsReview
-	}
-
-	title := strings.TrimSpace(detail.Title)
-	originalTitle := strings.TrimSpace(detail.OriginalTitle)
-	releaseDate := strings.TrimSpace(detail.ReleaseDate)
-	if mediaType == "tv" {
-		title = strings.TrimSpace(detail.Name)
-		originalTitle = strings.TrimSpace(detail.OriginalName)
-		releaseDate = strings.TrimSpace(detail.FirstAirDate)
-	}
-	year := parseYear(releaseDate)
-	runtimeSeconds := runtimeFromDetail(detail)
-	externalID := fmt.Sprintf("%s:%d", mediaType, detail.ID)
-
-	catalogSvc := catalog.NewService(s.db)
-	if title != "" {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "title", Value: title}); err != nil {
-			return err
-		}
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "sort_title", Value: title}); err != nil {
-			return err
-		}
-	}
-	if originalTitle != "" {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "original_title", Value: originalTitle}); err != nil {
-			return err
-		}
-	}
-	if overview := strings.TrimSpace(detail.Overview); overview != "" {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "overview", Value: overview}); err != nil {
-			return err
-		}
-	}
-	if year != nil {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "year", Value: *year}); err != nil {
-			return err
-		}
-	}
-	if runtimeSeconds != nil {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "runtime_seconds", Value: *runtimeSeconds}); err != nil {
-			return err
-		}
-	}
-	if err := s.applyCatalogGovernanceStatus(ctx, item.ID, status); err != nil {
-		return err
-	}
-	if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{
-		ItemID:       item.ID,
-		Provider:     "tmdb",
-		ProviderType: mediaType,
-		ExternalID:   externalID,
-		IsPrimary:    true,
-		Source:       "metadata_match",
-		Confidence:   &confidence,
-	}); err != nil {
-		return err
-	}
-
-	payloadJSON, err := json.Marshal(map[string]any{
-		"media_type":    mediaType,
-		"external_id":   externalID,
-		"confidence":    confidence,
-		"matched_title": title,
-	})
-	if err != nil {
-		return err
-	}
-	source, err := catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{
-		ItemID:      item.ID,
-		SourceType:  catalog.SourceTypeProvider,
-		SourceName:  "tmdb",
-		ExternalID:  externalID,
-		PayloadJSON: string(payloadJSON),
-		Confidence:  &confidence,
-	})
-	if err != nil {
-		return err
-	}
-	if err := s.syncCatalogDetailImages(ctx, item.ID, tmdbCfg, detail, forceSelectImages, &source.ID); err != nil {
-		return err
-	}
-	if err := s.syncCatalogPeople(ctx, item.ID, extractCast(detail, tmdbCfg, 8), extractDirectors(detail, tmdbCfg), &source.ID); err != nil {
-		return err
-	}
-	if err := catalogSvc.RefreshItemProjection(ctx, item.ID); err != nil {
-		return err
-	}
-	if mediaType == "tv" && item.Type == catalog.ItemTypeSeries {
-		if err := s.syncCatalogSeriesHierarchy(ctx, item, tmdbCfg, detail.ID, status, confidence, detail.Seasons, forceSelectImages); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (s *Service) applyCatalogGovernanceStatus(ctx context.Context, itemID uint, status string) error {
@@ -421,96 +248,6 @@ func catalogItemToSearchItem(item database.CatalogItem) metadataSearchItem {
 		searchItem.EpisodeNumber = item.IndexNumber
 	}
 	return searchItem
-}
-
-func (s *Service) syncCatalogSeriesHierarchy(ctx context.Context, seriesItem database.CatalogItem, tmdbCfg config.TMDBConfig, seriesTMDBID int, governanceStatus string, confidence float64, seasons []seasonSummary, forceSelectImages bool) error {
-	catalogSvc := catalog.NewService(s.db)
-	for _, seasonSummary := range seasons {
-		seasonItem, err := s.findOrCreateCatalogSeasonItem(ctx, catalogSvc, seriesItem, seasonSummary.SeasonNumber, seasonSummary.Name)
-		if err != nil {
-			return err
-		}
-		if err := s.applyCatalogHierarchyFields(ctx, catalogSvc, seasonItem.ID, seasonSummary.Name, seasonSummary.Overview, nil, nil, governanceStatus); err != nil {
-			return err
-		}
-		seasonSource, err := s.syncCatalogHierarchyIdentity(ctx, seasonItem.ID, "tv_season", seasonSummary.ID, confidence, map[string]any{
-			"media_type":     "tv_season",
-			"external_id":    tmdbExternalID(seasonSummary.ID),
-			"series_tmdb_id": seriesTMDBID,
-			"season_number":  seasonSummary.SeasonNumber,
-			"matched_title":  strings.TrimSpace(seasonSummary.Name),
-			"poster_path":    strings.TrimSpace(seasonSummary.PosterPath),
-		})
-		if err != nil {
-			return err
-		}
-		if err := s.upsertCatalogImageCandidate(ctx, seasonItem.ID, "poster", imageURL(tmdbCfg, seasonSummary.PosterPath), "", 0, true, forceSelectImages, &seasonSource.ID); err != nil {
-			return err
-		}
-
-		seasonDetail, err := s.fetchTVSeason(ctx, tmdbCfg, seriesTMDBID, seasonSummary.SeasonNumber)
-		if err != nil {
-			return err
-		}
-		for _, episode := range seasonDetail.Episodes {
-			releaseDate := strings.TrimSpace(episode.AirDate)
-			runtimeSeconds := runtimeSecondsFromMinutes(episode.Runtime)
-			episodeItem, err := s.findOrCreateCatalogEpisodeItem(ctx, catalogSvc, seasonItem, seasonSummary.SeasonNumber, episode.EpisodeNumber, episode.Name, releaseDate)
-			if err != nil {
-				return err
-			}
-			if err := s.applyCatalogHierarchyFields(ctx, catalogSvc, episodeItem.ID, episode.Name, episode.Overview, parseYear(releaseDate), runtimeSeconds, governanceStatus); err != nil {
-				return err
-			}
-			if airDate := parseProviderDate(releaseDate); airDate != nil {
-				if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: episodeItem.ID, FieldKey: "first_air_date", Value: *airDate}); err != nil {
-					return err
-				}
-			}
-			episodeSource, err := s.syncCatalogHierarchyIdentity(ctx, episodeItem.ID, "tv_episode", episode.ID, confidence, map[string]any{
-				"media_type":     "tv_episode",
-				"external_id":    tmdbExternalID(episode.ID),
-				"series_tmdb_id": seriesTMDBID,
-				"season_number":  seasonSummary.SeasonNumber,
-				"episode_number": episode.EpisodeNumber,
-				"matched_title":  strings.TrimSpace(episode.Name),
-				"air_date":       releaseDate,
-				"runtime":        episode.Runtime,
-				"overview":       strings.TrimSpace(episode.Overview),
-				"still_path":     strings.TrimSpace(episode.StillPath),
-			})
-			if err != nil {
-				return err
-			}
-			if err := s.upsertCatalogImageCandidate(ctx, episodeItem.ID, "still", imageURL(tmdbCfg, episode.StillPath), "", 0, true, forceSelectImages, &episodeSource.ID); err != nil {
-				return err
-			}
-			if err := s.syncCatalogPeople(ctx, episodeItem.ID, extractEpisodeCast(episode, tmdbCfg, 12), extractEpisodeDirectors(episode, tmdbCfg), &episodeSource.ID); err != nil {
-				return err
-			}
-			availability, err := s.resolveCatalogLeafAvailability(ctx, episodeItem.ID, releaseDate)
-			if err != nil {
-				return err
-			}
-			if err := s.updateCatalogAvailability(ctx, episodeItem.ID, availability); err != nil {
-				return err
-			}
-		}
-
-		seasonAvailability, err := s.resolveCatalogParentAvailability(ctx, seasonItem.ID)
-		if err != nil {
-			return err
-		}
-		if err := s.updateCatalogAvailability(ctx, seasonItem.ID, seasonAvailability); err != nil {
-			return err
-		}
-	}
-
-	seriesAvailability, err := s.resolveCatalogParentAvailability(ctx, seriesItem.ID)
-	if err != nil {
-		return err
-	}
-	return s.updateCatalogAvailability(ctx, seriesItem.ID, seriesAvailability)
 }
 
 func (s *Service) findOrCreateCatalogSeasonItem(ctx context.Context, catalogSvc *catalog.Service, seriesItem database.CatalogItem, seasonNumber int, title string) (database.CatalogItem, error) {
@@ -687,36 +424,50 @@ func loadCatalogPersonRecord(ctx context.Context, tx *gorm.DB, name string, tmdb
 	return tx.WithContext(ctx).Where("name = ?", name).First(record).Error
 }
 
-func (s *Service) applyCatalogHierarchyFields(ctx context.Context, catalogSvc *catalog.Service, itemID uint, title string, overview string, year *int, runtimeSeconds *int, governanceStatus string) error {
-	if strings.TrimSpace(title) != "" {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "title", Value: strings.TrimSpace(title)}); err != nil {
+func (s *Service) applyCatalogHierarchyFields(ctx context.Context, catalogSvc *catalog.Service, itemID uint, title string, overview string, year *int, runtimeSeconds *int, governanceStatus string, sourceID *uint, confidence *float64) ([]MetadataAppliedField, []MetadataSkippedField, error) {
+	applied := make([]MetadataAppliedField, 0, 6)
+	skipped := make([]MetadataSkippedField, 0)
+	apply := func(fieldKey string, value any) error {
+		_, didApply, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: fieldKey, Value: value, SourceID: sourceID})
+		if err != nil {
 			return err
 		}
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "sort_title", Value: strings.TrimSpace(title)}); err != nil {
-			return err
+		if !didApply {
+			skipped = append(skipped, MetadataSkippedField{ItemID: itemID, FieldKey: fieldKey, Reason: "not_applied"})
+			return nil
+		}
+		applied = append(applied, MetadataAppliedField{ItemID: itemID, FieldKey: fieldKey, SourceID: sourceID, ApplyMode: FieldApplyModeAutomated, Confidence: confidence})
+		return nil
+	}
+	if strings.TrimSpace(title) != "" {
+		if err := apply("title", strings.TrimSpace(title)); err != nil {
+			return nil, nil, err
+		}
+		if err := apply("sort_title", strings.TrimSpace(title)); err != nil {
+			return nil, nil, err
 		}
 	}
 	if strings.TrimSpace(overview) != "" {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "overview", Value: strings.TrimSpace(overview)}); err != nil {
-			return err
+		if err := apply("overview", strings.TrimSpace(overview)); err != nil {
+			return nil, nil, err
 		}
 	}
 	if year != nil {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "year", Value: *year}); err != nil {
-			return err
+		if err := apply("year", *year); err != nil {
+			return nil, nil, err
 		}
 	}
 	if runtimeSeconds != nil {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "runtime_seconds", Value: *runtimeSeconds}); err != nil {
-			return err
+		if err := apply("runtime_seconds", *runtimeSeconds); err != nil {
+			return nil, nil, err
 		}
 	}
 	if governanceStatus != "" {
-		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "governance_status", Value: governanceStatus}); err != nil {
-			return err
+		if err := apply("governance_status", governanceStatus); err != nil {
+			return nil, nil, err
 		}
 	}
-	return nil
+	return applied, skipped, nil
 }
 
 func (s *Service) resolveCatalogLeafAvailability(ctx context.Context, itemID uint, releaseDate string) (string, error) {
@@ -794,23 +545,7 @@ func firstNonEmptyCatalogValue(values ...string) string {
 	return ""
 }
 
-func (s *Service) syncCatalogDetailImages(ctx context.Context, itemID uint, tmdbCfg config.TMDBConfig, detail detailResponse, forceSelectImages bool, sourceID *uint) error {
-	if err := s.upsertCatalogImageCandidate(ctx, itemID, "poster", imageURL(tmdbCfg, detail.PosterPath), "", 0, true, forceSelectImages, sourceID); err != nil {
-		return err
-	}
-	if err := s.upsertCatalogImageCandidate(ctx, itemID, "backdrop", imageURL(tmdbCfg, detail.BackdropPath), "", 0, true, forceSelectImages, sourceID); err != nil {
-		return err
-	}
-	bestLogoPath := pickLogoPath(tmdbCfg.Language, detail.Images.Logos)
-	for idx, logo := range detail.Images.Logos {
-		if err := s.upsertCatalogImageCandidate(ctx, itemID, "logo", imageURL(tmdbCfg, logo.FilePath), strings.TrimSpace(logo.Language), idx, strings.TrimSpace(logo.FilePath) == strings.TrimSpace(bestLogoPath), forceSelectImages, sourceID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) syncCatalogHierarchyIdentity(ctx context.Context, itemID uint, providerType string, tmdbID int, confidence float64, payload map[string]any) (database.MetadataSource, error) {
+func (s *Service) syncCatalogHierarchyIdentity(ctx context.Context, itemID uint, profile settings.ResolvedLibraryMetadataProfile, provider settings.ResolvedMetadataProviderInstance, fallback []settings.MetadataExecutionFallbackSummary, providerType string, tmdbID int, confidence float64, payload map[string]any) (database.MetadataSource, error) {
 	if itemID == 0 || tmdbID <= 0 {
 		return database.MetadataSource{}, nil
 	}
@@ -827,6 +562,9 @@ func (s *Service) syncCatalogHierarchyIdentity(ctx context.Context, itemID uint,
 	}); err != nil {
 		return database.MetadataSource{}, err
 	}
+	if _, err := catalogSvc.SetIdentity(ctx, catalog.IdentityInput{ItemID: itemID, Provider: "tmdb", IdentityType: providerType, IdentityKey: externalID, Confidence: &confidence}); err != nil {
+		return database.MetadataSource{}, err
+	}
 	if payload == nil {
 		payload = map[string]any{}
 	}
@@ -835,12 +573,17 @@ func (s *Service) syncCatalogHierarchyIdentity(ctx context.Context, itemID uint,
 		return database.MetadataSource{}, err
 	}
 	source, err := catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{
-		ItemID:      itemID,
-		SourceType:  catalog.SourceTypeProvider,
-		SourceName:  "tmdb",
-		ExternalID:  externalID,
-		PayloadJSON: string(payloadJSON),
-		Confidence:  &confidence,
+		ItemID:               itemID,
+		SourceType:           catalog.SourceTypeProvider,
+		SourceName:           provider.Record.ProviderType,
+		ExternalID:           externalID,
+		MetadataProfileID:    &profile.Profile.ID,
+		MetadataProfileName:  profile.Profile.Name,
+		ProviderInstanceID:   &provider.Record.ID,
+		ProviderInstanceName: provider.Record.Name,
+		FallbackSummaryJSON:  mustMarshalFallbackSummary(fallback),
+		PayloadJSON:          string(payloadJSON),
+		Confidence:           &confidence,
 	})
 	if err != nil {
 		return database.MetadataSource{}, err
@@ -875,7 +618,11 @@ func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, 
 
 		selectByDefault := false
 		if preferSelected {
-			selectByDefault = forceSelected || shouldPreferCatalogSelectedImage(itemID, sameTypeImages)
+			shouldPrefer, err := s.shouldPreferCatalogSelectedImage(ctx, tx, itemID, sameTypeImages)
+			if err != nil {
+				return err
+			}
+			selectByDefault = forceSelected || shouldPrefer
 		}
 
 		now := time.Now().UTC()
@@ -918,16 +665,44 @@ func (s *Service) upsertCatalogImageCandidate(ctx context.Context, itemID uint, 
 	})
 }
 
-func shouldPreferCatalogSelectedImage(itemID uint, images []database.ItemImage) bool {
+func (s *Service) shouldPreferCatalogSelectedImage(ctx context.Context, tx *gorm.DB, itemID uint, images []database.ItemImage) (bool, error) {
+	scannerSourceIDs := make(map[uint]struct{})
+	for _, image := range images {
+		if image.IsSelected && image.SourceID != nil {
+			scannerSourceIDs[*image.SourceID] = struct{}{}
+		}
+	}
+	if len(scannerSourceIDs) > 0 {
+		ids := make([]uint, 0, len(scannerSourceIDs))
+		for id := range scannerSourceIDs {
+			ids = append(ids, id)
+		}
+		var sources []database.MetadataSource
+		if err := tx.WithContext(ctx).Where("id IN ?", ids).Find(&sources).Error; err != nil {
+			return false, err
+		}
+		scannerSourceIDs = make(map[uint]struct{}, len(sources))
+		for _, source := range sources {
+			if source.SourceType == catalog.SourceTypeLocalFile && source.SourceName == "scanner" {
+				scannerSourceIDs[source.ID] = struct{}{}
+			}
+		}
+	}
 	for _, image := range images {
 		if !image.IsSelected {
 			continue
 		}
-		if !isGeneratedCatalogArtworkURL(itemID, image.URL) {
-			return false
+		if isGeneratedCatalogArtworkURL(itemID, image.URL) {
+			continue
 		}
+		if image.SourceID != nil {
+			if _, ok := scannerSourceIDs[*image.SourceID]; ok {
+				continue
+			}
+		}
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 func isGeneratedCatalogArtworkURL(itemID uint, rawURL string) bool {

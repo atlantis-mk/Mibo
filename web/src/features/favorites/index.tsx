@@ -1,56 +1,31 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useQuery } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   HeartIcon,
   LoaderCircleIcon,
   SearchIcon,
   Settings2Icon,
-} from 'lucide-react'
+} from "lucide-react"
 
-import { AppTopBar } from '#/components/app-top-bar'
-import { MediaPosterCard } from '#/components/media-poster-card'
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
-import { SidebarTrigger } from '#/components/ui/sidebar'
-import type { CatalogListItem } from '#/lib/mibo-api'
-import {
-  createAuthedMiboApi,
-  favoritesQueryOptions,
-  miboQueryKeys,
-} from '#/lib/mibo-query'
-import { useAuthStore } from '#/stores/auth-store'
+import { AppTopBar } from "#/components/app-top-bar"
+import { MediaPosterCard } from "#/components/media-poster-card"
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
+import { SidebarTrigger } from "#/components/ui/sidebar"
+import { favoritesQueryOptions } from "#/lib/mibo-query"
+import { useAuthStore } from "#/stores/auth-store"
 
 export default function FavoritesPage() {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
 
   const favoritesQuery = useQuery({
     ...favoritesQueryOptions(queryToken),
     enabled: hasHydrated && !!token,
   })
-  const favoriteMutation = useMutation({
-    mutationFn: async ({
-      item,
-      favorite,
-    }: {
-      item: CatalogListItem
-      favorite: boolean
-    }) => {
-      if (!token) throw new Error('当前未登录，无法更新收藏。')
-      const api = createAuthedMiboApi(token)
-      return favorite ? api.addFavorite(item.id) : api.removeFavorite(item.id)
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: miboQueryKeys.favorites(queryToken),
-      })
-    },
-  })
-
   if (!hasHydrated || (token && favoritesQuery.isLoading)) {
     return (
       <div className="flex min-h-svh items-center justify-center bg-background text-foreground">
@@ -61,15 +36,14 @@ export default function FavoritesPage() {
 
   if (!token || !user) {
     void navigate({
-      to: '/login',
-      search: { redirect: '/favorites' },
+      to: "/login",
+      search: { redirect: "/favorites" },
       replace: true,
     })
     return null
   }
 
   const favorites = favoritesQuery.data ?? []
-  const favoriteIds = new Set(favorites.map((entry) => entry.item.id))
 
   return (
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
@@ -126,7 +100,7 @@ export default function FavoritesPage() {
         }
       />
 
-      <section className="px-4 pb-16 pt-24 sm:px-6 lg:px-8">
+      <section className="px-4 pt-24 pb-16 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-[1600px]">
           <div className="mb-8">
             <Badge
@@ -146,11 +120,7 @@ export default function FavoritesPage() {
                   key={entry.item.id}
                   item={entry.item}
                   progress={entry}
-                  isFavorite={favoriteIds.has(entry.item.id)}
-                  onFavoriteToggle={(item, favorite) =>
-                    favoriteMutation.mutate({ item, favorite })
-                  }
-                  className="w-full"
+                  layout="grid"
                 />
               ))}
             </div>

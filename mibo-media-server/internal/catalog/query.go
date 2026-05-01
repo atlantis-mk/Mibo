@@ -116,7 +116,8 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 	input = normalizeBrowseItemsInput(input)
 	db := s.db.WithContext(ctx).
 		Model(&database.CatalogItem{}).
-		Where("catalog_items.deleted_at IS NULL")
+		Where("catalog_items.deleted_at IS NULL").
+		Where("catalog_items.availability_status = ?", AvailabilityAvailable)
 	if input.LibraryID != 0 {
 		db = db.Where("catalog_items.library_id = ?", input.LibraryID)
 	}
@@ -279,6 +280,7 @@ func (s *Service) listItems(ctx context.Context, libraryID *uint, query string, 
 	db := s.db.WithContext(ctx).
 		Where("deleted_at IS NULL").
 		Where("parent_id IS NULL").
+		Where("availability_status = ?", AvailabilityAvailable).
 		Where("type IN ?", allowedTypes)
 	if libraryID != nil {
 		db = db.Where("library_id = ?", *libraryID)
@@ -677,10 +679,12 @@ func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]CatalogLi
 	}
 	var items []database.CatalogItem
 	if err := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL").
-		Where("parent_id IS NULL").
-		Where("type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
-		Order("created_at desc").Order("id desc").
+		Joins("JOIN libraries ON libraries.id = catalog_items.library_id AND libraries.status = ?", "active").
+		Where("catalog_items.deleted_at IS NULL").
+		Where("catalog_items.parent_id IS NULL").
+		Where("catalog_items.availability_status = ?", AvailabilityAvailable).
+		Where("catalog_items.type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
+		Order("catalog_items.created_at desc").Order("catalog_items.id desc").
 		Limit(limit).
 		Find(&items).Error; err != nil {
 		return nil, err
@@ -705,6 +709,7 @@ func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]Catalog
 		if err := s.db.WithContext(ctx).
 			Where("library_id = ? AND deleted_at IS NULL", library.ID).
 			Where("parent_id IS NULL").
+			Where("availability_status = ?", AvailabilityAvailable).
 			Where("type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
 			Order("created_at desc").Order("id desc").
 			Limit(limit).

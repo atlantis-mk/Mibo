@@ -35,34 +35,23 @@ func (s *Service) searchTMDB(ctx context.Context, cfg config.TMDBConfig, mediaTy
 	return response, nil
 }
 
-func (s *Service) findByExternalID(ctx context.Context, cfg config.TMDBConfig, mediaType, externalSource, externalID string) ([]searchResult, error) {
-	trimmedID := strings.TrimSpace(externalID)
-	if trimmedID == "" {
-		return nil, nil
-	}
-	params := url.Values{}
-	params.Set("external_source", strings.TrimSpace(externalSource))
-	params.Set("language", cfg.Language)
-	var response findResponse
-	if err := s.request(ctx, cfg, path.Join("find", trimmedID), params, &response); err != nil {
-		return nil, err
-	}
-	if mediaType == "tv" {
-		return response.TVResults, nil
-	}
-	return response.MovieResults, nil
-}
-
 func (s *Service) fetchDetail(ctx context.Context, cfg config.TMDBConfig, mediaType string, id int) (detailResponse, error) {
 	params := url.Values{}
 	params.Set("language", cfg.Language)
-	params.Set("append_to_response", "credits,images,videos")
+	params.Set("append_to_response", tmdbDetailAppendEndpoints(mediaType))
 	params.Set("include_image_language", imageLanguages(cfg.Language))
 	var detail detailResponse
 	if err := s.request(ctx, cfg, path.Join(mediaType, strconv.Itoa(id)), params, &detail); err != nil {
 		return detailResponse{}, err
 	}
 	return detail, nil
+}
+
+func tmdbDetailAppendEndpoints(mediaType string) string {
+	if strings.TrimSpace(mediaType) == "tv" {
+		return "credits,images,videos,keywords,content_ratings,external_ids"
+	}
+	return "credits,images,videos,keywords,release_dates,external_ids"
 }
 
 func (s *Service) fetchPersonDetail(ctx context.Context, cfg config.TMDBConfig, id int) (personDetailResponse, error) {
@@ -78,6 +67,7 @@ func (s *Service) fetchPersonDetail(ctx context.Context, cfg config.TMDBConfig, 
 func (s *Service) fetchTVSeason(ctx context.Context, cfg config.TMDBConfig, seriesTMDBID int, seasonNumber int) (seasonDetailResponse, error) {
 	params := url.Values{}
 	params.Set("language", cfg.Language)
+	params.Set("append_to_response", "credits,images,external_ids")
 	var detail seasonDetailResponse
 	if err := s.request(ctx, cfg, path.Join("tv", strconv.Itoa(seriesTMDBID), "season", strconv.Itoa(seasonNumber)), params, &detail); err != nil {
 		return seasonDetailResponse{}, err

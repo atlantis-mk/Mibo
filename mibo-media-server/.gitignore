@@ -1,2 +1,5 @@
 data/
 tmp/
+bin/
+internal/webui/dist/*
+!internal/webui/dist/placeholder.txt

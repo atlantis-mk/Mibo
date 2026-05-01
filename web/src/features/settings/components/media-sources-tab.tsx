@@ -10,18 +10,25 @@ import {
   CardTitle,
 } from '#/components/ui/card'
 import { Separator } from '#/components/ui/separator'
-import type { MediaSource } from '#/lib/mibo-api'
+import {
+  healthReasonMessage,
+  healthReasonTitle,
+  healthSeverityClassName,
+} from '#/lib/health-presentation'
+import type { HealthIssue, MediaSource } from '#/lib/mibo-api'
 
 import { EmptyCard, InfoRow } from './settings-aside-card'
 
 export function MediaSourcesTab({
   mediaSources,
+  healthIssues,
   isLoading,
   onCreate,
   onEdit,
   onDelete,
 }: {
   mediaSources: MediaSource[]
+  healthIssues: HealthIssue[]
   isLoading: boolean
   onCreate: () => void
   onEdit: (source: MediaSource) => void
@@ -44,11 +51,16 @@ export function MediaSourcesTab({
       <Separator className="bg-border" />
       <CardContent className="px-5 py-5">
         <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
-          {mediaSources.map((source) => (
-            <Card
-              key={source.id}
-              className="rounded-[1.25rem] border-border/60 bg-background/60 py-0 shadow-none"
-            >
+          {mediaSources.map((source) => {
+            const issue = healthIssues.find((entry) =>
+              entry.affected.media_sources.some((ref) => ref.id === source.id),
+            )
+
+            return (
+              <Card
+                key={source.id}
+                className="rounded-[1.25rem] border-border/60 bg-background/60 py-0 shadow-none"
+              >
               <CardHeader className="px-4 py-4">
                 <CardTitle className="flex items-center justify-between gap-3 text-base">
                   <span>{source.name}</span>
@@ -67,6 +79,19 @@ export function MediaSourcesTab({
               <CardContent className="space-y-3 px-4 py-4 text-sm text-muted-foreground">
                 <InfoRow label="根路径" value={source.root_path} />
                 <InfoRow label="来源类型" value={source.provider} />
+                {issue ? (
+                  <div className="rounded-[1rem] border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                    <Badge
+                      className={healthSeverityClassName(issue.severity)}
+                      variant="outline"
+                    >
+                      {healthReasonTitle(issue)}
+                    </Badge>
+                    <div className="mt-2 leading-6 text-foreground">
+                      {healthReasonMessage(issue)}
+                    </div>
+                  </div>
+                ) : null}
                 {source.provider === 'openlist' ? (
                   <InfoRow
                     label="OpenList 地址"
@@ -91,8 +116,9 @@ export function MediaSourcesTab({
                   </Button>
                 </div>
               </CardContent>
-            </Card>
-          ))}
+              </Card>
+            )
+          })}
 
           {!mediaSources.length && !isLoading ? (
             <EmptyCard text="还没有媒体源，点击上方按钮创建一个本地目录或 OpenList 来源。" />

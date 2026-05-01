@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { InfoIcon, UploadIcon } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { InfoIcon, LoaderCircleIcon, UploadIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
 import { Button } from '#/components/ui/button'
 import {
   Card,
@@ -29,8 +32,12 @@ import {
 import { Separator } from '#/components/ui/separator'
 import { Switch } from '#/components/ui/switch'
 import { Textarea } from '#/components/ui/textarea'
-
-const NETWORK_SETTINGS_STORAGE_KEY = 'mibo-web-network-settings'
+import type { NetworkSettings, NetworkSettingsInput } from '#/lib/mibo-api'
+import {
+  createAuthedMiboApi,
+  miboQueryKeys,
+  networkSettingsQueryOptions,
+} from '#/lib/mibo-query'
 
 type NetworkSettingsForm = {
   localNetworks: string
@@ -51,6 +58,7 @@ type NetworkSettingsForm = {
   maxVideoStreams: string
   remoteStreamingBitrateLimit: string
   networkRequestProtocol: string
+  clearCertificatePassword: boolean
 }
 
 const defaultNetworkSettings: NetworkSettingsForm = {
@@ -72,32 +80,49 @@ const defaultNetworkSettings: NetworkSettingsForm = {
   maxVideoStreams: 'unlimited',
   remoteStreamingBitrateLimit: 'unlimited',
   networkRequestProtocol: 'auto',
+  clearCertificatePassword: false,
 }
 
-export function NetworkSettingsPanel() {
+export function NetworkSettingsPanel({ token }: { token: string | null }) {
+  const queryClient = useQueryClient()
+  const networkQuery = useQuery({
+    ...networkSettingsQueryOptions(token ?? 'guest'),
+    enabled: !!token,
+  })
   const [draft, setDraft] = useState<NetworkSettingsForm>(
     defaultNetworkSettings,
   )
   const certificateInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    const savedSettings = window.localStorage.getItem(
-      NETWORK_SETTINGS_STORAGE_KEY,
-    )
-
-    if (!savedSettings) {
-      return
+    if (networkQuery.data) {
+      setDraft(networkSettingsToForm(networkQuery.data))
     }
+  }, [networkQuery.data])
 
-    try {
-      setDraft({
-        ...defaultNetworkSettings,
-        ...(JSON.parse(savedSettings) as Partial<NetworkSettingsForm>),
-      })
-    } catch {
-      window.localStorage.removeItem(NETWORK_SETTINGS_STORAGE_KEY)
-    }
-  }, [])
+  const saveMutation = useMutation({
+    mutationFn: async (nextDraft: NetworkSettingsForm) => {
+      if (!token) {
+        throw new Error('当前未登录，无法保存网络设置。')
+      }
+
+      return createAuthedMiboApi(token).updateNetworkSettings(
+        networkFormToInput(nextDraft),
+      )
+    },
+    onSuccess: (settings) => {
+      if (!token) {
+        return
+      }
+
+      queryClient.setQueryData(miboQueryKeys.networkSettings(token), settings)
+      setDraft(networkSettingsToForm(settings))
+      toast.success('网络设置已保存')
+    },
+    onError: (error: Error) => {
+      toast.error(error.message)
+    },
+  })
 
   function updateDraft<Value extends keyof NetworkSettingsForm>(
     key: Value,
@@ -120,12 +145,46 @@ export function NetworkSettingsPanel() {
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    window.localStorage.setItem(
-      NETWORK_SETTINGS_STORAGE_KEY,
-      JSON.stringify(draft),
-    )
-    toast.success('网络设置已保存')
+    saveMutation.mutate(draft)
   }
+
+  if (!token) {
+    return (
+      <Alert>
+        <InfoIcon className="size-4" />
+        <AlertTitle>登录后可管理网络设置</AlertTitle>
+        <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <span>当前页面需要管理员会话来读取和更新服务器网络配置。</span>
+          <Button asChild variant="outline" className="w-fit">
+            <Link to="/login" search={{ redirect: '/settings/network' }}>
+              前往登录
+            </Link>
+          </Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (networkQuery.isLoading) {
+    return (
+      <div className="flex items-center gap-3 rounded-[1.25rem] border border-border/60 bg-card/80 px-4 py-6 text-sm text-muted-foreground shadow-sm">
+        <LoaderCircleIcon className="size-4 animate-spin" />
+        正在加载网络设置
+      </div>
+    )
+  }
+
+  if (networkQuery.error) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>加载失败</AlertTitle>
+        <AlertDescription>{networkQuery.error.message}</AlertDescription>
+      </Alert>
+    )
+  }
+
+  const passwordConfigured =
+    networkQuery.data?.certificate_password.configured ?? false
 
   return (
     <Card className="rounded-[1.5rem] border-border/60 bg-card/80 py-0 shadow-sm backdrop-blur-sm">
@@ -140,10 +199,24 @@ export function NetworkSettingsPanel() {
         <div className="flex items-start gap-3 rounded-[1.15rem] border border-border/60 bg-muted/30 px-4 py-3 text-sm leading-6 text-muted-foreground">
           <InfoIcon className="mt-0.5 size-4 shrink-0" />
           <span>
-            当前网络设置先保存在本机浏览器，后续可与服务端设置表、监听端口和 TLS
-            配置打通。
+            网络设置会保存到服务器。监听端口、TLS
+            和部分播放限制保存后可能需要重启或后续运行时支持才会实际生效。
           </span>
         </div>
+
+        {networkQuery.data?.effective_status ? (
+          <div className="space-y-2 rounded-[1.15rem] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-900 dark:text-amber-100">
+            <p>{networkQuery.data.effective_status.message}</p>
+            <p>自动端口映射当前为配置项，尚未执行实际 UPnP / NAT-PMP 映射。</p>
+          </div>
+        ) : null}
+
+        {saveMutation.error ? (
+          <Alert variant="destructive">
+            <AlertTitle>保存失败</AlertTitle>
+            <AlertDescription>{saveMutation.error.message}</AlertDescription>
+          </Alert>
+        ) : null}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <FieldGroup>
@@ -341,14 +414,39 @@ export function NetworkSettingsPanel() {
                 type="password"
                 value={draft.certificatePassword}
                 onChange={(event) =>
-                  updateDraft('certificatePassword', event.target.value)
+                  setDraft((current) => ({
+                    ...current,
+                    certificatePassword: event.target.value,
+                    clearCertificatePassword: false,
+                  }))
                 }
-                placeholder="PKCS #12 证书密码"
+                placeholder={
+                  passwordConfigured
+                    ? '已配置，留空则保持当前密码'
+                    : 'PKCS #12 证书密码'
+                }
                 className="border-border/60 bg-background text-foreground placeholder:text-muted-foreground"
               />
               <FieldDescription>
-                如果自定义 SSL 证书需要密码，请在此填写。
+                密码只会写入服务器，不会在读取设置时回显。
+                {passwordConfigured ? ' 当前已有密码配置。' : ''}
               </FieldDescription>
+              {passwordConfigured ? (
+                <FormSwitchField
+                  title="清除已保存的证书密码"
+                  description="保存时删除服务器中已配置的证书密码。输入新密码会自动取消清除。"
+                  checked={draft.clearCertificatePassword}
+                  onCheckedChange={(checked) =>
+                    setDraft((current) => ({
+                      ...current,
+                      clearCertificatePassword: checked,
+                      certificatePassword: checked
+                        ? ''
+                        : current.certificatePassword,
+                    }))
+                  }
+                />
+              ) : null}
             </Field>
 
             <Field>
@@ -375,7 +473,7 @@ export function NetworkSettingsPanel() {
 
             <FormSwitchField
               title="启用自动端口映射"
-              description="通过 UPnP 尝试自动将本地端口映射到公网端口。仅在可信局域网中建议开启。"
+              description="保存自动端口映射偏好；实际 UPnP / NAT-PMP 映射尚未接入运行时。"
               checked={draft.automaticPortMapping}
               onCheckedChange={(checked) =>
                 updateDraft('automaticPortMapping', checked)
@@ -389,7 +487,7 @@ export function NetworkSettingsPanel() {
                 onValueChange={(value) => updateDraft('maxVideoStreams', value)}
               >
                 <SelectTrigger className="w-full border-border/60 bg-background text-foreground md:max-w-md">
-                  <SelectValue placeholder="选择并发上限" />
+                  <SelectValue placeholder="选择最大同步视频流" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="unlimited">无限制</SelectItem>
@@ -413,7 +511,7 @@ export function NetworkSettingsPanel() {
                 }
               >
                 <SelectTrigger className="w-full border-border/60 bg-background text-foreground md:max-w-md">
-                  <SelectValue placeholder="选择码率限制" />
+                  <SelectValue placeholder="选择比特率限制" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="unlimited">无限制</SelectItem>
@@ -437,7 +535,7 @@ export function NetworkSettingsPanel() {
                 }
               >
                 <SelectTrigger className="w-full border-border/60 bg-background text-foreground md:max-w-md">
-                  <SelectValue placeholder="选择请求协议" />
+                  <SelectValue placeholder="选择网络请求协议" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="auto">自动</SelectItem>
@@ -456,8 +554,9 @@ export function NetworkSettingsPanel() {
             type="submit"
             size="lg"
             className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
+            disabled={saveMutation.isPending}
           >
-            保存
+            {saveMutation.isPending ? '正在保存...' : '保存'}
           </Button>
         </form>
       </CardContent>
@@ -522,4 +621,68 @@ function FormSwitchField({
       </FieldContent>
     </Field>
   )
+}
+
+function networkSettingsToForm(settings: NetworkSettings): NetworkSettingsForm {
+  return {
+    localNetworks: listToText(settings.local_networks),
+    localIpAddress: settings.local_ip_address,
+    localHttpPort: String(settings.local_http_port),
+    localHttpsPort: String(settings.local_https_port),
+    allowRemoteAccess: settings.allow_remote_access,
+    remoteIpFilter: listToText(settings.remote_ip_filter),
+    remoteIpFilterMode: settings.remote_ip_filter_mode,
+    publicHttpPort: String(settings.public_http_port),
+    publicHttpsPort: String(settings.public_https_port),
+    externalDomain: settings.external_domain,
+    trustProxyHeaders: settings.trust_proxy_headers,
+    sslCertificatePath: settings.ssl_certificate_path,
+    certificatePassword: '',
+    secureConnectionMode: settings.secure_connection_mode,
+    automaticPortMapping: settings.automatic_port_mapping,
+    maxVideoStreams: settings.max_video_streams,
+    remoteStreamingBitrateLimit: settings.remote_streaming_bitrate_limit,
+    networkRequestProtocol: settings.network_request_protocol,
+    clearCertificatePassword: false,
+  }
+}
+
+function networkFormToInput(draft: NetworkSettingsForm): NetworkSettingsInput {
+  return {
+    local_networks: textToList(draft.localNetworks),
+    local_ip_address: draft.localIpAddress.trim(),
+    local_http_port: Number(draft.localHttpPort),
+    local_https_port: Number(draft.localHttpsPort),
+    allow_remote_access: draft.allowRemoteAccess,
+    remote_ip_filter: textToList(draft.remoteIpFilter),
+    remote_ip_filter_mode:
+      draft.remoteIpFilterMode as NetworkSettingsInput['remote_ip_filter_mode'],
+    public_http_port: Number(draft.publicHttpPort),
+    public_https_port: Number(draft.publicHttpsPort),
+    external_domain: draft.externalDomain.trim(),
+    trust_proxy_headers: draft.trustProxyHeaders,
+    ssl_certificate_path: draft.sslCertificatePath.trim(),
+    certificate_password: draft.certificatePassword,
+    clear_certificate_password: draft.clearCertificatePassword,
+    secure_connection_mode:
+      draft.secureConnectionMode as NetworkSettingsInput['secure_connection_mode'],
+    automatic_port_mapping: draft.automaticPortMapping,
+    max_video_streams:
+      draft.maxVideoStreams as NetworkSettingsInput['max_video_streams'],
+    remote_streaming_bitrate_limit:
+      draft.remoteStreamingBitrateLimit as NetworkSettingsInput['remote_streaming_bitrate_limit'],
+    network_request_protocol:
+      draft.networkRequestProtocol as NetworkSettingsInput['network_request_protocol'],
+  }
+}
+
+function listToText(values: string[] | null | undefined) {
+  return (values ?? []).join('\n')
+}
+
+function textToList(value: string) {
+  return value
+    .split('\n')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
 }

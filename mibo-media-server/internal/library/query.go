@@ -85,8 +85,10 @@ type TrailerDetail struct {
 
 type LibraryDetail struct {
 	database.Library
-	CatalogItemsCount   int64 `json:"catalog_items_count"`
-	InventoryFilesCount int64 `json:"inventory_files_count"`
+	CatalogItemsCount   int64               `json:"catalog_items_count"`
+	InventoryFilesCount int64               `json:"inventory_files_count"`
+	Paths               []LibraryPathView   `json:"paths"`
+	Policies            LibraryPoliciesView `json:"policies"`
 }
 
 type TrackDetail struct {

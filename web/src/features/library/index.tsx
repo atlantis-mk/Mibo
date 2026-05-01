@@ -1,12 +1,10 @@
-import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useMemo, useRef, useState } from "react"
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   ArrowDownAZIcon,
   ArrowUpAZIcon,
   CastIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   FilterIcon,
   HeartIcon,
   HomeIcon,
@@ -15,20 +13,22 @@ import {
   SearchIcon,
   Settings2Icon,
   UserCircleIcon,
-} from 'lucide-react'
+} from "lucide-react"
 
-import { AppTopBar } from '#/components/app-top-bar'
-import { MediaPosterCard } from '#/components/media-poster-card'
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
+import { AppTopBar } from "#/components/app-top-bar"
+import { MediaPosterCard } from "#/components/media-poster-card"
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '#/components/ui/dialog'
+} from "#/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,45 +36,46 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
-import { SidebarTrigger } from '#/components/ui/sidebar'
+} from "#/components/ui/dropdown-menu"
+import { ScrollArea } from "#/components/ui/scroll-area"
+import { SidebarTrigger } from "#/components/ui/sidebar"
 import {
   DiscoveryControls,
   createDefaultDiscoveryFilters,
   type DiscoveryFilters,
-} from '#/features/discovery/controls'
-import type { CatalogListItem, CatalogUserItemEntry } from '#/lib/mibo-api'
-import { formatMediaCardTitle } from '#/lib/media-presentation'
+} from "#/features/discovery/controls"
 import {
   createAuthedMiboApi,
   favoritesQueryOptions,
   miboQueryKeys,
-} from '#/lib/mibo-query'
-import { useAuthStore } from '#/stores/auth-store'
+} from "#/lib/mibo-query"
+import type { CatalogListItem } from "#/lib/mibo-api"
+import { cn } from "#/lib/utils"
+import { useAuthStore } from "#/stores/auth-store"
 
 const PAGE_SIZE = 60
 
 type LibraryTab =
-  | 'programs'
-  | 'recommended'
-  | 'trailers'
-  | 'favorites'
-  | 'genres'
-  | 'tags'
-  | 'platforms'
-  | 'episodes'
-  | 'folders'
+  | "programs"
+  | "recommended"
+  | "trailers"
+  | "favorites"
+  | "genres"
+  | "tags"
+  | "platforms"
+  | "episodes"
+  | "folders"
 
 const LIBRARY_TABS: Array<{ value: LibraryTab; label: string }> = [
-  { value: 'programs', label: '节目' },
-  { value: 'recommended', label: '推荐' },
-  { value: 'trailers', label: '预告' },
-  { value: 'favorites', label: '收藏' },
-  { value: 'genres', label: '类型' },
-  { value: 'tags', label: '标签' },
-  { value: 'platforms', label: '播出平台' },
-  { value: 'episodes', label: '集' },
-  { value: 'folders', label: '文件夹' },
+  { value: "programs", label: "节目" },
+  { value: "recommended", label: "推荐" },
+  { value: "trailers", label: "预告" },
+  { value: "favorites", label: "收藏" },
+  { value: "genres", label: "类型" },
+  { value: "tags", label: "标签" },
+  { value: "platforms", label: "播出平台" },
+  { value: "episodes", label: "集" },
+  { value: "folders", label: "文件夹" },
 ]
 
 export default function LibraryDetail({ libraryId }: { libraryId: number }) {
@@ -83,23 +84,38 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
   const clearSession = useAuthStore((state) => state.clearSession)
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
   const hasValidLibraryId = Number.isFinite(libraryId) && libraryId > 0
   const [filters, setFiltersState] = useState(
-    createDefaultDiscoveryFilters({ sort: 'title', sortDirection: 'asc' }),
+    createDefaultDiscoveryFilters({ sort: "title", sortDirection: "asc" })
   )
-  const [activeTab, setActiveTab] = useState<LibraryTab>('programs')
-  const [showFilters, setShowFilters] = useState(false)
-  const [page, setPage] = useState(0)
+  const [filterDraft, setFilterDraft] = useState(filters)
+  const [activeTab, setActiveTab] = useState<LibraryTab>("programs")
+  const [filterDialogOpen, setFilterDialogOpen] = useState(false)
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
 
   const setFilters = (next: DiscoveryFilters) => {
-    setPage(0)
     setFiltersState(next)
+    setFilterDraft(next)
+  }
+
+  const setFilterDialogOpenState = (open: boolean) => {
+    if (open) setFilterDraft(filters)
+    setFilterDialogOpen(open)
+  }
+
+  const applyFilterDraft = () => {
+    setFilters(filterDraft)
+    setFilterDialogOpen(false)
+  }
+
+  const resetFilterDraft = () => {
+    setFilterDraft(
+      createDefaultDiscoveryFilters({ sort: "title", sortDirection: "asc" })
+    )
   }
 
   const selectTab = (tab: LibraryTab) => {
-    setPage(0)
     setActiveTab(tab)
   }
 
@@ -107,30 +123,31 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
     queryKey: miboQueryKeys.libraryDetail(queryToken, libraryId),
     enabled: hasHydrated && !!token && hasValidLibraryId,
     queryFn: async () => {
-      if (!token) throw new Error('当前未登录，无法加载媒体库。')
+      if (!token) throw new Error("当前未登录，无法加载媒体库。")
       return createAuthedMiboApi(token).getLibrary(libraryId)
     },
   })
-  const browseQuery = useQuery({
+  const browseQuery = useInfiniteQuery({
     queryKey: miboQueryKeys.libraryBrowse(
       queryToken,
       libraryId,
       activeTab,
       filters,
-      page,
+      -1
     ),
     enabled:
       hasHydrated &&
       !!token &&
       hasValidLibraryId &&
-      (activeTab === 'programs' || activeTab === 'episodes'),
-    queryFn: async () => {
-      if (!token) throw new Error('当前未登录，无法加载媒体库内容。')
+      (activeTab === "programs" || activeTab === "episodes"),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      if (!token) throw new Error("当前未登录，无法加载媒体库内容。")
       return createAuthedMiboApi(token).discoverMedia({
-        scope: 'library',
+        scope: "library",
         library_id: libraryId,
         q: filters.q.trim() || undefined,
-        type: activeTab === 'episodes' ? 'episode' : filters.type,
+        type: activeTab === "episodes" ? "episode" : filters.type,
         genre: filters.genre.trim() || undefined,
         region: filters.region.trim() || undefined,
         year: parseOptionalInt(filters.year),
@@ -139,66 +156,47 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
         sort: filters.sort,
         sort_direction: filters.sortDirection,
         limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
+        offset: pageParam * PAGE_SIZE,
       })
     },
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.has_more ? pages.length : undefined,
   })
   const favoritesQuery = useQuery({
     ...favoritesQueryOptions(queryToken),
     enabled: hasHydrated && !!token,
   })
-  const favoriteMutation = useMutation({
-    mutationFn: async ({
-      item,
-      favorite,
-    }: {
-      item: CatalogListItem
-      favorite: boolean
-    }) => {
-      if (!token) throw new Error('当前未登录，无法更新收藏。')
-      const api = createAuthedMiboApi(token)
-      return favorite ? api.addFavorite(item.id) : api.removeFavorite(item.id)
-    },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: miboQueryKeys.favorites(queryToken),
-        }),
-        queryClient.invalidateQueries({ queryKey: ['library', 'browse'] }),
-      ])
-    },
-  })
-
   const libraryFavorites = useMemo(
     () =>
       (favoritesQuery.data ?? []).filter(
-        (entry) => entry.item.library_id === libraryId,
+        (entry) => entry.item.library_id === libraryId
       ),
-    [favoritesQuery.data, libraryId],
+    [favoritesQuery.data, libraryId]
   )
-  const favoriteIds = useMemo(
-    () => new Set((favoritesQuery.data ?? []).map((entry) => entry.item.id)),
-    [favoritesQuery.data],
+  const isBrowseTab = activeTab === "programs" || activeTab === "episodes"
+  const browseItems = useMemo(
+    () => browseQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [browseQuery.data]
   )
-  const progressByItemId = useMemo(
-    () => new Map(libraryFavorites.map((entry) => [entry.item.id, entry])),
-    [libraryFavorites],
-  )
-
-  const isBrowseTab = activeTab === 'programs' || activeTab === 'episodes'
   const items =
-    activeTab === 'favorites'
+    activeTab === "favorites"
       ? libraryFavorites.map((entry) => entry.item)
-      : (browseQuery.data?.items ?? [])
+      : browseItems
   const total =
-    activeTab === 'favorites' ? items.length : (browseQuery.data?.total ?? 0)
-  const hasMore = isBrowseTab ? (browseQuery.data?.has_more ?? false) : false
-  const pageCount = isBrowseTab ? Math.max(1, Math.ceil(total / PAGE_SIZE)) : 1
-  const movieCount = items.filter((item) => item.type === 'movie').length
-  const showCount = items.filter((item) => item.type !== 'movie').length
-  const sections = useMemo(() => buildTitleSections(items), [items])
-  const showQuickIndex =
-    filters.sort === 'title' && isBrowseTab && sections.length > 2
+    activeTab === "favorites"
+      ? items.length
+      : (browseQuery.data?.pages[0]?.total ?? 0)
+  const hasMore = isBrowseTab && browseQuery.hasNextPage
+  const { fetchNextPage, isFetchingNextPage } = browseQuery
+  const movieCount = items.filter((item) => item.type === "movie").length
+  const showCount = items.filter((item) => item.type !== "movie").length
+  const retryBrowse = () => {
+    if (items.length > 0 && hasMore) {
+      void fetchNextPage()
+      return
+    }
+    void browseQuery.refetch()
+  }
 
   const handleLogout = async () => {
     if (token) {
@@ -210,7 +208,7 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
     }
     clearSession()
     await navigate({
-      to: '/login',
+      to: "/login",
       search: { redirect: `/library/${libraryId}` },
       replace: true,
     })
@@ -223,7 +221,7 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
   if (!token || !user) {
     return (
       <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
-        <div className="max-w-xl space-y-4 text-center">
+        <div className="space-y-4 text-center">
           <Badge
             className="border-border/60 bg-background/80"
             variant="outline"
@@ -261,6 +259,8 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
   return (
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
       <AppTopBar
+        scrollContainerRef={scrollContainerRef}
+        contentClassName="max-w-none"
         leftSlot={
           <>
             <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
@@ -295,203 +295,248 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
         }
       />
 
-      <section className="px-4 pb-16 pt-24 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-[1700px]">
-          <div className="mb-6 space-y-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="min-w-0">
-                <Badge
-                  className="border-border/60 bg-background/80"
-                  variant="outline"
-                >
-                  Library Browse
-                </Badge>
-                <h1 className="mt-3 truncate text-4xl font-semibold tracking-tight sm:text-5xl">
-                  {libraryQuery.data.name}
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  共 {total} 项，当前第 {page + 1} / {pageCount} 页
-                </p>
+      <ScrollArea
+        className="h-svh bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.14),transparent_32rem),radial-gradient(circle_at_top_right,hsl(var(--accent)/0.12),transparent_28rem)]"
+        viewportClassName="[&>div]:block! [&>div]:w-full! [&>div]:min-w-0!"
+        viewportRef={scrollContainerRef}
+      >
+        <section className="min-w-0 px-3 pt-22 pb-16 sm:px-6 lg:pr-20 lg:pl-8">
+          <div className="mx-auto max-w-[1800px] min-w-0">
+            <div className="mb-6 overflow-hidden rounded-[2rem] border border-border/50 bg-card/70 shadow-2xl shadow-black/5 backdrop-blur-xl sm:rounded-[2.5rem]">
+              <div className="relative px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,hsl(var(--primary)/0.12),transparent_42%,hsl(var(--accent)/0.10))]" />
+                <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+                  <div className="min-w-0 space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        className="rounded-full border-border/60 bg-background/70 px-3 py-1 text-[11px] tracking-[0.24em] text-muted-foreground uppercase"
+                        variant="outline"
+                      >
+                        Library
+                      </Badge>
+                      <Badge
+                        className="rounded-full border-primary/20 bg-primary/10 px-3 py-1 text-primary"
+                        variant="outline"
+                      >
+                        {activeTabLabel(activeTab)}
+                      </Badge>
+                    </div>
+                    <div className="min-w-0">
+                      <h1 className="truncate text-4xl font-semibold tracking-tight sm:text-6xl">
+                        {libraryQuery.data.name}
+                      </h1>
+                      <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
+                        浏览当前媒体库的节目、单集和收藏内容，可按类型、进度和标题排序筛选。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 sm:min-w-[26rem] sm:gap-3">
+                    <LibraryStatCard label="总项目" value={total} />
+                    <LibraryStatCard label="已加载" value={items.length} />
+                    <LibraryStatCard
+                      label="收藏"
+                      value={libraryFavorites.length}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant={showFilters ? 'default' : 'outline'}
-                  className="rounded-full"
-                  onClick={() => setShowFilters((value) => !value)}
-                >
-                  <FilterIcon className="size-4" />
-                  筛选
-                </Button>
-                <Button
-                  type="button"
-                  variant={filters.sort === 'title' ? 'default' : 'outline'}
-                  className="rounded-full"
-                  onClick={() =>
-                    setFilters({
-                      ...filters,
-                      sort: 'title',
-                      sortDirection:
-                        filters.sort === 'title' &&
-                        filters.sortDirection === 'asc'
-                          ? 'desc'
-                          : 'asc',
-                    })
-                  }
-                >
-                  {filters.sortDirection === 'asc' ? (
-                    <ArrowDownAZIcon className="size-4" />
-                  ) : (
-                    <ArrowUpAZIcon className="size-4" />
-                  )}
-                  标题{filters.sortDirection === 'asc' ? '升序' : '降序'}
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
+
+              <div className="relative border-t border-border/50 bg-background/55 px-3 py-3 backdrop-blur-xl sm:px-4">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                  <div className="overflow-x-auto pb-1 xl:max-w-[calc(100%-28rem)]">
+                    <div className="flex min-w-max gap-1 rounded-full border border-border/50 bg-muted/35 p-1">
+                      {LIBRARY_TABS.map((tab) => (
+                        <Button
+                          key={tab.value}
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className={cn(
+                            "h-9 rounded-full px-4 text-muted-foreground transition-all hover:text-foreground",
+                            activeTab === tab.value &&
+                              "bg-background text-foreground shadow-sm hover:bg-background"
+                          )}
+                          onClick={() => selectTab(tab.value)}
+                        >
+                          {tab.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                    <Dialog
+                      open={filterDialogOpen}
+                      onOpenChange={setFilterDialogOpenState}
+                    >
+                      <DialogTrigger asChild>
+                        <Button
+                          type="button"
+                          variant={filterDialogOpen ? "default" : "outline"}
+                          className="rounded-full shadow-sm"
+                        >
+                          <FilterIcon className="size-4" />
+                          筛选
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-h-[min(760px,calc(100svh-2rem))] max-w-none overflow-y-auto sm:max-w-none">
+                        <DialogHeader>
+                          <DialogTitle>筛选媒体</DialogTitle>
+                          <DialogDescription>
+                            调整搜索、类型、进度和排序条件后应用到当前媒体库。
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form
+                          className="space-y-4"
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            applyFilterDraft()
+                          }}
+                        >
+                          <DiscoveryControls
+                            filters={filterDraft}
+                            showSearch
+                            onChange={setFilterDraft}
+                          />
+                          <DialogFooter>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              onClick={resetFilterDraft}
+                            >
+                              重置
+                            </Button>
+                            <DialogClose asChild>
+                              <Button type="button" variant="outline">
+                                取消
+                              </Button>
+                            </DialogClose>
+                            <Button type="submit">应用筛选</Button>
+                          </DialogFooter>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                    <Button
+                      type="button"
+                      variant={filters.sort === "title" ? "default" : "outline"}
+                      className="rounded-full shadow-sm"
+                      onClick={() =>
+                        setFilters({
+                          ...filters,
+                          sort: "title",
+                          sortDirection:
+                            filters.sort === "title" &&
+                            filters.sortDirection === "asc"
+                              ? "desc"
+                              : "asc",
+                        })
+                      }
+                    >
+                      {filters.sortDirection === "asc" ? (
+                        <ArrowDownAZIcon className="size-4" />
+                      ) : (
+                        <ArrowUpAZIcon className="size-4" />
+                      )}
+                      标题{filters.sortDirection === "asc" ? "升序" : "降序"}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-full shadow-sm"
+                        >
+                          <MoreHorizontalIcon className="size-4" />
+                          更多
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-52">
+                        <DropdownMenuLabel>媒体库操作</DropdownMenuLabel>
+                        <DropdownMenuItem
+                          onSelect={() => void browseQuery.refetch()}
+                        >
+                          重新加载内容
+                        </DropdownMenuItem>
+                        <DropdownMenuItem asChild>
+                          <Link to="/search" search={{ q: undefined }}>
+                            打开搜索
+                          </Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem asChild>
+                          <Link to="/settings">媒体源与设置</Link>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <LibraryTabContent
+              activeTab={activeTab}
+              isLoading={
+                activeTab === "favorites"
+                  ? favoritesQuery.isLoading
+                  : isBrowseTab
+                    ? browseQuery.isLoading && items.length === 0
+                    : false
+              }
+              error={
+                activeTab === "favorites"
+                  ? favoritesQuery.error?.message
+                  : isBrowseTab
+                    ? items.length === 0
+                      ? browseQuery.error?.message
+                      : undefined
+                    : undefined
+              }
+              onRetry={
+                activeTab === "favorites"
+                  ? () => void favoritesQuery.refetch()
+                  : retryBrowse
+              }
+              items={items}
+            />
+
+            {isBrowseTab && total > 0 ? (
+              <div className="mt-8 flex min-h-16 items-center justify-center rounded-[1.5rem] border border-border/40 bg-card/60 p-4 text-sm text-muted-foreground">
+                {browseQuery.error && items.length > 0 ? (
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <span className="text-destructive">
+                      {browseQuery.error.message}
+                    </span>
                     <Button
                       type="button"
                       variant="outline"
                       className="rounded-full"
+                      onClick={retryBrowse}
                     >
-                      <MoreHorizontalIcon className="size-4" />
-                      更多
+                      重新加载
                     </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
-                    <DropdownMenuLabel>媒体库操作</DropdownMenuLabel>
-                    <DropdownMenuItem
-                      onSelect={() => void browseQuery.refetch()}
-                    >
-                      重新加载当前页
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
-                      <Link to="/search" search={{ q: undefined }}>
-                        打开搜索
-                      </Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem asChild>
-                      <Link to="/settings">媒体源与设置</Link>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto pb-1">
-              <div className="flex min-w-max gap-2 rounded-full border border-border/40 bg-card/60 p-1 backdrop-blur-sm">
-                {LIBRARY_TABS.map((tab) => (
+                  </div>
+                ) : browseQuery.isFetchingNextPage ? (
+                  <span className="inline-flex items-center gap-2">
+                    <LoaderCircleIcon className="size-4 animate-spin" />
+                    正在加载更多
+                  </span>
+                ) : hasMore ? (
                   <Button
-                    key={tab.value}
                     type="button"
-                    size="sm"
-                    variant={activeTab === tab.value ? 'default' : 'ghost'}
-                    className="h-8 rounded-full px-4"
-                    onClick={() => selectTab(tab.value)}
+                    variant="outline"
+                    className="rounded-full"
+                    onClick={() => void fetchNextPage()}
                   >
-                    {tab.label}
+                    加载更多，已显示 {items.length} / {total}
                   </Button>
-                ))}
-              </div>
-            </div>
-
-            {showFilters ? (
-              <DiscoveryControls
-                filters={filters}
-                showSearch
-                onChange={setFilters}
-              />
-            ) : null}
-
-            {showQuickIndex ? (
-              <div className="flex gap-1 overflow-x-auto rounded-full border border-border/40 bg-card/60 p-2 text-xs text-muted-foreground lg:hidden">
-                {sections.map((section) => (
-                  <button
-                    key={section.key}
-                    type="button"
-                    className="rounded-full px-3 py-1 hover:bg-accent hover:text-accent-foreground"
-                    onClick={() => scrollToSection(section.id)}
-                  >
-                    {section.key}
-                  </button>
-                ))}
+                ) : (
+                  <span>已显示全部 {total} 项</span>
+                )}
               </div>
             ) : null}
           </div>
-
-          <LibraryTabContent
-            activeTab={activeTab}
-            isLoading={
-              activeTab === 'favorites'
-                ? favoritesQuery.isLoading
-                : isBrowseTab
-                  ? browseQuery.isLoading
-                  : false
-            }
-            error={
-              activeTab === 'favorites'
-                ? favoritesQuery.error?.message
-                : isBrowseTab
-                  ? browseQuery.error?.message
-                  : undefined
-            }
-            items={items}
-            sections={sections}
-            showSections={showQuickIndex}
-            favoriteIds={favoriteIds}
-            progressByItemId={progressByItemId}
-            onFavoriteToggle={(item, favorite) =>
-              favoriteMutation.mutate({ item, favorite })
-            }
-          />
-
-          {isBrowseTab && total > 0 ? (
-            <div className="mt-8 flex flex-col gap-3 rounded-[1.5rem] border border-border/40 bg-card/60 p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <span>
-                已显示 {browseQuery.data?.items.length ?? 0} / {total}，第{' '}
-                {page + 1} 页
-              </span>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-full"
-                  disabled={page === 0 || browseQuery.isFetching}
-                  onClick={() => setPage((value) => Math.max(0, value - 1))}
-                >
-                  <ChevronLeftIcon className="size-4" />
-                  上一页
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-full"
-                  disabled={!hasMore || browseQuery.isFetching}
-                  onClick={() => setPage((value) => value + 1)}
-                >
-                  下一页
-                  <ChevronRightIcon className="size-4" />
-                </Button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      {showQuickIndex ? (
-        <div className="fixed right-3 top-1/2 z-20 hidden -translate-y-1/2 flex-col gap-1 rounded-full border border-border/50 bg-background/80 p-1 text-xs shadow-xl backdrop-blur-xl lg:flex">
-          {sections.map((section) => (
-            <button
-              key={section.key}
-              type="button"
-              className="flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => scrollToSection(section.id)}
-            >
-              {section.key}
-            </button>
-          ))}
-        </div>
-      ) : null}
+        </section>
+      </ScrollArea>
     </div>
   )
 }
@@ -634,107 +679,91 @@ function TopBarActions({
   )
 }
 
+function LibraryStatCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-2xl border border-border/50 bg-background/65 px-3 py-3 shadow-sm backdrop-blur sm:px-4">
+      <div className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
+        {label}
+      </div>
+      <div className="mt-1 truncate text-2xl font-semibold tracking-tight sm:text-3xl">
+        {value.toLocaleString()}
+      </div>
+    </div>
+  )
+}
+
 function LibraryTabContent({
   activeTab,
   isLoading,
   error,
+  onRetry,
   items,
-  sections,
-  showSections,
-  favoriteIds,
-  progressByItemId,
-  onFavoriteToggle,
 }: {
   activeTab: LibraryTab
   isLoading: boolean
   error?: string
+  onRetry: () => void
   items: CatalogListItem[]
-  sections: TitleSection[]
-  showSections: boolean
-  favoriteIds: Set<number>
-  progressByItemId: Map<number, CatalogUserItemEntry>
-  onFavoriteToggle: (item: CatalogListItem, favorite: boolean) => void
 }) {
   if (!isSupportedTab(activeTab)) {
     return <UnsupportedTabState tab={activeTab} />
   }
   if (isLoading) {
     return (
-      <div className="flex min-h-80 items-center justify-center rounded-[2rem] border border-border/40 bg-card/60">
-        <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
+      <div className="flex min-h-80 items-center justify-center rounded-[2rem] border border-border/50 bg-card/70 shadow-sm backdrop-blur-xl">
+        <div className="flex items-center gap-3 rounded-full border border-border/50 bg-background/70 px-5 py-3 text-sm text-muted-foreground">
+          <LoaderCircleIcon className="size-4 animate-spin" />
+          正在整理媒体墙
+        </div>
       </div>
     )
   }
   if (error) {
     return (
-      <div className="rounded-[2rem] border border-destructive/30 bg-destructive/10 px-6 py-8 text-sm text-destructive">
-        {error}
+      <div className="space-y-4 rounded-[2rem] border border-destructive/30 bg-destructive/10 px-6 py-10 text-center text-sm text-destructive shadow-sm backdrop-blur-xl">
+        <p>{error}</p>
+        <Button
+          type="button"
+          variant="outline"
+          className="rounded-full border-destructive/30 bg-background/80 text-foreground hover:bg-background"
+          onClick={onRetry}
+        >
+          重新加载
+        </Button>
       </div>
     )
   }
   if (items.length === 0) {
     return (
-      <div className="rounded-[2rem] border border-border/40 bg-card/70 px-6 py-12 text-center text-sm text-muted-foreground backdrop-blur-sm">
-        {activeTab === 'favorites'
-          ? '这个媒体库还没有收藏项目。'
-          : activeTab === 'episodes'
-            ? '当前媒体库还没有可浏览的单集。'
-            : '这个媒体库还没有匹配当前条件的内容。'}
+      <div className="rounded-[2rem] border border-border/50 bg-card/70 px-6 py-14 text-center shadow-sm backdrop-blur-xl">
+        <Badge
+          className="rounded-full border-border/60 bg-background/70"
+          variant="outline"
+        >
+          {activeTabLabel(activeTab)}
+        </Badge>
+        <h2 className="mt-4 text-2xl font-semibold tracking-tight">
+          暂无可显示内容
+        </h2>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-muted-foreground">
+          {activeTab === "favorites"
+            ? "这个媒体库还没有收藏项目。"
+            : activeTab === "episodes"
+              ? "当前媒体库还没有可浏览的单集。"
+              : "这个媒体库还没有匹配当前条件的内容，可以调整筛选或重新扫描媒体库。"}
+        </p>
       </div>
     )
   }
 
-  if (!showSections) {
-    return (
-      <PosterGrid
-        items={items}
-        favoriteIds={favoriteIds}
-        progressByItemId={progressByItemId}
-        onFavoriteToggle={onFavoriteToggle}
-      />
-    )
-  }
-
   return (
-    <div className="space-y-10">
-      {sections.map((section) => (
-        <section key={section.key} id={section.id} className="scroll-mt-24">
-          <h2 className="mb-4 text-xl font-semibold tracking-tight">
-            {section.key}
-          </h2>
-          <PosterGrid
-            items={section.items}
-            favoriteIds={favoriteIds}
-            progressByItemId={progressByItemId}
-            onFavoriteToggle={onFavoriteToggle}
-          />
-        </section>
-      ))}
-    </div>
-  )
-}
-
-function PosterGrid({
-  items,
-  favoriteIds,
-  progressByItemId,
-  onFavoriteToggle,
-}: {
-  items: CatalogListItem[]
-  favoriteIds: Set<number>
-  progressByItemId: Map<number, CatalogUserItemEntry>
-  onFavoriteToggle: (item: CatalogListItem, favorite: boolean) => void
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
       {items.map((item) => (
         <MediaPosterCard
           key={item.id}
           item={item}
-          progress={progressByItemId.get(item.id) ?? null}
-          isFavorite={favoriteIds.has(item.id)}
-          onFavoriteToggle={onFavoriteToggle}
-          className="w-full"
+          favorite={activeTab === "favorites" ? true : undefined}
+          layout="grid"
         />
       ))}
     </div>
@@ -750,7 +779,7 @@ function UnsupportedTabState({ tab }: { tab: LibraryTab }) {
       <h2 className="mt-4 text-2xl font-semibold tracking-tight">
         这个维度还没有接入
       </h2>
-      <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-muted-foreground">
+      <p className="mx-auto mt-3 text-sm leading-7 text-muted-foreground">
         当前版本先保留入口，等推荐、预告片、类型分面、标签、播出平台或文件夹数据稳定后再显示真实内容。
       </p>
     </div>
@@ -759,7 +788,7 @@ function UnsupportedTabState({ tab }: { tab: LibraryTab }) {
 
 function LibraryDetailLoading() {
   return (
-    <div className="flex min-h-svh items-center justify-center bg-background text-foreground">
+    <div className="flex h-svh w-full items-center justify-center bg-background text-foreground">
       <div className="flex items-center gap-3 rounded-full border border-border/40 bg-background/80 px-5 py-3 backdrop-blur-xl">
         <LoaderCircleIcon className="size-4 animate-spin" />
         <span className="text-sm text-muted-foreground">正在加载媒体库</span>
@@ -781,7 +810,7 @@ function parseOptionalFloat(value: string) {
 function LibraryDetailError({ message }: { message: string }) {
   return (
     <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
-      <div className="max-w-lg rounded-[2rem] border border-border/40 bg-card/80 p-8 text-center backdrop-blur-xl">
+      <div className="rounded-[2rem] border border-border/40 bg-card/80 p-8 text-center backdrop-blur-xl">
         <Badge className="border-border/60 bg-background/80" variant="outline">
           加载失败
         </Badge>
@@ -796,47 +825,12 @@ function LibraryDetailError({ message }: { message: string }) {
   )
 }
 
-type TitleSection = {
-  key: string
-  id: string
-  items: CatalogListItem[]
-}
-
-function buildTitleSections(items: CatalogListItem[]): TitleSection[] {
-  const sections = new Map<string, CatalogListItem[]>()
-  for (const item of items) {
-    const key = titleSectionKey(formatMediaCardTitle(item))
-    sections.set(key, [...(sections.get(key) ?? []), item])
-  }
-  return Array.from(sections.entries()).map(([key, sectionItems], index) => ({
-    key,
-    id: `library-title-section-${index}-${key.charCodeAt(0)}`,
-    items: sectionItems,
-  }))
-}
-
-function titleSectionKey(title: string) {
-  const first = title.trim().charAt(0)
-  if (!first) return '#'
-  if (/\p{Number}/u.test(first)) return '#'
-  if (/\p{Script=Han}/u.test(first)) return first
-  if (/\p{Letter}/u.test(first)) return first.toLocaleUpperCase()
-  return '符'
-}
-
-function scrollToSection(id: string) {
-  document.getElementById(id)?.scrollIntoView({
-    block: 'start',
-    behavior: 'smooth',
-  })
-}
-
 function isSupportedTab(tab: LibraryTab) {
-  return tab === 'programs' || tab === 'favorites' || tab === 'episodes'
+  return tab === "programs" || tab === "favorites" || tab === "episodes"
 }
 
 function activeTabLabel(tab: LibraryTab) {
   return (
-    LIBRARY_TABS.find((candidate) => candidate.value === tab)?.label ?? '节目'
+    LIBRARY_TABS.find((candidate) => candidate.value === tab)?.label ?? "节目"
   )
 }

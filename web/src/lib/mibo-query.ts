@@ -1,45 +1,62 @@
-import { queryOptions } from '@tanstack/react-query'
+import { queryOptions } from "@tanstack/react-query"
 
-import { createMiboApi, getApiBaseUrl } from '#/lib/mibo-api'
+import { createMiboApi, getApiBaseUrl } from "#/lib/mibo-api"
 
 export const miboQueryKeys = {
-  authUser: (token: string) => ['auth', 'me', token] as const,
-  homeData: (token: string) => ['home', 'hero', token] as const,
-  favorites: (token: string) => ['me', 'favorites', token] as const,
-  consoleSummary: (token: string) => ['admin', 'console', token] as const,
-  adminLogs: (token: string) => ['admin', 'logs', token] as const,
+  authUser: (token: string) => ["auth", "me", token] as const,
+  loginSessions: (token: string) => ["auth", "sessions", token] as const,
+  homeData: (token: string) => ["home", "hero", token] as const,
+  healthSummary: (token: string) => ["health", "summary", token] as const,
+  healthIssues: (token: string) => ["health", "issues", token] as const,
+  favorites: (token: string) => ["me", "favorites", token] as const,
+  consoleSummary: (token: string) => ["admin", "console", token] as const,
+  adminLogs: (token: string) => ["admin", "logs", token] as const,
+  adminUsers: (token: string) => ["admin", "users", token] as const,
   libraryDetail: (token: string, libraryId: number) =>
-    ['library', 'detail', token, libraryId] as const,
+    ["library", "detail", token, libraryId] as const,
   libraryBrowse: (
     token: string,
     libraryId: number,
     tab: string,
     filters: unknown,
-    page: number,
-  ) => ['library', 'browse', token, libraryId, tab, filters, page] as const,
+    page: number
+  ) => ["library", "browse", token, libraryId, tab, filters, page] as const,
   catalogItemDetail: (token: string, itemId: number) =>
-    ['catalog', 'detail', token, itemId] as const,
+    ["catalog", "detail", token, itemId] as const,
   catalogPersonDetail: (token: string, personId: number) =>
-    ['catalog', 'person-detail', token, personId] as const,
+    ["catalog", "person-detail", token, personId] as const,
   catalogItemProgress: (token: string, itemId: number) =>
-    ['catalog', 'progress', token, itemId] as const,
+    ["catalog", "progress", token, itemId] as const,
   catalogSeriesSeasons: (token: string, itemId: number) =>
-    ['catalog', 'series-seasons', token, itemId] as const,
+    ["catalog", "series-seasons", token, itemId] as const,
   catalogPlayback: (token: string, itemId: number, assetId?: number) =>
-    ['catalog', 'playback', token, itemId, assetId ?? 'default'] as const,
+    ["catalog", "playback", token, itemId, assetId ?? "default"] as const,
   catalogGovernanceWorkspace: (token: string, itemId: number) =>
-    ['catalog', 'governance', token, itemId] as const,
+    ["catalog", "governance", token, itemId] as const,
   metadataWorkspace: (token: string) =>
-    ['metadata', 'workspace', token] as const,
-  metadataSettings: (token: string) => ['settings', 'metadata', token] as const,
+    ["metadata", "workspace", token] as const,
+  metadataProviderInstances: (token: string) =>
+    ["settings", "metadata-providers", token] as const,
+  metadataProfiles: (token: string) =>
+    ["settings", "metadata-profiles", token] as const,
+  networkSettings: (token: string) => ["settings", "network", token] as const,
   mediaSources: (token: string) =>
-    ['settings', 'media-sources', token] as const,
-  libraries: (token: string) => ['settings', 'libraries', token] as const,
-  schedules: (token: string) => ['schedules', 'workspace', token] as const,
+    ["settings", "media-sources", token] as const,
+  libraries: (token: string) => ["settings", "libraries", token] as const,
+  libraryMetadataStrategy: (token: string, libraryId: number) =>
+    ["settings", "library-metadata-strategy", token, libraryId] as const,
+  scanExclusions: (token: string, filters: unknown) =>
+    ["settings", "scan-exclusions", token, filters] as const,
+  scanExclusionRules: (token: string) =>
+    ["settings", "scan-exclusion-rules", token] as const,
+  schedules: (token: string) => ["schedules", "workspace", token] as const,
   scheduleDetail: (token: string, scheduleId: number) =>
-    ['schedules', 'detail', token, scheduleId] as const,
+    ["schedules", "detail", token, scheduleId] as const,
   scheduleHistory: (token: string, scheduleId: number) =>
-    ['schedules', 'history', token, scheduleId] as const,
+    ["schedules", "history", token, scheduleId] as const,
+  jobs: (token: string, filters: unknown) =>
+    ["admin", "jobs", token, filters] as const,
+  cleanupSettings: (token: string) => ["settings", "cleanup", token] as const,
 }
 
 export function createAuthedMiboApi(token: string) {
@@ -56,28 +73,62 @@ export function authUserQueryOptions(token: string) {
   })
 }
 
+export function loginSessionsQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.loginSessions(token),
+    queryFn: () => createAuthedMiboApi(token).listLoginSessions(),
+  })
+}
+
 export function homeDataQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.homeData(token),
     queryFn: async () => {
       const api = createAuthedMiboApi(token)
-      const [items, continueWatching, libraries, latestByLibrary] =
-        await Promise.all([
-          api.recentlyAdded(6),
-          api.continueWatching(),
-          api.listLibraries(),
-          api.latestByLibrary(),
-        ])
-
-      return {
+      const [
         items,
         continueWatching,
-        continueWatchingCount: continueWatching.length,
         libraries,
-        libraryCount: libraries.length,
         latestByLibrary,
+        healthIssues,
+      ] = await Promise.all([
+        api.recentlyAdded(6),
+        api.continueWatching(),
+        api.listLibraries(),
+        api.latestByLibrary(),
+        api.listHealthIssues().catch(() => []),
+      ])
+
+      const safeItems = items ?? []
+      const safeContinueWatching = continueWatching ?? []
+      const safeLibraries = libraries ?? []
+      const safeLatestByLibrary = latestByLibrary ?? []
+      const safeHealthIssues = healthIssues ?? []
+
+      return {
+        items: safeItems,
+        continueWatching: safeContinueWatching,
+        continueWatchingCount: safeContinueWatching.length,
+        libraries: safeLibraries,
+        libraryCount: safeLibraries.length,
+        latestByLibrary: safeLatestByLibrary,
+        healthIssues: safeHealthIssues,
       }
     },
+  })
+}
+
+export function healthSummaryQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.healthSummary(token),
+    queryFn: () => createAuthedMiboApi(token).getHealthSummary(),
+  })
+}
+
+export function healthIssuesQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.healthIssues(token),
+    queryFn: () => createAuthedMiboApi(token).listHealthIssues(),
   })
 }
 
@@ -102,6 +153,13 @@ export function adminLogsQueryOptions(token: string) {
   })
 }
 
+export function adminUsersQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.adminUsers(token),
+    queryFn: () => createAuthedMiboApi(token).listAdminUsers(),
+  })
+}
+
 export function catalogItemDetailQueryOptions(token: string, itemId: number) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
@@ -111,7 +169,7 @@ export function catalogItemDetailQueryOptions(token: string, itemId: number) {
 
 export function catalogPersonDetailQueryOptions(
   token: string,
-  personId: number,
+  personId: number
 ) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogPersonDetail(token, personId),
@@ -125,7 +183,12 @@ export function catalogItemProgressQueryOptions(token: string, itemId: number) {
     queryKey: miboQueryKeys.catalogItemProgress(token, itemId),
     queryFn: async () => {
       try {
-        return await createAuthedMiboApi(token).getCatalogItemProgress(itemId)
+        const progress =
+          await createAuthedMiboApi(token).getCatalogItemProgress(itemId)
+
+        return progress.position_seconds > 0 || progress.watched
+          ? progress
+          : null
       } catch {
         return null
       }
@@ -135,7 +198,7 @@ export function catalogItemProgressQueryOptions(token: string, itemId: number) {
 
 export function catalogSeriesSeasonsQueryOptions(
   token: string,
-  itemId: number,
+  itemId: number
 ) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogSeriesSeasons(token, itemId),
@@ -147,13 +210,13 @@ export function catalogSeriesSeasonsQueryOptions(
 export function catalogPlaybackQueryOptions(
   token: string,
   itemId: number,
-  assetId?: number,
+  assetId?: number
 ) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogPlayback(token, itemId, assetId),
     queryFn: () =>
       createAuthedMiboApi(token).getCatalogPlayback(itemId, {
-        clientProfile: 'web',
+        clientProfile: "web",
         assetId,
       }),
     enabled: itemId > 0,
@@ -162,7 +225,7 @@ export function catalogPlaybackQueryOptions(
 
 export function catalogGovernanceWorkspaceQueryOptions(
   token: string,
-  itemId: number,
+  itemId: number
 ) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogGovernanceWorkspace(token, itemId),
@@ -179,10 +242,24 @@ export function mediaSourcesQueryOptions(token: string) {
   })
 }
 
-export function metadataSettingsQueryOptions(token: string) {
+export function networkSettingsQueryOptions(token: string) {
   return queryOptions({
-    queryKey: miboQueryKeys.metadataSettings(token),
-    queryFn: () => createAuthedMiboApi(token).getMetadataSettings(),
+    queryKey: miboQueryKeys.networkSettings(token),
+    queryFn: () => createAuthedMiboApi(token).getNetworkSettings(),
+  })
+}
+
+export function metadataProviderInstancesQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.metadataProviderInstances(token),
+    queryFn: () => createAuthedMiboApi(token).listMetadataProviderInstances(),
+  })
+}
+
+export function metadataProfilesQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.metadataProfiles(token),
+    queryFn: () => createAuthedMiboApi(token).listMetadataProfiles(),
   })
 }
 
@@ -190,6 +267,35 @@ export function librariesQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.libraries(token),
     queryFn: () => createAuthedMiboApi(token).listLibraries(),
+  })
+}
+
+export function libraryMetadataStrategyQueryOptions(
+  token: string,
+  libraryId: number
+) {
+  return queryOptions({
+    queryKey: miboQueryKeys.libraryMetadataStrategy(token, libraryId),
+    queryFn: () =>
+      createAuthedMiboApi(token).getLibraryMetadataStrategy(libraryId),
+    enabled: libraryId > 0,
+  })
+}
+
+export function scanExclusionsQueryOptions(
+  token: string,
+  filters: { libraryId?: number; enabled?: boolean }
+) {
+  return queryOptions({
+    queryKey: miboQueryKeys.scanExclusions(token, filters),
+    queryFn: () => createAuthedMiboApi(token).listScanExclusions(filters),
+  })
+}
+
+export function scanExclusionRulesQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.scanExclusionRules(token),
+    queryFn: () => createAuthedMiboApi(token).listScanExclusionRules(),
   })
 }
 
@@ -213,5 +319,22 @@ export function scheduleHistoryQueryOptions(token: string, scheduleId: number) {
     queryKey: miboQueryKeys.scheduleHistory(token, scheduleId),
     queryFn: () => createAuthedMiboApi(token).listScheduleHistory(scheduleId),
     enabled: scheduleId > 0,
+  })
+}
+
+export function jobsQueryOptions(
+  token: string,
+  filters: { limit?: number; offset?: number; status?: string; kind?: string }
+) {
+  return queryOptions({
+    queryKey: miboQueryKeys.jobs(token, filters),
+    queryFn: () => createAuthedMiboApi(token).listJobs(filters),
+  })
+}
+
+export function cleanupSettingsQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.cleanupSettings(token),
+    queryFn: () => createAuthedMiboApi(token).getCleanupSettings(),
   })
 }

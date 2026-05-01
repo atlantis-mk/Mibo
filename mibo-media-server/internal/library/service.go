@@ -4,6 +4,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/settings"
 	"gorm.io/gorm"
 )
 
@@ -42,10 +43,16 @@ type MediaSourceView struct {
 }
 
 type CreateLibraryInput struct {
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	MediaSourceID uint   `json:"media_source_id"`
-	RootPath      string `json:"root_path"`
+	Name               string                                       `json:"name"`
+	Type               string                                       `json:"type"`
+	MediaSourceID      uint                                         `json:"media_source_id"`
+	RootPath           string                                       `json:"root_path"`
+	Scan               *LibraryScanPolicyView                       `json:"scan,omitempty"`
+	Metadata           *LibraryMetadataPolicyView                   `json:"metadata,omitempty"`
+	MetadataStrategy   *settings.UpdateLibraryMetadataStrategyInput `json:"metadata_strategy,omitempty"`
+	Playback           *LibraryPlaybackPolicyView                   `json:"playback,omitempty"`
+	Subtitle           *LibrarySubtitlePolicyView                   `json:"subtitle,omitempty"`
+	ScanExclusionRules []ScanExclusionRuleInput                     `json:"scan_exclusion_rules,omitempty"`
 }
 
 type targetedRefreshPayload struct {
@@ -59,6 +66,9 @@ const (
 	JobKindTargetedRefresh                 = "targeted_refresh"
 	JobKindMatchCatalogItem                = "match_catalog_item"
 	JobKindProbeInventoryFile              = "probe_inventory_file"
+	JobKindCatalogMatchBatch               = "catalog_match_batch"
+	JobKindInventoryProbeBatch             = "inventory_probe_batch"
+	JobKindMissingMediaCleanup             = "missing_media_cleanup"
 	JobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
 	JobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
 )

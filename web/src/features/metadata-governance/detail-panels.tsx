@@ -784,7 +784,7 @@ function AssetLinkEditor({
       </div>
       <div className="mt-2 text-xs text-muted-foreground">
         当前治理条目：{workspaceItem.title} · 关联条目 {asset.links.length} 个 ·
-        文件 {asset.file_ids.length} 个
+        文件 {(asset.file_ids ?? []).length} 个
       </div>
 
       <div className="mt-3 space-y-2">
@@ -861,7 +861,7 @@ function AssetLinkEditor({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {asset.file_ids.map((fileId) => (
+        {(asset.file_ids ?? []).map((fileId) => (
           <Button
             key={fileId}
             size="sm"

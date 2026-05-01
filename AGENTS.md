@@ -3,13 +3,13 @@
 ## Boundaries
 - Repo root is not a runnable workspace package or git repo. Work from package roots: `web/`, `mibo-media-server/`, and only touch `OpenList/` when the task is explicitly about upstream OpenList.
 - `OpenList/` is a full upstream checkout with its own `.git`; `mibo-media-server` talks to OpenList over HTTP in `mibo-media-server/internal/storage/openlist/adapter.go`, not by importing code from `OpenList/`.
-- `web/` is the frontend. Real entrypoints are `src/main.tsx` -> `src/router.tsx` -> `src/App.tsx`; most product behavior still lives in the large `src/App.tsx`.
+- `web/` is the frontend. It is a Vite SPA with entrypoints `src/main.tsx` -> `src/router.tsx`; product behavior lives under `src/features/` with shared UI in `src/components/`.
 - `mibo-media-server/` is the custom backend. Startup is `cmd/mibo-media-server/main.go`; service wiring is `internal/app/app.go`; HTTP routes are registered in `internal/httpapi/router.go`.
 - Root `package.json` only provides the `shadcn` CLI for local tooling; do not treat it as the frontend app manifest.
 
 ## Commands
 - Frontend commands run from `web/` and use `pnpm` (`web/pnpm-lock.yaml` is the real lockfile): `pnpm dev`, `pnpm typecheck`, `pnpm build`.
-- `pnpm lint` currently fails on pre-existing `react-hooks/set-state-in-effect` and `react-refresh/only-export-components` issues in files like `src/App.tsx`, `src/router.tsx`, and several `src/components/ui/*`. Do not assume a lint failure is caused by your change unless you touched those files.
+- `pnpm lint` may report pre-existing React Hooks or React Refresh issues in migrated UI files. Do not assume a lint failure is caused by your change unless you touched those files.
 - Frontend formatting is Prettier, not ESLint autofix: `pnpm format` or `pnpm exec prettier --write <file>`. Config uses no semicolons, double quotes, and the Tailwind plugin.
 - Backend commands run from `mibo-media-server/`: `go run ./cmd/mibo-media-server`, `go test ./...`.
 - Focused backend checks: `go test ./internal/httpapi -run TestReadyz` and `go test ./internal/worker -run TestRunOnceProcessesSyncLibraryJob`.
@@ -26,11 +26,11 @@
 - Recommended rollout check: run `GET /api/v1/catalog-migration/consistency`, confirm zero drift or an understood sample set, then run `POST /api/v1/catalog-migration/rebuild-projections` before rechecking if drift is reported.
 - Governance repair endpoints now include item-scoped asset correction paths: `POST /api/v1/items/{id}/governance/assets/{asset_id}/links` and `DELETE /api/v1/items/{id}/governance/assets/{asset_id}/links/{target_item_id}`. They are intentionally bounded to the current workspace item and its descendants.
 - Legacy fallback expectation: once `catalog_read_enabled` is on, old media read routes should be treated as bounded retirement shims that can return `410 Gone`; do not build new product flows on top of `/api/v1/media-items/*` or `/api/v1/media-files/*`.
-- The router redirects to `/setup` until `/api/v1/setup/status` reports `can_enter_app=true`; if you change setup/auth flow, keep `web/src/router.tsx`, `web/src/components/setup-wizard.tsx`, and `web/src/lib/client-config.ts` aligned.
-- Setup and source forms intentionally seed absolute demo paths under `demo-media/`; those defaults appear in both `web/src/App.tsx` and `web/src/components/setup-wizard.tsx`.
+- The router redirects to `/setup` until `/api/v1/setup/status` reports `can_enter_app=true`; if you change setup/auth flow, keep `web/src/router.tsx`, `web/src/features/setup/index.tsx`, and `web/src/lib/setup-gate.ts` aligned.
+- Setup and source forms intentionally seed absolute demo paths under `demo-media/`; keep those defaults aligned in setup and media-source settings UI.
 
 ## UI And Generated Files
-- `web/components.json` is shadcn-based with style `radix-nova`; generated UI primitives live under `web/src/components/ui`, and the project uses the `@/*` alias.
+- `web/components.json` is shadcn-based with style `radix-nova`; generated UI primitives live under `web/src/components/ui`, and the project supports both `#/*` and `@/*` aliases.
 - Ignore generated/local state when tracing behavior or editing: `web/dist/`, `mibo-media-server/data/`, and `mibo-media-server/tmp/`.
 
 ## Tests

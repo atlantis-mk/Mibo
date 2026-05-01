@@ -37,8 +37,8 @@ func TestMatchCatalogItemMatchesMovieItem(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
@@ -47,7 +47,7 @@ func TestMatchCatalogItemMatchesMovieItem(t *testing.T) {
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	if err := svc.MatchCatalogItem(ctx, item.ID); err != nil {
+	if _, err := svc.MatchCatalogItemOperation(ctx, item.ID); err != nil {
 		t.Fatalf("match catalog item: %v", err)
 	}
 
@@ -102,6 +102,601 @@ func TestMatchCatalogItemMatchesMovieItem(t *testing.T) {
 	}
 }
 
+func TestMatchCatalogItemOperationDocumentsAutomatedTMDBMovieBaseline(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/movie":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 202, "title": "Baseline Movie", "original_title": "Baseline Original", "release_date": "2025-03-04", "vote_count": 800}}})
+		case "/movie/202":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 202, "title": "Baseline Movie", "original_title": "Baseline Original", "overview": "Baseline overview", "poster_path": "/baseline-poster.jpg", "backdrop_path": "/baseline-backdrop.jpg", "release_date": "2025-03-04", "runtime": 99, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Baseline Movie 2025", Path: "/movies/Baseline.Movie.2025.mkv", SortKey: "Baseline Movie"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	operation, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("match catalog item: %v", err)
+	}
+	if operation.Operation != OperationTypeMatch || operation.OriginItemID != item.ID || operation.TargetItemID != item.ID || operation.TargetType != catalog.ItemTypeMovie || operation.Status != OperationStatusApplied {
+		t.Fatalf("unexpected match operation: %#v", operation)
+	}
+
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload catalog item: %v", err)
+	}
+	if stored.Title != "Baseline Movie" || stored.OriginalTitle != "Baseline Original" || stored.Overview != "Baseline overview" {
+		t.Fatalf("unexpected stored metadata: %#v", stored)
+	}
+	if stored.Year == nil || *stored.Year != 2025 || stored.RuntimeSeconds == nil || *stored.RuntimeSeconds != 99*60 {
+		t.Fatalf("unexpected year/runtime: %#v", stored)
+	}
+	if stored.GovernanceStatus != catalog.GovernanceMatched {
+		t.Fatalf("expected high-confidence movie to be matched, got %q", stored.GovernanceStatus)
+	}
+
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ? AND source_type = ? AND source_name = ?", item.ID, catalog.SourceTypeProvider, "tmdb").First(&source).Error; err != nil {
+		t.Fatalf("load provider metadata source: %v", err)
+	}
+	if source.ExternalID != "movie:202" || source.ProviderInstanceName != database.MigratedDefaultTMDBProviderInstanceName {
+		t.Fatalf("unexpected provider source: %#v", source)
+	}
+
+	var identity database.CatalogIdentity
+	if err := db.WithContext(ctx).Where("item_id = ? AND provider = ? AND identity_type = ? AND identity_key = ?", item.ID, "tmdb", "movie", "movie:202").First(&identity).Error; err != nil {
+		t.Fatalf("load provider identity: %v", err)
+	}
+}
+
+func TestMatchCatalogItemSyncsTMDBMovieRichMetadata(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/movie":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 303, "title": "Rich Movie", "release_date": "2026-04-05", "vote_count": 1000}}})
+		case "/movie/303":
+			appendToResponse := req.URL.Query().Get("append_to_response")
+			if appendToResponse != "credits,images,videos,keywords,release_dates,external_ids" {
+				t.Fatalf("unexpected movie append_to_response: %q", appendToResponse)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 303, "title": "Rich Movie", "overview": "Rich overview", "release_date": "2026-04-05", "runtime": 101, "vote_average": 8.4, "genres": []map[string]any{{"name": "Drama"}, {"name": "Drama"}, {"name": "Sci-Fi"}}, "keywords": map[string]any{"keywords": []map[string]any{{"name": "Space"}, {"name": "space"}, {"name": "Mystery"}}}, "release_dates": map[string]any{"results": []map[string]any{{"iso_3166_1": "US", "release_dates": []map[string]any{{"certification": "PG-13"}}}}}, "external_ids": map[string]any{"imdb_id": "tt3033030", "wikidata_id": "Q303"}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+	catalogSvc := catalog.NewService(db)
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Rich Movie", Path: "/movies/Rich.Movie.2026.mkv", SortKey: "Rich Movie"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	operation, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("match catalog item: %v", err)
+	}
+	if !operationHasAppliedField(operation, "community_rating") || !operationHasAppliedField(operation, "official_rating") || !operationHasAppliedField(operation, "tags.genre") || !operationHasAppliedField(operation, "tags.keyword") {
+		t.Fatalf("expected rich applied fields, got %#v", operation.AppliedFields)
+	}
+
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.CommunityRating == nil || *stored.CommunityRating != 8.4 || stored.OfficialRating != "PG-13" {
+		t.Fatalf("unexpected rich rating fields: %#v", stored)
+	}
+
+	detail, err := catalogSvc.GetItemDetail(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("load detail: %v", err)
+	}
+	if len(detail.Genres) != 2 || detail.Genres[0] != "Drama" || detail.Genres[1] != "Sci-Fi" {
+		t.Fatalf("unexpected genres: %#v", detail.Genres)
+	}
+	if !catalogTagsContain(detail.Tags, "keyword", "Space") || !catalogTagsContain(detail.Tags, "keyword", "Mystery") {
+		t.Fatalf("expected keyword tags, got %#v", detail.Tags)
+	}
+
+	var imdbIdentity database.CatalogIdentity
+	if err := db.WithContext(ctx).Where("item_id = ? AND provider = ? AND identity_type = ? AND identity_key = ?", item.ID, "imdb", "movie", "tt3033030").First(&imdbIdentity).Error; err != nil {
+		t.Fatalf("load imdb identity: %v", err)
+	}
+}
+
+func TestMatchCatalogItemUsesExistingExternalIDForDetail(t *testing.T) {
+	searchCalled := false
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/movie":
+			searchCalled = true
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/movie/101":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "title": "Known Movie", "original_title": "Known Movie Original", "overview": "Known overview", "poster_path": "/known-poster.jpg", "backdrop_path": "/known-backdrop.jpg", "release_date": "2024-02-02", "runtime": 121, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+	catalogSvc := catalog.NewService(db)
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	confidence := 1.0
+	if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: item.ID, Provider: "tmdb", ProviderType: "movie", ExternalID: "movie:101", IsPrimary: true, Source: "scanner", Confidence: &confidence}); err != nil {
+		t.Fatalf("seed scanner external id: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if _, err := svc.MatchCatalogItemOperation(ctx, item.ID); err != nil {
+		t.Fatalf("match catalog item: %v", err)
+	}
+	if searchCalled {
+		t.Fatalf("expected existing external id to skip remote search")
+	}
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.Title != "Known Movie" {
+		t.Fatalf("expected detail fetch to apply known movie, got %#v", stored)
+	}
+}
+
+func TestMatchCatalogItemIgnoresLowConfidenceExistingExternalID(t *testing.T) {
+	searchCalled := false
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/movie":
+			searchCalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 202, "title": "Back to the Past", "original_title": "Back to the Past", "release_date": "2025-02-02"}}})
+		case "/movie/999":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 999, "title": "A Minecraft Movie", "release_date": "2025-04-04", "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		case "/movie/202":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 202, "title": "Back to the Past", "original_title": "Back to the Past", "overview": "Matched overview", "release_date": "2025-02-02", "runtime": 100, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+	catalogSvc := catalog.NewService(db)
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Back to the Past", Path: "/movies/Back to the Past 2025 1080p WEB-DL H 264 AAC-HHWEB.mkv", SortKey: "Back to the Past"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	confidence := 0.23
+	if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: item.ID, Provider: "tmdb", ProviderType: "movie", ExternalID: "movie:999", IsPrimary: true, Source: "metadata_match", Confidence: &confidence}); err != nil {
+		t.Fatalf("seed low-confidence external id: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if _, err := svc.MatchCatalogItemOperation(ctx, item.ID); err != nil {
+		t.Fatalf("match catalog item: %v", err)
+	}
+	if !searchCalled {
+		t.Fatalf("expected low-confidence existing external id to be ignored and search to run")
+	}
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if stored.Title != "Back to the Past" {
+		t.Fatalf("expected rematch to avoid stale minecraft title, got %#v", stored)
+	}
+}
+
+func configureTestTMDBProvider(ctx context.Context, settingsSvc *settings.Service, baseURL string, apiKey string) error {
+	enabled := true
+	_, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{
+		Name:               database.MigratedDefaultTMDBProviderInstanceName,
+		ProviderType:       database.MetadataProviderTypeTMDB,
+		Enabled:            &enabled,
+		AvailabilityStatus: database.MetadataProviderAvailabilityAvailable,
+		TMDB: &settings.MetadataProviderInput{
+			APIKey:       apiKey,
+			BaseURL:      baseURL,
+			ImageBaseURL: baseURL + "/images",
+			Language:     "en-US",
+			Timeout:      "1s",
+		},
+	})
+	return err
+}
+
+func TestMetaTubeCatalogSearchApplyAndRefetch(t *testing.T) {
+	requestCounts := map[string]int{}
+	metatube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		requestCounts[req.URL.Path]++
+		switch req.URL.Path {
+		case "/v1/movies/search":
+			if got := req.URL.Query().Get("provider"); got != "fanza" {
+				t.Fatalf("unexpected metatube provider filter: %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"provider": "fanza", "id": "abc123", "title": "MetaTube Movie", "release_date": "2024-02-02", "cover_url": metatubeImageURL(req, "/poster.jpg")}}})
+		case "/v1/movies/fanza/abc123":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"provider": "fanza", "id": "abc123", "title": "MetaTube Movie", "original_title": "MetaTube Original", "summary": "MetaTube overview", "release_date": "2024-02-02", "runtime": 121, "genres": []string{"Drama"}, "director": "Director One", "actors": []map[string]any{{"name": "Actor One", "role": "Lead"}}, "cover_url": metatubeImageURL(req, "/poster.jpg"), "backdrop_url": metatubeImageURL(req, "/backdrop.jpg"), "fallback": map[string]any{"used": false}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer metatube.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{})
+	enabled := true
+	provider, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: "metatube", ProviderType: database.MetadataProviderTypeMetaTube, Enabled: &enabled, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, MetaTube: &settings.MetadataProviderInput{APIKey: "token", BaseURL: metatube.URL, UpstreamProviderFilter: "fanza", Timeout: "1s"}})
+	if err != nil {
+		t.Fatalf("configure metatube provider: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+	if _, err := settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{SearchProviderIDs: []uint{provider.ID}, DetailProviderIDs: []uint{provider.ID}, ImageProviderIDs: []uint{provider.ID}, PeopleProviderIDs: []uint{provider.ID}}); err != nil {
+		t.Fatalf("update metadata strategy: %v", err)
+	}
+
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MetaTube Movie", Path: "/movies/metatube.mkv", SortKey: "MetaTube Movie"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	candidates, err := svc.SearchCatalogCandidates(ctx, item.ID, ManualSearchInput{Title: "MetaTube Movie"})
+	if err != nil {
+		t.Fatalf("search metatube candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Provider != "metatube" || candidates[0].ExternalID != "metatube:fanza:abc123" {
+		t.Fatalf("unexpected metatube candidates: %#v", candidates)
+	}
+	if _, err := svc.ApplyCatalogCandidateOperation(ctx, item.ID, ApplyCandidateInput{ExternalID: candidates[0].ExternalID}); err != nil {
+		t.Fatalf("apply metatube candidate: %v", err)
+	}
+
+	var externalIDs []database.CatalogExternalID
+	if err := db.WithContext(ctx).Where("item_id = ?", item.ID).Order("provider asc").Find(&externalIDs).Error; err != nil {
+		t.Fatalf("load external ids: %v", err)
+	}
+	if len(externalIDs) != 1 || externalIDs[0].Provider != "metatube" || externalIDs[0].ProviderType != "fanza" || externalIDs[0].ExternalID != "metatube:fanza:abc123" {
+		t.Fatalf("unexpected metatube external identities: %#v", externalIDs)
+	}
+	if _, err := catalog.NewService(db).SetExternalID(ctx, catalog.ExternalIDInput{ItemID: item.ID, Provider: "tmdb", ProviderType: "movie", ExternalID: "movie:999", IsPrimary: false, Source: "test"}); err != nil {
+		t.Fatalf("add tmdb identity: %v", err)
+	}
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ? AND source_name = ?", item.ID, "metatube").First(&source).Error; err != nil {
+		t.Fatalf("load metatube metadata source: %v", err)
+	}
+	if source.ProviderInstanceName != "metatube" || source.ExternalID != "metatube:fanza:abc123" || source.PayloadJSON == "" {
+		t.Fatalf("unexpected metatube source: %#v", source)
+	}
+
+	if _, err := svc.RefetchCatalogItemOperation(ctx, item.ID); err != nil {
+		t.Fatalf("refetch metatube catalog item: %v", err)
+	}
+	if requestCounts["/v1/movies/fanza/abc123"] < 2 {
+		t.Fatalf("expected refetch to call metatube detail again, counts: %#v", requestCounts)
+	}
+
+	missing, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Missing", Path: "/movies/missing.mkv", SortKey: "Missing"})
+	if err != nil {
+		t.Fatalf("create missing catalog item: %v", err)
+	}
+	if _, err := svc.RefetchCatalogItemOperation(ctx, missing.ID); err == nil {
+		t.Fatalf("expected missing MetaTube identity refetch error")
+	}
+}
+
+func TestMatchCatalogItemOperationDocumentsAutomatedMetaTubeMovieBaseline(t *testing.T) {
+	requestCounts := map[string]int{}
+	metatube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		requestCounts[req.URL.Path]++
+		switch req.URL.Path {
+		case "/v1/movies/search":
+			if got := req.URL.Query().Get("provider"); got != "fanza" {
+				t.Fatalf("unexpected metatube provider filter: %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"provider": "fanza", "id": "auto123", "title": "Auto MetaTube Movie", "release_date": "2024-05-06", "cover_url": metatubeImageURL(req, "/auto-poster.jpg")}}})
+		case "/v1/movies/fanza/auto123":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"provider": "fanza", "id": "auto123", "title": "Auto MetaTube Movie", "original_title": "Auto MetaTube Original", "summary": "Auto MetaTube overview", "release_date": "2024-05-06", "runtime": 88, "director": "Director Two", "actors": []map[string]any{{"name": "Actor Two", "role": "Lead"}}, "cover_url": metatubeImageURL(req, "/auto-poster.jpg"), "backdrop_url": metatubeImageURL(req, "/auto-backdrop.jpg")}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer metatube.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{})
+	enabled := true
+	provider, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: "metatube-auto", ProviderType: database.MetadataProviderTypeMetaTube, Enabled: &enabled, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, MetaTube: &settings.MetadataProviderInput{BaseURL: metatube.URL, UpstreamProviderFilter: "fanza", Timeout: "1s"}})
+	if err != nil {
+		t.Fatalf("configure metatube provider: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+	if _, err := settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{SearchProviderIDs: []uint{provider.ID}, DetailProviderIDs: []uint{provider.ID}, ImageProviderIDs: []uint{provider.ID}, PeopleProviderIDs: []uint{provider.ID}}); err != nil {
+		t.Fatalf("update metadata strategy: %v", err)
+	}
+
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Auto MetaTube Movie", Path: "/movies/auto-metatube.mkv", SortKey: "Auto MetaTube Movie"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	operation, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("match metatube movie: %v", err)
+	}
+	if operation.Operation != OperationTypeMatch || operation.OriginItemID != item.ID || operation.TargetItemID != item.ID || operation.TargetType != catalog.ItemTypeMovie || operation.Status != OperationStatusApplied {
+		t.Fatalf("unexpected metatube match operation: %#v", operation)
+	}
+	if requestCounts["/v1/movies/search"] < 1 || requestCounts["/v1/movies/fanza/auto123"] != 1 {
+		t.Fatalf("unexpected metatube request counts: %#v", requestCounts)
+	}
+
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload catalog item: %v", err)
+	}
+	if stored.Title != "Auto MetaTube Movie" || stored.OriginalTitle != "Auto MetaTube Original" || stored.Overview != "Auto MetaTube overview" || stored.RuntimeSeconds == nil || *stored.RuntimeSeconds != 88*60 {
+		t.Fatalf("unexpected metatube stored item: %#v", stored)
+	}
+	if stored.GovernanceStatus != catalog.GovernanceMatched {
+		t.Fatalf("expected metatube auto match to mark item matched, got %q", stored.GovernanceStatus)
+	}
+
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ? AND source_name = ?", item.ID, database.MetadataProviderTypeMetaTube).First(&source).Error; err != nil {
+		t.Fatalf("load metatube metadata source: %v", err)
+	}
+	if source.ProviderInstanceName != "metatube-auto" || source.ExternalID != "metatube:fanza:auto123" {
+		t.Fatalf("unexpected metatube source: %#v", source)
+	}
+}
+
+func metatubeImageURL(req *http.Request, path string) string {
+	return "http://" + req.Host + path
+}
+
+func TestRefetchCatalogItemUsesLocalScanEvidence(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{})
+	providers, err := settingsSvc.ListMetadataProviderInstances(ctx)
+	if err != nil {
+		t.Fatalf("list metadata providers: %v", err)
+	}
+	localScanID := uint(0)
+	for _, provider := range providers {
+		if provider.ProviderType == database.MetadataProviderTypeLocalScan {
+			localScanID = provider.ID
+			break
+		}
+	}
+	if localScanID == 0 {
+		t.Fatalf("expected local scan provider id")
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+	strategy, err := settingsSvc.GetLibraryMetadataStrategy(ctx, 1)
+	if err != nil {
+		t.Fatalf("get metadata strategy: %v", err)
+	}
+	_, err = settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{
+		TemplateProfileID:         strategy.TemplateProfileID,
+		SearchProviderIDs:         []uint{},
+		DetailProviderIDs:         []uint{localScanID},
+		ImageProviderIDs:          []uint{},
+		PeopleProviderIDs:         []uint{},
+		HierarchyProviderIDs:      []uint{},
+		PreferredMetadataLanguage: "zh-CN",
+	})
+	if err != nil {
+		t.Fatalf("update metadata strategy: %v", err)
+	}
+
+	catalogSvc := catalog.NewService(db)
+	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Original Movie", Path: "/movies/Original.Movie.2024.mkv", SortKey: "Original Movie"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if _, applied, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: item.ID, FieldKey: "title", Value: "Locked Movie", Lock: true, LockReason: "baseline lock"}); err != nil {
+		t.Fatalf("lock title field: %v", err)
+	} else if !applied {
+		t.Fatalf("expected title lock to apply")
+	}
+	payloadJSON, err := json.Marshal(map[string]any{
+		"metadata_sidecars": []map[string]any{{
+			"path":         "/movies/Original.Movie.2024.nfo",
+			"parse_status": "parsed",
+			"hints": map[string]any{
+				"title":          "Sidecar Movie",
+				"original_title": "Sidecar Original",
+				"year":           2024,
+			},
+			"external_ids": map[string]any{"tmdb": "456"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal scanner payload: %v", err)
+	}
+	if _, err := catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{ItemID: item.ID, SourceType: catalog.SourceTypeLocalFile, SourceName: "scanner", PayloadJSON: string(payloadJSON), FetchedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("record scanner metadata source: %v", err)
+	}
+
+	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
+	if _, err := svc.RefetchCatalogItemOperation(ctx, item.ID); err != nil {
+		t.Fatalf("refetch catalog item with local scan: %v", err)
+	}
+
+	var stored database.CatalogItem
+	if err := db.WithContext(ctx).First(&stored, item.ID).Error; err != nil {
+		t.Fatalf("reload catalog item: %v", err)
+	}
+	if stored.Title != "Locked Movie" || stored.OriginalTitle != "Sidecar Original" {
+		t.Fatalf("expected local scan metadata to update title fields, got %#v", stored)
+	}
+	if stored.Year == nil || *stored.Year != 2024 {
+		t.Fatalf("expected local scan year 2024, got %#v", stored.Year)
+	}
+	var source database.MetadataSource
+	if err := db.WithContext(ctx).Where("item_id = ? AND source_name = ?", item.ID, database.MetadataProviderTypeLocalScan).Order("id desc").First(&source).Error; err != nil {
+		t.Fatalf("load local scan metadata source: %v", err)
+	}
+	if source.ProviderInstanceName != database.BuiltInLocalScanProviderInstanceName {
+		t.Fatalf("expected local scan provider provenance, got %#v", source)
+	}
+}
+
+func TestMatchCatalogItemUsesLibraryMetadataLanguagePolicy(t *testing.T) {
+	seenLanguages := map[string]bool{}
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		seenLanguages[req.URL.Query().Get("language")] = true
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/movie":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 101, "title": "Matched Movie", "release_date": "2024-02-02"}}})
+		case "/movie/101":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 101, "title": "Matched Movie", "release_date": "2024-02-02", "runtime": 121, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure policy defaults: %v", err)
+	}
+	strategy, err := settingsSvc.GetLibraryMetadataStrategy(ctx, 1)
+	if err != nil {
+		t.Fatalf("get metadata strategy: %v", err)
+	}
+	if _, err := settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{TemplateProfileID: strategy.TemplateProfileID, SearchProviderIDs: strategy.SearchProviderIDs, DetailProviderIDs: strategy.DetailProviderIDs, ImageProviderIDs: strategy.ImageProviderIDs, PeopleProviderIDs: strategy.PeopleProviderIDs, HierarchyProviderIDs: strategy.HierarchyProviderIDs, PreferredMetadataLanguage: "zh-CN", PreferredImageLanguage: strategy.PreferredImageLanguage, MetadataCountryCode: strategy.MetadataCountryCode}); err != nil {
+		t.Fatalf("set metadata strategy language: %v", err)
+	}
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if _, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, item.ID); err != nil {
+		t.Fatalf("match catalog item: %v", err)
+	}
+	if !seenLanguages["zh-CN"] {
+		t.Fatalf("expected TMDB requests to use zh-CN, saw %#v", seenLanguages)
+	}
+}
+
+func TestMatchCatalogItemRespectsDisabledTMDBPolicy(t *testing.T) {
+	called := false
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer tmdb.Close()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure policy defaults: %v", err)
+	}
+	strategy, err := settingsSvc.GetLibraryMetadataStrategy(ctx, 1)
+	if err != nil {
+		t.Fatalf("get metadata strategy: %v", err)
+	}
+	if _, err := settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{TemplateProfileID: 0, SearchProviderIDs: []uint{}, DetailProviderIDs: strategy.DetailProviderIDs, ImageProviderIDs: strategy.ImageProviderIDs, PeopleProviderIDs: strategy.PeopleProviderIDs, HierarchyProviderIDs: strategy.HierarchyProviderIDs, PreferredMetadataLanguage: strategy.PreferredMetadataLanguage, PreferredImageLanguage: strategy.PreferredImageLanguage, MetadataCountryCode: strategy.MetadataCountryCode}); err != nil {
+		t.Fatalf("disable search providers in metadata strategy: %v", err)
+	}
+	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
+	if err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if _, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, item.ID); err == nil {
+		t.Fatalf("expected match to fail when search stage has no configured provider")
+	}
+	if called {
+		t.Fatalf("expected empty search strategy to avoid TMDB calls")
+	}
+}
+
 func TestMatchCatalogItemPrefersRemoteImagesOverGeneratedCatalogFallback(t *testing.T) {
 	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -123,8 +718,8 @@ func TestMatchCatalogItemPrefersRemoteImagesOverGeneratedCatalogFallback(t *test
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
@@ -136,7 +731,7 @@ func TestMatchCatalogItemPrefersRemoteImagesOverGeneratedCatalogFallback(t *test
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	if err := svc.MatchCatalogItem(ctx, item.ID); err != nil {
+	if _, err := svc.MatchCatalogItemOperation(ctx, item.ID); err != nil {
 		t.Fatalf("match catalog item: %v", err)
 	}
 
@@ -177,8 +772,8 @@ func TestApplyCatalogCandidateReplacesPreviouslySelectedRemoteImages(t *testing.
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "MovieA", Path: "/movies/MovieA.2024.mkv", SortKey: "MovieA"})
@@ -194,7 +789,7 @@ func TestApplyCatalogCandidateReplacesPreviouslySelectedRemoteImages(t *testing.
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	if err := svc.ApplyCatalogCandidate(ctx, item.ID, ApplyCandidateInput{ExternalID: "movie:202"}); err != nil {
+	if _, err := svc.ApplyCatalogCandidateOperation(ctx, item.ID, ApplyCandidateInput{ExternalID: "movie:202"}); err != nil {
 		t.Fatalf("apply catalog candidate: %v", err)
 	}
 
@@ -238,8 +833,8 @@ func TestMatchCatalogItemMarksItemUnmatchedWhenSearchReturnsNoResults(t *testing
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	item, err := catalog.NewService(db).CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "Unknown Movie", Path: "/movies/Unknown.mkv", SortKey: "Unknown Movie"})
@@ -248,7 +843,7 @@ func TestMatchCatalogItemMarksItemUnmatchedWhenSearchReturnsNoResults(t *testing
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	if err := svc.MatchCatalogItem(ctx, item.ID); err != nil {
+	if _, err := svc.MatchCatalogItemOperation(ctx, item.ID); err != nil {
 		t.Fatalf("match catalog item: %v", err)
 	}
 
@@ -284,8 +879,8 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	catalogSvc := catalog.NewService(db)
@@ -324,12 +919,12 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	result, err := svc.MatchCatalogItemWithResult(ctx, episode.ID)
+	operation, err := svc.MatchCatalogItemOperation(ctx, episode.ID)
 	if err != nil {
 		t.Fatalf("match catalog episode via series root: %v", err)
 	}
-	if result.OriginItemID != episode.ID || result.TargetItemID != series.ID || result.DescendantStatus != "identity_retained" || result.ProviderExternalID != "tv:1002" {
-		t.Fatalf("unexpected descendant match result: %#v", result)
+	if operation.Operation != OperationTypeMatch || operation.OriginItemID != episode.ID || operation.TargetItemID != series.ID || operation.TargetType != catalog.ItemTypeSeries || operation.Status != OperationStatusNeedsReview {
+		t.Fatalf("unexpected descendant match operation: %#v", operation)
 	}
 
 	var storedSeries database.CatalogItem
@@ -401,6 +996,13 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	if firstEpisodeExternalID.ExternalID != "tv:1001" {
 		t.Fatalf("unexpected episode external id: %#v", firstEpisodeExternalID)
 	}
+	var firstEpisodeIdentity database.CatalogIdentity
+	if err := db.WithContext(ctx).Where("item_id = ? AND provider = ? AND identity_type = ?", episodes[0].ID, "tmdb", "tv_episode").First(&firstEpisodeIdentity).Error; err != nil {
+		t.Fatalf("load episode catalog identity: %v", err)
+	}
+	if firstEpisodeIdentity.IdentityKey != "tv:1001" {
+		t.Fatalf("unexpected episode catalog identity: %#v", firstEpisodeIdentity)
+	}
 
 	var firstEpisodeSource database.MetadataSource
 	if err := db.WithContext(ctx).Where("item_id = ? AND external_id = ?", episodes[0].ID, "tv:1001").First(&firstEpisodeSource).Error; err != nil {
@@ -464,6 +1066,171 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 	}
 }
 
+func TestMatchCatalogItemOperationDocumentsAutomatedTMDBSeriesHierarchyBaseline(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 778, "name": "Baseline Show", "original_name": "Baseline Show Original", "first_air_date": "2024-01-01", "vote_count": 900}}})
+		case "/tv/778":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 778, "name": "Baseline Show", "original_name": "Baseline Show Original", "overview": "Series baseline overview", "poster_path": "/show-poster.jpg", "backdrop_path": "/show-backdrop.jpg", "first_air_date": "2024-01-01", "episode_run_time": []int{42}, "seasons": []map[string]any{{"id": 1701, "season_number": 1, "name": "Season 1", "overview": "Season baseline overview", "poster_path": "/season-poster.jpg"}}, "genres": []map[string]any{}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		case "/tv/778/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1701, "season_number": 1, "name": "Season 1", "overview": "Season baseline overview", "poster_path": "/season-poster.jpg", "episodes": []map[string]any{{"id": 2001, "season_number": 1, "episode_number": 1, "name": "Pilot", "air_date": "2024-01-01", "overview": "Pilot baseline overview", "still_path": "/pilot.jpg", "runtime": 42}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+
+	catalogSvc := catalog.NewService(db)
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeSeries, Title: "Baseline Show", Path: "/shows/Baseline Show", SortKey: "Baseline Show"})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+
+	operation, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("match series: %v", err)
+	}
+	if operation.Operation != OperationTypeMatch || operation.OriginItemID != series.ID || operation.TargetItemID != series.ID || operation.TargetType != catalog.ItemTypeSeries || operation.Status != OperationStatusApplied {
+		t.Fatalf("unexpected series match operation: %#v", operation)
+	}
+
+	var storedSeries database.CatalogItem
+	if err := db.WithContext(ctx).First(&storedSeries, series.ID).Error; err != nil {
+		t.Fatalf("reload series: %v", err)
+	}
+	if storedSeries.Title != "Baseline Show" || storedSeries.GovernanceStatus != catalog.GovernanceMatched || storedSeries.RuntimeSeconds == nil || *storedSeries.RuntimeSeconds != 42*60 {
+		t.Fatalf("unexpected stored series: %#v", storedSeries)
+	}
+
+	var season database.CatalogItem
+	if err := db.WithContext(ctx).Where("root_id = ? AND type = ? AND index_number = ?", series.ID, catalog.ItemTypeSeason, 1).First(&season).Error; err != nil {
+		t.Fatalf("load provider-created season: %v", err)
+	}
+	if season.Title != "Season 1" || season.AvailabilityStatus != catalog.AvailabilityMissing {
+		t.Fatalf("unexpected season descendant: %#v", season)
+	}
+
+	var episode database.CatalogItem
+	if err := db.WithContext(ctx).Where("root_id = ? AND type = ? AND parent_index_number = ? AND index_number = ?", series.ID, catalog.ItemTypeEpisode, 1, 1).First(&episode).Error; err != nil {
+		t.Fatalf("load provider-created episode: %v", err)
+	}
+	if episode.Title != "Pilot" || episode.AvailabilityStatus != catalog.AvailabilityMissing || episode.RuntimeSeconds == nil || *episode.RuntimeSeconds != 42*60 {
+		t.Fatalf("unexpected episode descendant: %#v", episode)
+	}
+
+	var externalIDs []database.CatalogExternalID
+	if err := db.WithContext(ctx).Where("item_id IN ?", []uint{series.ID, season.ID, episode.ID}).Order("provider_type asc").Find(&externalIDs).Error; err != nil {
+		t.Fatalf("load hierarchy external ids: %v", err)
+	}
+	if len(externalIDs) != 3 {
+		t.Fatalf("expected series, season, and episode external ids, got %#v", externalIDs)
+	}
+}
+
+func TestMatchCatalogItemSyncsTMDBTVRichMetadata(t *testing.T) {
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 779, "name": "Rich Show", "first_air_date": "2026-01-01", "vote_count": 1000}}})
+		case "/tv/779":
+			appendToResponse := req.URL.Query().Get("append_to_response")
+			if appendToResponse != "credits,images,videos,keywords,content_ratings,external_ids" {
+				t.Fatalf("unexpected tv append_to_response: %q", appendToResponse)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 779, "name": "Rich Show", "original_name": "Rich Show Original", "overview": "Rich series overview", "first_air_date": "2026-01-01", "last_air_date": "2026-03-01", "status": "Ended", "episode_run_time": []int{50}, "vote_average": 7.7, "genres": []map[string]any{{"name": "Drama"}}, "keywords": map[string]any{"results": []map[string]any{{"name": "Detective"}}}, "content_ratings": map[string]any{"results": []map[string]any{{"iso_3166_1": "US", "rating": "TV-MA"}}}, "external_ids": map[string]any{"imdb_id": "tt779779", "tvdb_id": 7791, "wikidata_id": "Q779"}, "seasons": []map[string]any{{"id": 2701, "season_number": 1, "name": "Season 1", "overview": "Season rich overview", "poster_path": "/season-rich.jpg"}}, "credits": map[string]any{"cast": []map[string]any{}, "crew": []map[string]any{}}, "images": map[string]any{"logos": []map[string]any{}}, "videos": map[string]any{"results": []map[string]any{}}})
+		case "/tv/779/season/1":
+			if req.URL.Query().Get("append_to_response") != "credits,images,external_ids" {
+				t.Fatalf("unexpected season append_to_response: %q", req.URL.Query().Get("append_to_response"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 2701, "season_number": 1, "name": "Season 1", "air_date": "2026-01-01", "overview": "Season rich overview", "poster_path": "/season-rich.jpg", "external_ids": map[string]any{"tvdb_id": 27011}, "credits": map[string]any{"cast": []map[string]any{{"id": 9301, "name": "Season Actor", "character": "Lead", "profile_path": "/season-actor.jpg"}}, "crew": []map[string]any{}}, "episodes": []map[string]any{{"id": 3001, "season_number": 1, "episode_number": 1, "name": "Pilot", "air_date": "2026-01-01", "overview": "Pilot rich overview", "still_path": "/pilot-rich.jpg", "runtime": 50, "vote_average": 8.1}}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer tmdb.Close()
+
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
+	}
+	catalogSvc := catalog.NewService(db)
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeSeries, Title: "Rich Show", Path: "/shows/Rich Show", SortKey: "Rich Show"})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+
+	operation, err := NewService(db, config.MetadataConfig{}, settingsSvc).MatchCatalogItemOperation(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("match series: %v", err)
+	}
+	for _, field := range []string{"community_rating", "official_rating", "series_status", "last_air_date", "tags.genre", "tags.keyword"} {
+		if !operationHasAppliedField(operation, field) {
+			t.Fatalf("expected applied field %q in %#v", field, operation.AppliedFields)
+		}
+	}
+
+	var storedSeries database.CatalogItem
+	if err := db.WithContext(ctx).First(&storedSeries, series.ID).Error; err != nil {
+		t.Fatalf("reload series: %v", err)
+	}
+	if storedSeries.CommunityRating == nil || *storedSeries.CommunityRating != 7.7 || storedSeries.OfficialRating != "TV-MA" || storedSeries.SeriesStatus != "Ended" || storedSeries.LastAirDate == nil {
+		t.Fatalf("unexpected rich series fields: %#v", storedSeries)
+	}
+
+	var season database.CatalogItem
+	if err := db.WithContext(ctx).Where("root_id = ? AND type = ? AND index_number = ?", series.ID, catalog.ItemTypeSeason, 1).First(&season).Error; err != nil {
+		t.Fatalf("load season: %v", err)
+	}
+	if season.FirstAirDate == nil {
+		t.Fatalf("expected season first air date, got %#v", season)
+	}
+	var seasonPersonCount int64
+	if err := db.WithContext(ctx).Model(&database.ItemPerson{}).Where("item_id = ?", season.ID).Count(&seasonPersonCount).Error; err != nil {
+		t.Fatalf("count season people: %v", err)
+	}
+	if seasonPersonCount != 1 {
+		t.Fatalf("expected season person, got %d", seasonPersonCount)
+	}
+
+	var episode database.CatalogItem
+	if err := db.WithContext(ctx).Where("root_id = ? AND type = ? AND parent_index_number = ? AND index_number = ?", series.ID, catalog.ItemTypeEpisode, 1, 1).First(&episode).Error; err != nil {
+		t.Fatalf("load episode: %v", err)
+	}
+	if episode.CommunityRating == nil || *episode.CommunityRating != 8.1 {
+		t.Fatalf("expected episode community rating, got %#v", episode)
+	}
+
+	detail, err := catalogSvc.GetItemDetail(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("load series detail: %v", err)
+	}
+	if !catalogTagsContain(detail.Tags, "genre", "Drama") || !catalogTagsContain(detail.Tags, "keyword", "Detective") {
+		t.Fatalf("expected rich series tags, got %#v", detail.Tags)
+	}
+	var imdbIdentity database.CatalogIdentity
+	if err := db.WithContext(ctx).Where("item_id = ? AND provider = ? AND identity_type = ? AND identity_key = ?", series.ID, "imdb", "tv", "tt779779").First(&imdbIdentity).Error; err != nil {
+		t.Fatalf("load series imdb identity: %v", err)
+	}
+}
+
 func TestMatchCatalogEpisodeReportsProviderSlotMissing(t *testing.T) {
 	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -487,8 +1254,8 @@ func TestMatchCatalogEpisodeReportsProviderSlotMissing(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	catalogSvc := catalog.NewService(db)
@@ -508,13 +1275,31 @@ func TestMatchCatalogEpisodeReportsProviderSlotMissing(t *testing.T) {
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	result, err := svc.MatchCatalogItemWithResult(ctx, episode.ID)
+	operation, err := svc.MatchCatalogItemOperation(ctx, episode.ID)
 	if err != nil {
 		t.Fatalf("match catalog episode: %v", err)
 	}
-	if result.DescendantStatus != "provider_slot_missing" || result.SeasonNumber == nil || *result.SeasonNumber != 1 || result.EpisodeNumber == nil || *result.EpisodeNumber != 99 {
-		t.Fatalf("unexpected provider slot result: %#v", result)
+	if operation.Operation != OperationTypeMatch || operation.OriginItemID != episode.ID || operation.TargetItemID != series.ID || operation.TargetType != catalog.ItemTypeSeries || operation.Status != OperationStatusNeedsReview {
+		t.Fatalf("unexpected provider slot operation: %#v", operation)
 	}
+}
+
+func operationHasAppliedField(operation MetadataOperationResult, fieldKey string) bool {
+	for _, field := range operation.AppliedFields {
+		if field.FieldKey == fieldKey {
+			return true
+		}
+	}
+	return false
+}
+
+func catalogTagsContain(tags []catalog.CatalogTagDetail, kind string, name string) bool {
+	for _, tag := range tags {
+		if tag.Kind == kind && tag.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRefetchCatalogItemRespectsLockedFields(t *testing.T) {
@@ -536,8 +1321,8 @@ func TestRefetchCatalogItemRespectsLockedFields(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if _, err := settingsSvc.UpdateMetadataSettings(ctx, settings.UpdateMetadataSettingsInput{TMDB: settings.MetadataProviderInput{APIKey: "catalog-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("update metadata settings: %v", err)
+	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
 	catalogSvc := catalog.NewService(db)
@@ -554,7 +1339,7 @@ func TestRefetchCatalogItemRespectsLockedFields(t *testing.T) {
 	}
 
 	svc := NewService(db, config.MetadataConfig{}, settingsSvc)
-	if err := svc.RefetchCatalogItem(ctx, item.ID); err != nil {
+	if _, err := svc.RefetchCatalogItemOperation(ctx, item.ID); err != nil {
 		t.Fatalf("refetch catalog item: %v", err)
 	}
 

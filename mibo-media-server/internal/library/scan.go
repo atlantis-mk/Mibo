@@ -5,13 +5,15 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 var (
 	episodePattern             = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:s(\d{1,2})e(\d{1,2})|(\d{1,2})x(\d{1,2}))(?:[\s._-]+.*)?$`)
 	yearPattern                = regexp.MustCompile(`(?i)(?:^|[\s._\-(])((?:19|20)\d{2})(?:$|[\s._\-)])`)
-	seasonDirectoryPattern     = regexp.MustCompile(`(?i)^(?:season|s)[\s._-]*0*(\d{1,2})$|^第?\s*([0-9一二三四五六七八九十两零]+)\s*季$`)
+	seasonDirectoryPattern     = regexp.MustCompile(`(?i)^(?:season|s)[\s._-]*0*(\d{1,2})(?:$|[\s._-]+.*$)|^第?\s*([0-9一二三四五六七八九十两零]+)\s*季(?:$|[\s._-]+.*$)`)
+	embeddedSeasonDirPattern   = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:season[\s._-]*0*(\d{1,2})|s0*(\d{1,2}))(?:$|[\s._\-(]+.*$)`)
 	episodeOnlyPattern         = regexp.MustCompile(`(?i)^(?:e|ep|episode)[\s._-]*0*(\d{1,3})(?:[\s._-]+.*)?$`)
 	numericEpisodePattern      = regexp.MustCompile(`^0*([1-9]\d{0,2})(?:[\s._-]+.*)?$`)
 	chineseEpisodePattern      = regexp.MustCompile(`^第?\s*(\d{1,3})\s*[集话話](?:[\s._-]+.*)?$`)
@@ -55,6 +57,7 @@ type classifiedMedia struct {
 	OriginalTitle        string
 	SeriesTitle          string
 	Year                 *int
+	Tags                 []string
 	SeasonNumber         *int
 	EpisodeNumber        *int
 	EpisodeNumbers       []int
@@ -79,6 +82,7 @@ type catalogScanArtifact struct {
 	OriginalTitle        string
 	SeriesTitle          string
 	Year                 *int
+	Tags                 []string
 	SeasonNumber         *int
 	EpisodeSlots         []catalogEpisodeSlot
 	StorageProvider      string
@@ -90,10 +94,31 @@ type catalogScanArtifact struct {
 	SizeBytes            int64
 	ModifiedAt           *time.Time
 	Container            string
+	PreferredAssetType   string
+	PreferredAssetRole   string
 	NormalizationVersion string
 	RemovedTokens        []titleclean.RemovedToken
 	SubtitleSidecars     []catalogScanSidecar
 	MetadataSidecars     []catalogScanMetadataSidecar
+	ImageCandidates      []catalogScanImageCandidate
+	ExternalIDs          []catalogScanExternalID
+	Decisions            []scanDecision
+}
+
+type catalogScanImageCandidate struct {
+	ImageType   string
+	URL         string
+	Path        string
+	Source      string
+	Priority    int
+	Provisional bool
+}
+
+type catalogScanExternalID struct {
+	Provider     string
+	ProviderType string
+	ExternalID   string
+	Confidence   *float64
 }
 
 type catalogScanSidecar struct {
@@ -123,15 +148,39 @@ type catalogScanMetadataHints struct {
 }
 
 type SyncResult struct {
-	DirectoriesScanned int `json:"directories_scanned"`
-	FilesSeen          int `json:"files_seen"`
-	CatalogItemsSeen   int `json:"catalog_items_seen"`
-	InventoryFilesSeen int `json:"inventory_files_seen"`
+	DirectoriesScanned           int            `json:"directories_scanned"`
+	FilesSeen                    int            `json:"files_seen"`
+	CatalogItemsSeen             int            `json:"catalog_items_seen"`
+	InventoryFilesSeen           int            `json:"inventory_files_seen"`
+	ExcludedFilesSkipped         int            `json:"excluded_files_skipped"`
+	ExcludedFilesSkippedByReason map[string]int `json:"excluded_files_skipped_by_reason,omitempty"`
 }
 
 type scanMode struct {
-	partial  bool
-	rootPath string
+	partial               bool
+	rootPath              string
+	catalogMatchItemIDs   []uint
+	inventoryProbeFileIDs []uint
+}
+
+func (m *scanMode) recordCatalogMatchCandidate(itemID uint) {
+	if m == nil || itemID == 0 {
+		return
+	}
+	m.catalogMatchItemIDs = append(m.catalogMatchItemIDs, itemID)
+}
+
+func (m *scanMode) recordInventoryProbeCandidate(fileID uint) {
+	if m == nil || fileID == 0 {
+		return
+	}
+	m.inventoryProbeFileIDs = append(m.inventoryProbeFileIDs, fileID)
+}
+
+type scanDirectorySnapshot struct {
+	Path     string
+	Objects  []storage.Object
+	Sidecars sidecarIndex
 }
 
 func durationDelta(left, right float64) float64 {

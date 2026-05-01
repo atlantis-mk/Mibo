@@ -11,6 +11,12 @@ import (
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
+const (
+	LibraryTypeMovies = "movies"
+	LibraryTypeShows  = "shows"
+	LibraryTypeMixed  = "mixed"
+)
+
 func classifyMediaFile(libraryType string, libraryRoot string, object storage.Object) classifiedMedia {
 	fileName := path.Base(object.Path)
 	ext := path.Ext(fileName)
@@ -27,7 +33,7 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 		}
 		title := fmt.Sprintf("%s S%02dE%02d-E%02d", seriesTitle, *season, episodeNumbers[0], episodeNumbers[len(episodeNumbers)-1])
 		firstEpisode := episodeNumbers[0]
-		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: &firstEpisode, EpisodeNumbers: episodeNumbers, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
+		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: &firstEpisode, EpisodeNumbers: episodeNumbers, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags}
 	}
 	if groups := episodePattern.FindStringSubmatch(rawTitle); len(groups) > 0 {
 		seriesTitle := cleanTitle(groups[1])
@@ -36,10 +42,10 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 		}
 		season, episode := parseEpisodeNumbers(groups[2], groups[3], groups[4], groups[5])
 		title := fmt.Sprintf("%s S%02dE%02d", seriesTitle, *season, *episode)
-		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: episode, EpisodeNumbers: episodeNumbersFromPointer(episode), SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
+		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: episode, EpisodeNumbers: episodeNumbersFromPointer(episode), SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags}
 	}
 	if shouldTryTVPath {
-		if classified, ok := classifyTVEpisodeFromPath(libraryRoot, object.Path, rawTitle, pathSeriesTitle); ok {
+		if classified, ok := classifyTVEpisodeFromPath(libraryRoot, object.Path, rawTitle, pathSeriesTitle, normalized); ok {
 			return classified
 		}
 	}
@@ -51,7 +57,7 @@ func classifyMediaFile(libraryType string, libraryRoot string, object storage.Ob
 	if isTVLibrary {
 		title = titleFromPath(object.Path)
 	}
-	return classifiedMedia{Type: "movie", Title: title, OriginalTitle: rawTitle, Year: year, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens}
+	return classifiedMedia{Type: "movie", Title: title, OriginalTitle: rawTitle, Year: year, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags}
 }
 
 func parseMultiEpisodeRange(input string) (string, *int, []int, bool) {
@@ -139,15 +145,41 @@ func isGenericMediaName(input string) bool {
 }
 
 func isTVLibraryType(libraryType string) bool {
-	switch strings.ToLower(strings.TrimSpace(libraryType)) {
-	case "tv", "tvshows", "shows":
+	switch normalizeLibraryType(libraryType) {
+	case LibraryTypeShows:
 		return true
 	default:
 		return false
 	}
 }
 
-func classifyTVEpisodeFromPath(libraryRoot string, itemPath string, rawTitle string, pathSeriesTitle string) (classifiedMedia, bool) {
+func isMovieLibraryType(libraryType string) bool {
+	switch normalizeLibraryType(libraryType) {
+	case LibraryTypeMovies:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMixedLibraryType(libraryType string) bool {
+	return normalizeLibraryType(libraryType) == LibraryTypeMixed
+}
+
+func normalizeLibraryType(libraryType string) string {
+	switch strings.ToLower(strings.TrimSpace(libraryType)) {
+	case "movie", "movies", "films":
+		return LibraryTypeMovies
+	case "tv", "tvshows", "shows":
+		return LibraryTypeShows
+	case "mixed", "mixed-content", "mixed_content":
+		return LibraryTypeMixed
+	default:
+		return strings.ToLower(strings.TrimSpace(libraryType))
+	}
+}
+
+func classifyTVEpisodeFromPath(libraryRoot string, itemPath string, rawTitle string, pathSeriesTitle string, normalized titleclean.NormalizeResult) (classifiedMedia, bool) {
 	seriesTitle := strings.TrimSpace(pathSeriesTitle)
 	if seriesTitle == "" {
 		seriesTitle = tvSeriesTitleFromPath(libraryRoot, itemPath)
@@ -164,7 +196,27 @@ func classifyTVEpisodeFromPath(libraryRoot string, itemPath string, rawTitle str
 		return classifiedMedia{}, false
 	}
 	title := fmt.Sprintf("%s S%02dE%02d", seriesTitle, *season, *episode)
-	return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: episode, EpisodeNumbers: episodeNumbersFromPointer(episode), SourcePath: itemPath, Status: "ready"}, true
+	return classifiedMedia{Type: "episode", Title: title, OriginalTitle: rawTitle, SeriesTitle: seriesTitle, SeasonNumber: season, EpisodeNumber: episode, EpisodeNumbers: episodeNumbersFromPointer(episode), SourcePath: itemPath, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags}, true
+}
+
+func hasExplicitEpisodeMarker(input string) bool {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return false
+	}
+	if _, _, _, ok := parseMultiEpisodeRange(trimmed); ok {
+		return true
+	}
+	if episodePattern.MatchString(trimmed) {
+		return true
+	}
+	normalized := normalizeEpisodeIdentifier(trimmed)
+	for _, pattern := range []*regexp.Regexp{episodeOnlyPattern, chineseEpisodePattern} {
+		if pattern.MatchString(normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 func episodeNumbersFromPointer(episode *int) []int {
@@ -180,8 +232,13 @@ func tvSeriesTitleFromPath(libraryRoot string, itemPath string) string {
 		return ""
 	}
 	seriesIndex := len(segments) - 2
-	if seasonIndex := tvSeasonDirectoryIndex(segments); seasonIndex > 0 {
-		seriesIndex = seasonIndex - 1
+	if seasonIndex := tvSeasonDirectoryIndex(segments); seasonIndex >= 0 {
+		if title := seriesTitleFromEmbeddedSeasonDirectory(segments[seasonIndex]); title != "" {
+			return title
+		}
+		if seasonIndex > 0 {
+			seriesIndex = seasonIndex - 1
+		}
 	}
 	if seriesIndex < 0 || seriesIndex >= len(segments)-1 {
 		return ""
@@ -236,13 +293,74 @@ func relativePathSegments(libraryRoot string, itemPath string) []string {
 
 func parseSeasonDirectoryNumber(input string) *int {
 	match := seasonDirectoryPattern.FindStringSubmatch(strings.TrimSpace(input))
-	if len(match) < 3 {
+	if len(match) >= 3 {
+		if value := parseOrdinalToken(match[1]); value != nil {
+			return value
+		}
+		if value := parseOrdinalToken(match[2]); value != nil {
+			return value
+		}
+	}
+	embedded := embeddedSeasonDirPattern.FindStringSubmatch(strings.TrimSpace(input))
+	if len(embedded) < 4 {
 		return nil
 	}
-	if value := parseOrdinalToken(match[1]); value != nil {
-		return value
+	for _, group := range []string{embedded[2], embedded[3]} {
+		if value := parseOrdinalToken(group); value != nil {
+			return value
+		}
 	}
-	return parseOrdinalToken(match[2])
+	return nil
+}
+
+func seriesTitleFromEmbeddedSeasonDirectory(input string) string {
+	match := embeddedSeasonDirPattern.FindStringSubmatch(strings.TrimSpace(input))
+	if len(match) < 4 {
+		return ""
+	}
+	if title := primarySeriesTitleFromGroup(groupWithoutTrailingYear(match[1])); title != "" {
+		return title
+	}
+	return ""
+}
+
+func groupWithoutTrailingYear(input string) string {
+	return strings.TrimSpace(yearPattern.ReplaceAllString(strings.TrimSpace(input), " "))
+}
+
+func primarySeriesTitleFromGroup(input string) string {
+	title := cleanTitle(input)
+	if title == "" {
+		return ""
+	}
+	if primary := leadingNonASCIITitle(title); primary != "" {
+		return primary
+	}
+	return title
+}
+
+func leadingNonASCIITitle(input string) string {
+	tokens := strings.Fields(strings.TrimSpace(input))
+	if len(tokens) < 2 || !containsNonASCIIForTitle(tokens[0]) {
+		return ""
+	}
+	kept := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if !containsNonASCIIForTitle(token) {
+			break
+		}
+		kept = append(kept, token)
+	}
+	return strings.Join(kept, " ")
+}
+
+func containsNonASCIIForTitle(input string) bool {
+	for _, r := range input {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 func parseEpisodeNumberFromTitle(input string, seriesTitle string) *int {

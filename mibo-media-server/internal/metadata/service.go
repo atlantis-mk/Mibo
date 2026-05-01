@@ -99,32 +99,66 @@ type searchResult struct {
 	VoteCount     int     `json:"vote_count"`
 }
 
-type findResponse struct {
-	MovieResults []searchResult `json:"movie_results"`
-	TVResults    []searchResult `json:"tv_results"`
+type detailResponse struct {
+	ID                  int                    `json:"id"`
+	Runtime             *int                   `json:"runtime"`
+	EpisodeRunTime      []int                  `json:"episode_run_time"`
+	Title               string                 `json:"title"`
+	Name                string                 `json:"name"`
+	OriginalTitle       string                 `json:"original_title"`
+	OriginalName        string                 `json:"original_name"`
+	Overview            string                 `json:"overview"`
+	PosterPath          string                 `json:"poster_path"`
+	BackdropPath        string                 `json:"backdrop_path"`
+	ReleaseDate         string                 `json:"release_date"`
+	FirstAirDate        string                 `json:"first_air_date"`
+	LastAirDate         string                 `json:"last_air_date"`
+	Status              string                 `json:"status"`
+	Genres              []namedValue           `json:"genres"`
+	ProductionCountries []countryValue         `json:"production_countries"`
+	Seasons             []seasonSummary        `json:"seasons"`
+	CreatedBy           []namedValue           `json:"created_by"`
+	Credits             creditsResponse        `json:"credits"`
+	Images              imagesResponse         `json:"images"`
+	Videos              videosResponse         `json:"videos"`
+	Keywords            keywordsResponse       `json:"keywords"`
+	ReleaseDates        releaseDatesResponse   `json:"release_dates"`
+	ContentRatings      contentRatingsResponse `json:"content_ratings"`
+	ExternalIDs         externalIDsResponse    `json:"external_ids"`
+	VoteAverage         float64                `json:"vote_average"`
 }
 
-type detailResponse struct {
-	ID                  int             `json:"id"`
-	Runtime             *int            `json:"runtime"`
-	EpisodeRunTime      []int           `json:"episode_run_time"`
-	Title               string          `json:"title"`
-	Name                string          `json:"name"`
-	OriginalTitle       string          `json:"original_title"`
-	OriginalName        string          `json:"original_name"`
-	Overview            string          `json:"overview"`
-	PosterPath          string          `json:"poster_path"`
-	BackdropPath        string          `json:"backdrop_path"`
-	ReleaseDate         string          `json:"release_date"`
-	FirstAirDate        string          `json:"first_air_date"`
-	Genres              []namedValue    `json:"genres"`
-	ProductionCountries []countryValue  `json:"production_countries"`
-	Seasons             []seasonSummary `json:"seasons"`
-	CreatedBy           []namedValue    `json:"created_by"`
-	Credits             creditsResponse `json:"credits"`
-	Images              imagesResponse  `json:"images"`
-	Videos              videosResponse  `json:"videos"`
-	VoteAverage         float64         `json:"vote_average"`
+type keywordsResponse struct {
+	Keywords []namedValue `json:"keywords"`
+	Results  []namedValue `json:"results"`
+}
+
+type releaseDatesResponse struct {
+	Results []releaseDateRegion `json:"results"`
+}
+
+type releaseDateRegion struct {
+	Region       string                     `json:"iso_3166_1"`
+	ReleaseDates []releaseDateCertification `json:"release_dates"`
+}
+
+type releaseDateCertification struct {
+	Certification string `json:"certification"`
+}
+
+type contentRatingsResponse struct {
+	Results []contentRating `json:"results"`
+}
+
+type contentRating struct {
+	Region string `json:"iso_3166_1"`
+	Rating string `json:"rating"`
+}
+
+type externalIDsResponse struct {
+	IMDbID     string `json:"imdb_id"`
+	TVDBID     int    `json:"tvdb_id"`
+	WikidataID string `json:"wikidata_id"`
 }
 
 type personDetailResponse struct {
@@ -165,8 +199,11 @@ type seasonDetailResponse struct {
 	ID           int                     `json:"id"`
 	SeasonNumber int                     `json:"season_number"`
 	Name         string                  `json:"name"`
+	AirDate      string                  `json:"air_date"`
 	Overview     string                  `json:"overview"`
 	PosterPath   string                  `json:"poster_path"`
+	Credits      creditsResponse         `json:"credits"`
+	ExternalIDs  externalIDsResponse     `json:"external_ids"`
 	Episodes     []seasonEpisodeResponse `json:"episodes"`
 }
 
@@ -179,6 +216,7 @@ type seasonEpisodeResponse struct {
 	Overview      string       `json:"overview"`
 	StillPath     string       `json:"still_path"`
 	Runtime       *int         `json:"runtime"`
+	VoteAverage   float64      `json:"vote_average"`
 	Crew          []crewMember `json:"crew"`
 	GuestStars    []castMember `json:"guest_stars"`
 }

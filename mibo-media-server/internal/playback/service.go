@@ -156,7 +156,11 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 		return PlaybackSource{}, fmt.Errorf("load inventory file link: %w", err)
 	}
 	pseudoFile, audioTracks, subtitleTracks := inventoryCandidateMediaInfo(selected)
-	subtitleTracks = s.enrichExternalSubtitleTracks(ctx, subtitleTracks)
+	subtitlePolicy, err := s.subtitlePolicy(ctx, item.LibraryID)
+	if err != nil {
+		return PlaybackSource{}, err
+	}
+	subtitleTracks = s.applySubtitlePolicy(s.enrichExternalSubtitleTracks(ctx, subtitleTracks), subtitlePolicy)
 	checks := append([]PlaybackCheck{}, fileLink.Checks...)
 	checks = append(checks, buildMediaInfoCheck(pseudoFile))
 	directDecision := assessDirectPlay(pseudoFile, req.ClientProfile)
@@ -466,6 +470,66 @@ func (s *Service) enrichExternalSubtitleTracks(ctx context.Context, tracks []Tra
 		}
 	}
 	return tracks
+}
+
+func (s *Service) subtitlePolicy(ctx context.Context, libraryID uint) (database.LibrarySubtitlePolicy, error) {
+	if err := database.EnsureLibraryPolicyDefaults(s.db.WithContext(ctx), libraryID); err != nil {
+		return database.LibrarySubtitlePolicy{}, err
+	}
+	var policy database.LibrarySubtitlePolicy
+	if err := s.db.WithContext(ctx).Where("library_id = ?", libraryID).First(&policy).Error; err != nil {
+		return database.LibrarySubtitlePolicy{}, err
+	}
+	return policy, nil
+}
+
+func (s *Service) applySubtitlePolicy(tracks []Track, policy database.LibrarySubtitlePolicy) []Track {
+	if !policy.ExternalSidecarsEnabled {
+		filtered := tracks[:0]
+		for _, track := range tracks {
+			if !track.External {
+				filtered = append(filtered, track)
+			}
+		}
+		tracks = filtered
+	}
+	if !policy.TolerateUnavailableSubtitles {
+		filtered := tracks[:0]
+		for _, track := range tracks {
+			if track.Available != nil && !*track.Available {
+				continue
+			}
+			filtered = append(filtered, track)
+		}
+		tracks = filtered
+	}
+	preferred := stringListFromJSON(policy.PreferredLanguagesJSON)
+	if len(preferred) == 0 {
+		return tracks
+	}
+	preferredSet := map[string]struct{}{}
+	for _, language := range preferred {
+		preferredSet[strings.ToLower(strings.TrimSpace(language))] = struct{}{}
+	}
+	filtered := make([]Track, 0, len(tracks))
+	for _, track := range tracks {
+		language := strings.ToLower(strings.TrimSpace(track.Language))
+		if _, ok := preferredSet[language]; ok {
+			filtered = append(filtered, track)
+		}
+	}
+	if len(filtered) == 0 {
+		return tracks
+	}
+	return filtered
+}
+
+func stringListFromJSON(value string) []string {
+	var parsed []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &parsed); err != nil {
+		return nil
+	}
+	return parsed
 }
 
 func playbackStreamDispositionBool(raw string, key string) bool {

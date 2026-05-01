@@ -75,6 +75,75 @@ func TestCatalogProgressCompletion(t *testing.T) {
 	}
 }
 
+func TestCatalogProgressUsesLibraryPlaybackCompletionThreshold(t *testing.T) {
+	ctx := context.Background()
+	service, db := newProgressTestService(t)
+	runtimeSeconds := 1200
+	item := database.CatalogItem{LibraryID: 1, Type: "movie", Title: "Catalog Movie", RuntimeSeconds: &runtimeSeconds, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		t.Fatalf("ensure policy defaults: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.LibraryPlaybackPolicy{}).Where("library_id = ?", 1).Update("max_resume_pct", 50).Error; err != nil {
+		t.Fatalf("update playback policy: %v", err)
+	}
+	state, err := service.Update(ctx, 9, UpdateInput{ItemID: item.ID, PositionSeconds: 600, DurationSeconds: &runtimeSeconds})
+	if err != nil {
+		t.Fatalf("update catalog progress: %v", err)
+	}
+	if !state.Watched || state.CompletedAt == nil {
+		t.Fatalf("expected policy threshold to mark completed, got %#v", state)
+	}
+}
+
+func TestCatalogProgressSkipsShortDurationResume(t *testing.T) {
+	ctx := context.Background()
+	service, db := newProgressTestService(t)
+	runtimeSeconds := 120
+	item := database.CatalogItem{LibraryID: 1, Type: "movie", Title: "Short", RuntimeSeconds: &runtimeSeconds, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	state, err := service.Update(ctx, 9, UpdateInput{ItemID: item.ID, PositionSeconds: 30, DurationSeconds: &runtimeSeconds})
+	if err != nil {
+		t.Fatalf("update catalog progress: %v", err)
+	}
+	if state.PositionSeconds != 0 || state.PlayedPercentage != nil {
+		t.Fatalf("expected short media resume to be ignored, got %#v", state)
+	}
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.UserItemData{}).Where("user_id = ? AND item_id = ?", 9, item.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count progress rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no progress row for short resumable media, got %d", count)
+	}
+}
+
+func TestGetCatalogStateReturnsEmptyStateWhenProgressMissing(t *testing.T) {
+	ctx := context.Background()
+	service, db := newProgressTestService(t)
+
+	runtimeSeconds := 1800
+	item := database.CatalogItem{LibraryID: 1, Type: "movie", Title: "Unplayed", RuntimeSeconds: &runtimeSeconds, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	state, err := service.GetCatalogState(ctx, 9, item.ID)
+	if err != nil {
+		t.Fatalf("get catalog state: %v", err)
+	}
+	if state.UserID != 9 || state.ItemID != item.ID || state.PositionSeconds != 0 || state.Watched {
+		t.Fatalf("unexpected empty progress state: %#v", state)
+	}
+	if state.DurationSeconds == nil || *state.DurationSeconds != runtimeSeconds {
+		t.Fatalf("expected runtime duration, got %#v", state.DurationSeconds)
+	}
+}
+
 func newProgressTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})

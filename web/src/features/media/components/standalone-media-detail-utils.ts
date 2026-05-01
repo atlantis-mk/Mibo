@@ -274,7 +274,6 @@ export function formatProbeStatus(status: string) {
       return '分析失败'
     case 'processing':
     case 'probing':
-    case 'processing':
       return '分析中'
     default:
       return '等待分析'

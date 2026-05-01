@@ -87,15 +87,20 @@ type CreateItemInput struct {
 }
 
 type MetadataSourceInput struct {
-	ItemID      uint
-	SourceType  string
-	SourceName  string
-	Language    string
-	ExternalID  string
-	PayloadJSON string
-	Confidence  *float64
-	FetchedAt   time.Time
-	ExpiresAt   *time.Time
+	ItemID               uint
+	SourceType           string
+	SourceName           string
+	Language             string
+	ExternalID           string
+	MetadataProfileID    *uint
+	MetadataProfileName  string
+	ProviderInstanceID   *uint
+	ProviderInstanceName string
+	FallbackSummaryJSON  string
+	PayloadJSON          string
+	Confidence           *float64
+	FetchedAt            time.Time
+	ExpiresAt            *time.Time
 }
 
 type ExternalIDInput struct {
@@ -222,15 +227,20 @@ func (s *Service) RecordMetadataSource(ctx context.Context, input MetadataSource
 	}
 
 	source := database.MetadataSource{
-		ItemID:      input.ItemID,
-		SourceType:  strings.TrimSpace(input.SourceType),
-		SourceName:  strings.TrimSpace(input.SourceName),
-		Language:    strings.TrimSpace(input.Language),
-		ExternalID:  strings.TrimSpace(input.ExternalID),
-		PayloadJSON: input.PayloadJSON,
-		Confidence:  input.Confidence,
-		FetchedAt:   input.FetchedAt,
-		ExpiresAt:   input.ExpiresAt,
+		ItemID:               input.ItemID,
+		SourceType:           strings.TrimSpace(input.SourceType),
+		SourceName:           strings.TrimSpace(input.SourceName),
+		Language:             strings.TrimSpace(input.Language),
+		ExternalID:           strings.TrimSpace(input.ExternalID),
+		MetadataProfileID:    input.MetadataProfileID,
+		MetadataProfileName:  strings.TrimSpace(input.MetadataProfileName),
+		ProviderInstanceID:   input.ProviderInstanceID,
+		ProviderInstanceName: strings.TrimSpace(input.ProviderInstanceName),
+		FallbackSummaryJSON:  strings.TrimSpace(input.FallbackSummaryJSON),
+		PayloadJSON:          input.PayloadJSON,
+		Confidence:           input.Confidence,
+		FetchedAt:            input.FetchedAt,
+		ExpiresAt:            input.ExpiresAt,
 	}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&source).Error; err != nil {
@@ -436,6 +446,12 @@ func catalogItemUpdate(fieldKey string, value any, now time.Time) (map[string]an
 			return nil, fmt.Errorf("field %s requires an integer value", fieldKey)
 		}
 		updates[fieldKey] = intValue
+	case "community_rating":
+		floatValue, ok := asFloat(value)
+		if !ok {
+			return nil, fmt.Errorf("field %s requires a numeric value", fieldKey)
+		}
+		updates[fieldKey] = floatValue
 	case "release_date", "first_air_date", "last_air_date":
 		dateValue, ok := asTime(value)
 		if !ok {
@@ -446,6 +462,22 @@ func catalogItemUpdate(fieldKey string, value any, now time.Time) (map[string]an
 		return updates, nil
 	}
 	return updates, nil
+}
+
+func asFloat(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float32:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	}
+	return 0, false
 }
 
 func asInt(value any) (int, bool) {

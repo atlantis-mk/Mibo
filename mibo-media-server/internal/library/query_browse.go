@@ -22,6 +22,12 @@ func (s *Service) GetLibrary(ctx context.Context, libraryID uint) (LibraryDetail
 	if err := s.db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id = ? AND deleted_at IS NULL", libraryID).Count(&detail.InventoryFilesCount).Error; err != nil {
 		return LibraryDetail{}, err
 	}
+	config, err := s.EffectiveLibraryConfig(ctx, libraryID)
+	if err != nil {
+		return LibraryDetail{}, err
+	}
+	detail.Paths = config.PathsView()
+	detail.Policies = config.PoliciesView()
 	return detail, nil
 }
 

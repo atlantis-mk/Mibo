@@ -29,6 +29,7 @@ type CatalogItem struct {
 	OfficialRating      string     `gorm:"size:64" json:"official_rating"`
 	SeriesStatus        string     `gorm:"size:64" json:"series_status"`
 	AvailabilityStatus  string     `gorm:"size:64;not null;default:no_local_media;index;index:idx_catalog_items_library_type_availability_sort,priority:3" json:"availability_status"`
+	MissingSince        *time.Time `gorm:"index" json:"missing_since,omitempty"`
 	GovernanceStatus    string     `gorm:"size:64;not null;default:pending;index" json:"governance_status"`
 	CanonicalVersion    int        `gorm:"not null;default:1" json:"canonical_version"`
 	LastCanonicalizedAt *time.Time `json:"last_canonicalized_at,omitempty"`
@@ -50,19 +51,37 @@ type CatalogExternalID struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+type CatalogIdentity struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ItemID       uint      `gorm:"not null;index" json:"item_id"`
+	Provider     string    `gorm:"size:64;not null;uniqueIndex:idx_catalog_identity_key" json:"provider"`
+	IdentityType string    `gorm:"size:64;not null;uniqueIndex:idx_catalog_identity_key" json:"identity_type"`
+	IdentityKey  string    `gorm:"size:1024;not null;uniqueIndex:idx_catalog_identity_key" json:"identity_key"`
+	SourcePath   string    `gorm:"size:2048;index" json:"source_path"`
+	Confidence   *float64  `json:"confidence,omitempty"`
+	EvidenceJSON string    `gorm:"type:text" json:"evidence_json"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type MetadataSource struct {
-	ID          uint       `gorm:"primaryKey" json:"id"`
-	ItemID      uint       `gorm:"not null;index" json:"item_id"`
-	SourceType  string     `gorm:"size:64;not null;index" json:"source_type"`
-	SourceName  string     `gorm:"size:128;not null;index" json:"source_name"`
-	Language    string     `gorm:"size:32;index" json:"language"`
-	ExternalID  string     `gorm:"size:255;index" json:"external_id"`
-	PayloadJSON string     `gorm:"type:text" json:"payload_json"`
-	Confidence  *float64   `json:"confidence,omitempty"`
-	FetchedAt   time.Time  `gorm:"not null;index" json:"fetched_at"`
-	ExpiresAt   *time.Time `gorm:"index" json:"expires_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID                   uint       `gorm:"primaryKey" json:"id"`
+	ItemID               uint       `gorm:"not null;index" json:"item_id"`
+	SourceType           string     `gorm:"size:64;not null;index" json:"source_type"`
+	SourceName           string     `gorm:"size:128;not null;index" json:"source_name"`
+	Language             string     `gorm:"size:32;index" json:"language"`
+	ExternalID           string     `gorm:"size:255;index" json:"external_id"`
+	MetadataProfileID    *uint      `gorm:"index" json:"metadata_profile_id,omitempty"`
+	MetadataProfileName  string     `gorm:"size:255;index" json:"metadata_profile_name"`
+	ProviderInstanceID   *uint      `gorm:"index" json:"provider_instance_id,omitempty"`
+	ProviderInstanceName string     `gorm:"size:255;index" json:"provider_instance_name"`
+	FallbackSummaryJSON  string     `gorm:"type:text" json:"fallback_summary_json"`
+	PayloadJSON          string     `gorm:"type:text" json:"payload_json"`
+	Confidence           *float64   `json:"confidence,omitempty"`
+	FetchedAt            time.Time  `gorm:"not null;index" json:"fetched_at"`
+	ExpiresAt            *time.Time `gorm:"index" json:"expires_at,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type MetadataFieldState struct {
@@ -77,6 +96,27 @@ type MetadataFieldState struct {
 	EditedAt       *time.Time `json:"edited_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type MetadataOperation struct {
+	ID                    uint       `gorm:"primaryKey" json:"id"`
+	Operation             string     `gorm:"size:64;not null;index" json:"operation"`
+	OriginItemID          uint       `gorm:"not null;index" json:"origin_item_id"`
+	TargetItemID          uint       `gorm:"not null;index" json:"target_item_id"`
+	LibraryID             uint       `gorm:"not null;index" json:"library_id"`
+	Status                string     `gorm:"size:64;not null;index" json:"status"`
+	GovernanceStatus      string     `gorm:"size:64;index" json:"governance_status"`
+	PlanJSON              string     `gorm:"type:text" json:"plan_json"`
+	AttemptsJSON          string     `gorm:"type:text" json:"attempts_json"`
+	SelectedCandidateJSON string     `gorm:"type:text" json:"selected_candidate_json"`
+	MetadataSourceIDsJSON string     `gorm:"type:text" json:"metadata_source_ids_json"`
+	AppliedFieldsJSON     string     `gorm:"type:text" json:"applied_fields_json"`
+	SkippedFieldsJSON     string     `gorm:"type:text" json:"skipped_fields_json"`
+	WarningsJSON          string     `gorm:"type:text" json:"warnings_json"`
+	StartedAt             time.Time  `gorm:"not null;index" json:"started_at"`
+	FinishedAt            *time.Time `gorm:"index" json:"finished_at,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 type ItemImage struct {

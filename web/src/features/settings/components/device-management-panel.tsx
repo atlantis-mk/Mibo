@@ -1,22 +1,27 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import type { ComponentType } from 'react'
 import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  CastIcon,
-  CheckCircle2Icon,
-  Clock3Icon,
-  Grid2X2Icon,
-  HelpCircleIcon,
+  AlertTriangleIcon,
   LaptopIcon,
-  ListFilterIcon,
+  Loader2Icon,
+  LogOutIcon,
   MonitorSmartphoneIcon,
-  MoreVerticalIcon,
   RefreshCwIcon,
-  UserIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
 } from 'lucide-react'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '#/components/ui/alert-dialog'
+import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
   Card,
@@ -25,323 +30,291 @@ import {
   CardHeader,
   CardTitle,
 } from '#/components/ui/card'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
 import { Skeleton } from '#/components/ui/skeleton'
-import type { ConsoleDeviceSummary } from '#/lib/mibo-api'
-import { consoleSummaryQueryOptions, miboQueryKeys } from '#/lib/mibo-query'
+import type { LoginSession } from '#/lib/mibo-api'
+import {
+  createAuthedMiboApi,
+  loginSessionsQueryOptions,
+  miboQueryKeys,
+} from '#/lib/mibo-query'
 import { cn } from '#/lib/utils'
 import { useAuthStore } from '#/stores/auth-store'
-
-type SortDirection = 'desc' | 'asc'
-type ViewMode = 'cards' | 'compact'
 
 export function DeviceManagementPanel() {
   const token = useAuthStore((state) => state.token)
   const queryClient = useQueryClient()
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-  const [viewMode, setViewMode] = useState<ViewMode>('cards')
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>()
-  const summaryQuery = useQuery({
-    ...consoleSummaryQueryOptions(token ?? ''),
+  const [sessionToRevoke, setSessionToRevoke] = useState<LoginSession | null>(
+    null,
+  )
+  const [confirmRevokeOthers, setConfirmRevokeOthers] = useState(false)
+  const sessionsQuery = useQuery({
+    ...loginSessionsQueryOptions(token ?? ''),
     enabled: Boolean(token),
   })
+  const sessions = sessionsQuery.data ?? []
+  const otherSessions = sessions.filter((session) => !session.is_current)
 
-  const devices = [...(summaryQuery.data?.devices ?? [])].sort(
-    (left, right) => {
-      const leftTime = new Date(left.last_seen_at).getTime()
-      const rightTime = new Date(right.last_seen_at).getTime()
-      const diff = safeTime(rightTime) - safeTime(leftTime)
-      return sortDirection === 'desc' ? diff : -diff
-    },
-  )
-  const selectedDevice =
-    devices.find((device) => device.id === selectedDeviceId) ?? devices[0]
-
-  const refreshDevices = () => {
+  const invalidateSessions = async () => {
     if (!token) return
-    void queryClient.invalidateQueries({
-      queryKey: miboQueryKeys.consoleSummary(token),
+    await queryClient.invalidateQueries({
+      queryKey: miboQueryKeys.loginSessions(token),
     })
   }
+
+  const revokeSession = useMutation({
+    mutationFn: async (sessionId: number) => {
+      if (!token) throw new Error('缺少登录状态')
+      return createAuthedMiboApi(token).revokeLoginSession(sessionId)
+    },
+    onSuccess: async () => {
+      setSessionToRevoke(null)
+      await invalidateSessions()
+    },
+  })
+  const revokeOthers = useMutation({
+    mutationFn: async () => {
+      if (!token) throw new Error('缺少登录状态')
+      return createAuthedMiboApi(token).revokeOtherLoginSessions()
+    },
+    onSuccess: async () => {
+      setConfirmRevokeOthers(false)
+      await invalidateSessions()
+    },
+  })
+  const mutationError = revokeSession.error ?? revokeOthers.error
+  const isMutating = revokeSession.isPending || revokeOthers.isPending
 
   return (
     <div className="space-y-4">
       <section className="rounded-[1.5rem] border border-border/60 bg-card/70 p-4 shadow-sm backdrop-blur-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1.5 text-foreground">
-              <MonitorSmartphoneIcon className="size-4 text-emerald-500" />共{' '}
-              {devices.length} 个设备
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="gap-1.5 bg-background/70">
+                <MonitorSmartphoneIcon className="size-3.5 text-emerald-500" />
+                {sessions.length} 个登录会话
+              </Badge>
+              <Badge variant="outline" className="gap-1.5 bg-background/70">
+                <ShieldCheckIcon className="size-3.5 text-emerald-500" />
+                当前设备受保护
+              </Badge>
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                setSortDirection((current) =>
-                  current === 'desc' ? 'asc' : 'desc',
-                )
-              }
-              className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/50 px-3 py-1.5 transition-colors hover:bg-muted hover:text-foreground"
-            >
-              {sortDirection === 'desc' ? (
-                <ArrowDownIcon className="size-3.5 text-emerald-500" />
-              ) : (
-                <ArrowUpIcon className="size-3.5 text-emerald-500" />
-              )}
-              上次活动日期
-            </button>
+            <p className="text-sm text-muted-foreground">
+              查看当前账号已登录的浏览器和客户端，撤销不再使用的会话。
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
-              onClick={refreshDevices}
-              disabled={!token}
+              onClick={() => void invalidateSessions()}
+              disabled={!token || sessionsQuery.isFetching}
             >
-              <RefreshCwIcon className="size-4" />
+              <RefreshCwIcon
+                className={cn(
+                  'size-4',
+                  sessionsQuery.isFetching && 'animate-spin',
+                )}
+              />
               刷新
             </Button>
-            <Button variant="outline" disabled title="播放到设备接入后启用">
-              <CastIcon className="size-4" />
-              播放到设备
+            <Button
+              variant="destructive"
+              onClick={() => setConfirmRevokeOthers(true)}
+              disabled={otherSessions.length === 0 || isMutating}
+            >
+              <LogOutIcon className="size-4" />
+              撤销其他会话
             </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" aria-label="更多设备操作">
-                  <MoreVerticalIcon className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuLabel>更多操作</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setViewMode('cards')}>
-                  <Grid2X2Icon className="size-4" />
-                  卡片视图
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setViewMode('compact')}>
-                  <ListFilterIcon className="size-4" />
-                  紧凑视图
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem disabled>筛选在线设备</DropdownMenuItem>
-                <DropdownMenuItem disabled>移除设备授权</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
         </div>
       </section>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="min-h-[420px] rounded-[1.5rem] border border-border/60 bg-gradient-to-br from-card/90 via-card/70 to-emerald-500/5 p-5 shadow-sm backdrop-blur-sm">
-          <div className="mb-5 flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-base font-medium">客户端设备</h3>
-              <p className="text-sm text-muted-foreground">
-                点击设备卡片查看最近活动、使用用户和管理状态。
-              </p>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="rounded-full text-muted-foreground"
-              title="设备数据来自控制台最近活动摘要"
-            >
-              <HelpCircleIcon className="size-4" />
-              <span className="sr-only">帮助</span>
-            </Button>
+      {mutationError ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+          <span>{errorMessage(mutationError)}</span>
+        </div>
+      ) : null}
+
+      <section className="min-h-[420px] rounded-[1.5rem] border border-border/60 bg-gradient-to-br from-card/90 via-card/70 to-emerald-500/5 p-5 shadow-sm backdrop-blur-sm">
+        <div className="mb-5">
+          <h3 className="text-base font-medium">登录设备</h3>
+          <p className="text-sm text-muted-foreground">
+            当前会话只能通过退出登录结束，不能在这里撤销。
+          </p>
+        </div>
+
+        {sessionsQuery.isLoading ? (
+          <DeviceSkeleton />
+        ) : sessionsQuery.isError ? (
+          <ErrorState onRetry={() => void invalidateSessions()} />
+        ) : sessions.length === 0 ? (
+          <EmptyDeviceState />
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+            {sessions.map((session) => (
+              <SessionCard
+                key={session.id}
+                session={session}
+                pending={
+                  revokeSession.isPending && sessionToRevoke?.id === session.id
+                }
+                onRevoke={() => setSessionToRevoke(session)}
+              />
+            ))}
           </div>
+        )}
+      </section>
 
-          {summaryQuery.isLoading ? (
-            <DeviceSkeleton />
-          ) : devices.length === 0 ? (
-            <EmptyDeviceState />
-          ) : (
-            <div
-              className={cn(
-                'grid gap-4',
-                viewMode === 'cards'
-                  ? 'sm:grid-cols-2 2xl:grid-cols-3'
-                  : 'grid-cols-1',
-              )}
+      <AlertDialog
+        open={Boolean(sessionToRevoke)}
+        onOpenChange={(open) => !open && setSessionToRevoke(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>撤销此登录会话？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {sessionToRevoke
+                ? `${sessionDisplayName(sessionToRevoke)} 将需要重新登录。当前会话不会受影响。`
+                : '此会话将需要重新登录。'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revokeSession.isPending}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!sessionToRevoke || revokeSession.isPending}
+              onClick={() => {
+                if (!sessionToRevoke) return
+                revokeSession.mutate(sessionToRevoke.id)
+              }}
             >
-              {devices.map((device) => (
-                <DeviceCard
-                  key={device.id}
-                  device={device}
-                  selected={device.id === selectedDevice?.id}
-                  compact={viewMode === 'compact'}
-                  onSelect={() => setSelectedDeviceId(device.id)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+              {revokeSession.isPending ? '撤销中...' : '确认撤销'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
-        <DeviceDetailCard device={selectedDevice} />
-      </div>
+      <AlertDialog
+        open={confirmRevokeOthers}
+        onOpenChange={(open) => setConfirmRevokeOthers(open)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>撤销所有其他会话？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将撤销 {otherSessions.length} 个其他登录会话。当前设备会保持登录。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revokeOthers.isPending}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={otherSessions.length === 0 || revokeOthers.isPending}
+              onClick={() => revokeOthers.mutate()}
+            >
+              {revokeOthers.isPending ? '撤销中...' : '确认撤销'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
 
-function DeviceCard({
-  device,
-  selected,
-  compact,
-  onSelect,
+function SessionCard({
+  session,
+  pending,
+  onRevoke,
 }: {
-  device: ConsoleDeviceSummary
-  selected: boolean
-  compact: boolean
-  onSelect: () => void
+  session: LoginSession
+  pending: boolean
+  onRevoke: () => void
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <Card
       className={cn(
-        'group border bg-background/80 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-emerald-500/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-emerald-500/25',
-        compact
-          ? 'flex items-center gap-4 rounded-[1.1rem] p-3'
-          : 'rounded-[1.35rem] p-5 text-center',
-        selected
-          ? 'border-emerald-500/60 ring-3 ring-emerald-500/15'
-          : 'border-border/60',
+        'rounded-[1.35rem] border-border/60 bg-background/80 shadow-sm',
+        session.is_current &&
+          'border-emerald-500/50 ring-3 ring-emerald-500/10',
       )}
     >
-      <div
-        className={cn(
-          'mx-auto flex size-16 shrink-0 items-center justify-center rounded-2xl border border-border/60 bg-muted/70 text-muted-foreground transition-colors group-hover:text-emerald-500',
-          compact && 'mx-0 size-12 rounded-xl',
-          selected &&
-            'border-emerald-500/40 bg-emerald-500/10 text-emerald-600',
-        )}
-      >
-        <LaptopIcon className={compact ? 'size-5' : 'size-7'} />
-      </div>
-
-      <div className={cn('min-w-0', compact ? 'flex-1' : 'mt-4')}>
-        <div className="truncate text-base font-semibold">{device.name}</div>
-        <div className="mt-1 truncate text-sm text-muted-foreground">
-          {device.client_type || device.state || 'Mibo Web'}
-        </div>
-        <div
-          className={cn(
-            'mt-2 flex items-center gap-1.5 text-sm text-muted-foreground',
-            !compact && 'justify-center',
-          )}
-        >
-          <UserIcon className="size-3.5" />
-          <span className="truncate">
-            {device.user || '未知用户'},{' '}
-            {formatRelativeTime(device.last_seen_at)}
-          </span>
-        </div>
-      </div>
-    </button>
-  )
-}
-
-function DeviceDetailCard({ device }: { device?: ConsoleDeviceSummary }) {
-  if (!device) {
-    return (
-      <Card className="rounded-[1.5rem] border-border/60 bg-card/80 shadow-sm backdrop-blur-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <MonitorSmartphoneIcon className="size-4 text-emerald-500" />
-            设备详情
-          </CardTitle>
-          <CardDescription>暂无可展示的客户端设备。</CardDescription>
-        </CardHeader>
-      </Card>
-    )
-  }
-
-  return (
-    <Card className="rounded-[1.5rem] border-border/60 bg-card/80 shadow-sm backdrop-blur-sm">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MonitorSmartphoneIcon className="size-4 text-emerald-500" />
-          设备详情
-        </CardTitle>
-        <CardDescription>
-          当前为只读设备摘要，管理操作待设备授权接口接入。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex items-center gap-3 rounded-2xl border border-border/60 bg-background/70 p-3">
-          <div className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-            <LaptopIcon className="size-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="truncate font-medium">{device.name}</div>
-            <div className="truncate text-xs text-muted-foreground">
-              {device.id}
+      <CardHeader className="space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <LaptopIcon className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <CardTitle className="truncate text-base">
+                {sessionDisplayName(session)}
+              </CardTitle>
+              <CardDescription className="truncate">
+                {session.client_type || session.user_agent || 'Mibo Web'}
+              </CardDescription>
             </div>
           </div>
+          {session.is_current ? (
+            <Badge className="shrink-0 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300">
+              当前
+            </Badge>
+          ) : null}
         </div>
-
+      </CardHeader>
+      <CardContent className="space-y-3">
         <DetailRow
-          icon={UserIcon}
-          label="使用用户"
-          value={device.user || '未知用户'}
-        />
-        <DetailRow
-          icon={Clock3Icon}
           label="最近活动"
-          value={formatRelativeTime(device.last_seen_at)}
+          value={formatDateTime(session.last_used_at)}
         />
         <DetailRow
-          icon={CheckCircle2Icon}
-          label="设备状态"
-          value={device.state || '最近有活动'}
+          label="创建时间"
+          value={formatDateTime(session.created_at)}
         />
         <DetailRow
-          icon={LaptopIcon}
-          label="客户端版本"
-          value={device.client_type || '客户端信息待上报'}
+          label="过期时间"
+          value={formatDateTime(session.expires_at)}
         />
+        <DetailRow label="远程地址" value={session.remote_addr || '未知地址'} />
+        <DetailRow label="User-Agent" value={session.user_agent || '未记录'} />
 
-        <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-3 text-sm leading-6 text-muted-foreground">
-          当前设备列表复用控制台最近活动数据。后端提供设备授权、登出与详情接口后，可在此启用移除设备和完整客户端版本管理。
-        </div>
+        <Button
+          variant={session.is_current ? 'outline' : 'destructive'}
+          className="w-full"
+          disabled={session.is_current || pending}
+          title={session.is_current ? '请使用退出登录结束当前会话' : undefined}
+          onClick={onRevoke}
+        >
+          {pending ? (
+            <Loader2Icon className="size-4 animate-spin" />
+          ) : (
+            <Trash2Icon className="size-4" />
+          )}
+          {session.is_current ? '当前会话不可撤销' : '撤销此会话'}
+        </Button>
       </CardContent>
     </Card>
   )
 }
 
-function DetailRow({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: ComponentType<{ className?: string }>
-  label: string
-  value: string
-}) {
+function DetailRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-border/50 bg-background/50 px-3 py-2.5">
-      <div className="flex size-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-        <Icon className="size-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="truncate text-sm font-medium">{value}</div>
-      </div>
+    <div className="flex items-start justify-between gap-3 rounded-2xl border border-border/50 bg-card/50 px-3 py-2.5 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium">{value}</span>
     </div>
   )
 }
 
 function DeviceSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+    <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
       {Array.from({ length: 3 }).map((_, index) => (
-        <Skeleton key={index} className="h-48 rounded-[1.35rem]" />
+        <Skeleton key={index} className="h-80 rounded-[1.35rem]" />
       ))}
     </div>
   )
@@ -351,42 +324,44 @@ function EmptyDeviceState() {
   return (
     <div className="flex min-h-[260px] flex-col items-center justify-center rounded-[1.35rem] border border-dashed border-border/70 bg-background/60 p-8 text-center">
       <MonitorSmartphoneIcon className="size-10 text-muted-foreground" />
-      <h4 className="mt-4 text-base font-medium">暂无设备记录</h4>
+      <h4 className="mt-4 text-base font-medium">暂无登录会话</h4>
       <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        当
-        Web、移动端或播放客户端连接并产生活动后，会在这里显示设备名称、使用用户和最近活动时间。
+        登录后创建的浏览器和客户端会话会显示在这里。缺失设备信息时会使用安全的备用标签。
       </p>
     </div>
   )
 }
 
-function safeTime(value: number) {
-  return Number.isFinite(value) ? value : 0
+function ErrorState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex min-h-[260px] flex-col items-center justify-center rounded-[1.35rem] border border-dashed border-destructive/30 bg-destructive/5 p-8 text-center">
+      <AlertTriangleIcon className="size-10 text-destructive" />
+      <h4 className="mt-4 text-base font-medium">无法加载登录会话</h4>
+      <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+        请检查当前登录状态或稍后重试。
+      </p>
+      <Button className="mt-4" variant="outline" onClick={onRetry}>
+        重新加载
+      </Button>
+    </div>
+  )
 }
 
-function formatRelativeTime(value: string) {
+function sessionDisplayName(session: LoginSession) {
+  return session.device_name || session.client_type || '未知设备'
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return '未知'
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '未知'
-  }
+  if (Number.isNaN(date.getTime())) return '未知'
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
+}
 
-  const diffSeconds = Math.max(
-    1,
-    Math.floor((Date.now() - date.getTime()) / 1000),
-  )
-  if (diffSeconds < 60) {
-    return `${diffSeconds}秒钟前`
-  }
-
-  const diffMinutes = Math.floor(diffSeconds / 60)
-  if (diffMinutes < 60) {
-    return `${diffMinutes}分钟前`
-  }
-
-  const diffHours = Math.floor(diffMinutes / 60)
-  if (diffHours < 24) {
-    return `${diffHours}小时前`
-  }
-
-  return `${Math.floor(diffHours / 24)}天前`
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  return '操作失败，请稍后重试。'
 }

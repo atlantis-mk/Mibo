@@ -17,15 +17,20 @@ const metadataCategory = "metadata"
 const scanCategory = "scan"
 
 const (
-	tmdbAPIKeyKey       = "tmdb_api_key"
-	tmdbBaseURLKey      = "tmdb_base_url"
-	tmdbImageBaseURLKey = "tmdb_image_base_url"
-	tmdbLanguageKey     = "tmdb_language"
-	tmdbTimeoutKey      = "tmdb_timeout"
-	tvdbAPIKeyKey       = "tvdb_api_key"
-	tvdbBaseURLKey      = "tvdb_base_url"
-	tvdbLanguageKey     = "tvdb_language"
-	tvdbTimeoutKey      = "tvdb_timeout"
+	tmdbAPIKeyKey                     = "tmdb_api_key"
+	tmdbBaseURLKey                    = "tmdb_base_url"
+	tmdbImageBaseURLKey               = "tmdb_image_base_url"
+	tmdbLanguageKey                   = "tmdb_language"
+	tmdbTimeoutKey                    = "tmdb_timeout"
+	tvdbAPIKeyKey                     = "tvdb_api_key"
+	tvdbBaseURLKey                    = "tvdb_base_url"
+	tvdbLanguageKey                   = "tvdb_language"
+	tvdbTimeoutKey                    = "tvdb_timeout"
+	metatubeTokenKey                  = "metatube_token"
+	metatubeBaseURLKey                = "metatube_base_url"
+	metatubeUpstreamProviderFilterKey = "metatube_upstream_provider_filter"
+	metatubeFallbackEnabledKey        = "metatube_fallback_enabled"
+	metatubeTimeoutKey                = "metatube_timeout"
 )
 
 const refreshIntervalKey = "refresh_interval_hours"
@@ -36,33 +41,27 @@ type Service struct {
 }
 
 type MetadataProviderSettings struct {
-	Configured     bool   `json:"configured"`
-	APIKeyMasked   bool   `json:"api_key_masked"`
-	BaseURL        string `json:"base_url"`
-	ImageBaseURL   string `json:"image_base_url,omitempty"`
-	Language       string `json:"language"`
-	Timeout        string `json:"timeout"`
-	Source         string `json:"source"`
-	Implementation string `json:"implementation"`
-}
-
-type MetadataSettings struct {
-	TMDB MetadataProviderSettings `json:"tmdb"`
-	TVDB MetadataProviderSettings `json:"tvdb"`
+	Configured             bool   `json:"configured"`
+	APIKeyMasked           bool   `json:"api_key_masked"`
+	BaseURL                string `json:"base_url"`
+	ImageBaseURL           string `json:"image_base_url,omitempty"`
+	Language               string `json:"language"`
+	Timeout                string `json:"timeout"`
+	Source                 string `json:"source"`
+	Implementation         string `json:"implementation"`
+	UpstreamProviderFilter string `json:"upstream_provider_filter,omitempty"`
+	FallbackEnabled        bool   `json:"fallback_enabled,omitempty"`
 }
 
 type MetadataProviderInput struct {
-	APIKey       string `json:"api_key"`
-	ClearAPIKey  bool   `json:"clear_api_key"`
-	BaseURL      string `json:"base_url"`
-	ImageBaseURL string `json:"image_base_url"`
-	Language     string `json:"language"`
-	Timeout      string `json:"timeout"`
-}
-
-type UpdateMetadataSettingsInput struct {
-	TMDB MetadataProviderInput `json:"tmdb"`
-	TVDB MetadataProviderInput `json:"tvdb"`
+	APIKey                 string `json:"api_key"`
+	ClearAPIKey            bool   `json:"clear_api_key"`
+	BaseURL                string `json:"base_url"`
+	ImageBaseURL           string `json:"image_base_url"`
+	Language               string `json:"language"`
+	Timeout                string `json:"timeout"`
+	UpstreamProviderFilter string `json:"upstream_provider_filter"`
+	FallbackEnabled        *bool  `json:"fallback_enabled,omitempty"`
 }
 
 type ScanSettings struct {
@@ -77,50 +76,17 @@ func NewService(db *gorm.DB, fallback config.MetadataConfig) *Service {
 	return &Service{db: db, fallback: fallback}
 }
 
-func (s *Service) GetMetadataSettings(ctx context.Context) (MetadataSettings, error) {
-	tmdbCfg, tmdbSource, err := s.ResolveTMDBConfig(ctx)
-	if err != nil {
-		return MetadataSettings{}, err
-	}
-	tvdbCfg, tvdbSource, err := s.ResolveTVDBConfig(ctx)
-	if err != nil {
-		return MetadataSettings{}, err
-	}
-
-	return MetadataSettings{
-		TMDB: MetadataProviderSettings{
-			Configured:     strings.TrimSpace(tmdbCfg.APIKey) != "",
-			APIKeyMasked:   strings.TrimSpace(tmdbCfg.APIKey) != "",
-			BaseURL:        tmdbCfg.BaseURL,
-			ImageBaseURL:   tmdbCfg.ImageBaseURL,
-			Language:       tmdbCfg.Language,
-			Timeout:        tmdbCfg.Timeout.String(),
-			Source:         tmdbSource,
-			Implementation: "active",
-		},
-		TVDB: MetadataProviderSettings{
-			Configured:     strings.TrimSpace(tvdbCfg.APIKey) != "",
-			APIKeyMasked:   strings.TrimSpace(tvdbCfg.APIKey) != "",
-			BaseURL:        tvdbCfg.BaseURL,
-			Language:       tvdbCfg.Language,
-			Timeout:        tvdbCfg.Timeout.String(),
-			Source:         tvdbSource,
-			Implementation: "planned",
-		},
-	}, nil
-}
-
-func (s *Service) UpdateMetadataSettings(ctx context.Context, input UpdateMetadataSettingsInput) (MetadataSettings, error) {
-	if err := s.updateTMDBSettings(ctx, input.TMDB); err != nil {
-		return MetadataSettings{}, err
-	}
-	if err := s.updateTVDBSettings(ctx, input.TVDB); err != nil {
-		return MetadataSettings{}, err
-	}
-	return s.GetMetadataSettings(ctx)
-}
-
 func (s *Service) ResolveTMDBConfig(ctx context.Context) (config.TMDBConfig, string, error) {
+	if err := database.BackfillMetadataProfiles(s.db.WithContext(ctx)); err != nil {
+		return config.TMDBConfig{}, "none", err
+	}
+	var provider database.MetadataProviderInstance
+	if err := s.db.WithContext(ctx).Where("name = ?", database.MigratedDefaultTMDBProviderInstanceName).First(&provider).Error; err == nil {
+		resolved := s.resolveTMDBProviderInstanceConfig(provider)
+		if strings.TrimSpace(resolved.APIKey) != "" {
+			return resolved, "database", nil
+		}
+	}
 	resolved := s.fallback.TMDB
 	values, err := s.loadCategoryValues(ctx, metadataCategory)
 	if err != nil {
@@ -132,20 +98,6 @@ func (s *Service) ResolveTMDBConfig(ctx context.Context) (config.TMDBConfig, str
 	applyStringOverride(&resolved.ImageBaseURL, values[tmdbImageBaseURLKey])
 	applyStringOverride(&resolved.Language, values[tmdbLanguageKey])
 	applyDurationOverride(&resolved.Timeout, values[tmdbTimeoutKey])
-	return resolved, source, nil
-}
-
-func (s *Service) ResolveTVDBConfig(ctx context.Context) (config.TVDBConfig, string, error) {
-	resolved := s.fallback.TVDB
-	values, err := s.loadCategoryValues(ctx, metadataCategory)
-	if err != nil {
-		return config.TVDBConfig{}, "none", err
-	}
-	source := sourceForValue(values[tvdbAPIKeyKey], resolved.APIKey)
-	applyStringOverride(&resolved.APIKey, values[tvdbAPIKeyKey])
-	applyStringOverride(&resolved.BaseURL, values[tvdbBaseURLKey])
-	applyStringOverride(&resolved.Language, values[tvdbLanguageKey])
-	applyDurationOverride(&resolved.Timeout, values[tvdbTimeoutKey])
 	return resolved, source, nil
 }
 
@@ -186,62 +138,6 @@ func (s *Service) UpdateScanSettings(ctx context.Context, input UpdateScanSettin
 	return ScanSettings{RefreshIntervalHours: interval}, nil
 }
 
-func (s *Service) updateTMDBSettings(ctx context.Context, input MetadataProviderInput) error {
-	if err := s.updateSecretSetting(ctx, tmdbAPIKeyKey, input.APIKey, input.ClearAPIKey); err != nil {
-		return err
-	}
-	if err := s.updatePlainSetting(ctx, tmdbBaseURLKey, input.BaseURL); err != nil {
-		return err
-	}
-	if err := s.updatePlainSetting(ctx, tmdbImageBaseURLKey, input.ImageBaseURL); err != nil {
-		return err
-	}
-	if err := s.updatePlainSetting(ctx, tmdbLanguageKey, input.Language); err != nil {
-		return err
-	}
-	return s.updatePlainSetting(ctx, tmdbTimeoutKey, input.Timeout)
-}
-
-func (s *Service) updateTVDBSettings(ctx context.Context, input MetadataProviderInput) error {
-	if err := s.updateSecretSetting(ctx, tvdbAPIKeyKey, input.APIKey, input.ClearAPIKey); err != nil {
-		return err
-	}
-	if err := s.updatePlainSetting(ctx, tvdbBaseURLKey, input.BaseURL); err != nil {
-		return err
-	}
-	if err := s.updatePlainSetting(ctx, tvdbLanguageKey, input.Language); err != nil {
-		return err
-	}
-	return s.updatePlainSetting(ctx, tvdbTimeoutKey, input.Timeout)
-}
-
-func (s *Service) updatePlainSetting(ctx context.Context, key, value string) error {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return s.deleteSetting(ctx, key)
-	}
-	return s.upsertSetting(ctx, key, trimmed, false)
-}
-
-func (s *Service) updateSecretSetting(ctx context.Context, key, value string, clear bool) error {
-	if clear {
-		return s.deleteSetting(ctx, key)
-	}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return s.upsertSetting(ctx, key, trimmed, true)
-}
-
-func (s *Service) upsertSetting(ctx context.Context, key, value string, secret bool) error {
-	return s.upsertCategorySetting(ctx, metadataCategory, key, value, secret)
-}
-
-func (s *Service) upsertCategorySetting(ctx context.Context, category, key, value string, secret bool) error {
-	return upsertCategorySettingWithDB(ctx, s.db, category, key, value, secret)
-}
-
 func upsertCategorySettingWithDB(ctx context.Context, db *gorm.DB, category, key, value string, secret bool) error {
 	record := database.SystemSetting{
 		Category: category,
@@ -255,14 +151,6 @@ func upsertCategorySettingWithDB(ctx context.Context, db *gorm.DB, category, key
 	}).Create(&record).Error
 }
 
-func (s *Service) deleteSetting(ctx context.Context, key string) error {
-	return s.deleteCategorySetting(ctx, metadataCategory, key)
-}
-
-func (s *Service) deleteCategorySetting(ctx context.Context, category, key string) error {
-	return deleteCategorySettingWithDB(ctx, s.db, category, key)
-}
-
 func deleteCategorySettingWithDB(ctx context.Context, db *gorm.DB, category, key string) error {
 	return db.WithContext(ctx).
 		Where("category = ? AND key = ?", category, key).
@@ -270,8 +158,12 @@ func deleteCategorySettingWithDB(ctx context.Context, db *gorm.DB, category, key
 }
 
 func (s *Service) loadCategoryValues(ctx context.Context, category string) (map[string]string, error) {
+	return loadCategoryValuesWithDB(ctx, s.db, category)
+}
+
+func loadCategoryValuesWithDB(ctx context.Context, db *gorm.DB, category string) (map[string]string, error) {
 	var records []database.SystemSetting
-	if err := s.db.WithContext(ctx).
+	if err := db.WithContext(ctx).
 		Where("category = ?", category).
 		Find(&records).Error; err != nil {
 		return nil, err

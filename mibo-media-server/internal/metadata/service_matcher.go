@@ -39,33 +39,6 @@ type metadataSearchItem struct {
 	EpisodeNumber *int
 }
 
-func (s *Service) searchBestMatch(ctx context.Context, cfg config.TMDBConfig, item metadataSearchItem, mediaType string) (*scoredMatchCandidate, error) {
-	candidates, err := s.collectSearchCandidates(ctx, cfg, mediaType, buildSearchQueries(item, mediaType), item)
-	if err != nil {
-		return nil, err
-	}
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-	best := candidates[0]
-	return &best, nil
-}
-
-func (s *Service) searchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType string, queries []matchSearchQuery, item metadataSearchItem) ([]SearchCandidate, error) {
-	candidates, err := s.collectSearchCandidates(ctx, cfg, mediaType, queries, item)
-	if err != nil {
-		return nil, err
-	}
-	if len(candidates) > 8 {
-		candidates = candidates[:8]
-	}
-	results := make([]SearchCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		results = append(results, searchResultToCandidate(cfg, mediaType, candidate))
-	}
-	return results, nil
-}
-
 func (s *Service) collectSearchCandidates(ctx context.Context, cfg config.TMDBConfig, mediaType string, queries []matchSearchQuery, item metadataSearchItem) ([]scoredMatchCandidate, error) {
 	if len(queries) == 0 {
 		return nil, nil
@@ -105,6 +78,19 @@ func (s *Service) collectSearchCandidates(ctx context.Context, cfg config.TMDBCo
 
 func buildSearchQueries(item metadataSearchItem, mediaType string) []matchSearchQuery {
 	titleSources := []string{}
+	if sourcePath := strings.TrimSpace(item.SourcePath); sourcePath != "" {
+		fileBase := strings.TrimSuffix(path.Base(sourcePath), path.Ext(sourcePath))
+		if mediaType == "movie" {
+			movieSources := []string{fileBase, path.Base(path.Dir(sourcePath))}
+			if titleOverlapsSourceFilename(item.Title, fileBase) {
+				movieSources = append(movieSources, item.Title)
+			}
+			if titleOverlapsSourceFilename(item.OriginalTitle, fileBase) {
+				movieSources = append(movieSources, item.OriginalTitle)
+			}
+			return buildQueryVariants(movieSources, item.Year)
+		}
+	}
 	if mediaType == "tv" {
 		titleSources = append(titleSources, item.SeriesTitle)
 	}
@@ -142,7 +128,7 @@ func buildQueryVariants(values []string, year *int) []matchSearchQuery {
 	for _, value := range values {
 		for _, normalized := range []string{strings.TrimSpace(value), cleanSearchTitle(value)} {
 			trimmed := strings.TrimSpace(normalized)
-			if trimmed == "" {
+			if trimmed == "" || isGenericSearchQuery(trimmed) {
 				continue
 			}
 			key := strings.ToLower(trimmed)
@@ -154,6 +140,33 @@ func buildQueryVariants(values []string, year *int) []matchSearchQuery {
 		}
 	}
 	return queries
+}
+
+func isGenericSearchQuery(input string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(input)), " "))
+	genericQueries := map[string]struct{}{
+		"电影":     {},
+		"movies": {},
+		"movie":  {},
+		"films":  {},
+		"film":   {},
+		"video":  {},
+		"videos": {},
+	}
+	_, ok := genericQueries[normalized]
+	return ok
+}
+
+func titleOverlapsSourceFilename(title string, fileBase string) bool {
+	titleText := normalizeMatchText(title)
+	fileText := normalizeMatchText(fileBase)
+	if titleText == "" || fileText == "" {
+		return false
+	}
+	if strings.Contains(strings.ReplaceAll(titleText, " ", ""), strings.ReplaceAll(fileText, " ", "")) || strings.Contains(strings.ReplaceAll(fileText, " ", ""), strings.ReplaceAll(titleText, " ", "")) {
+		return true
+	}
+	return tokenOverlap(significantMatchTokens(titleText), significantMatchTokens(fileText)) > 0
 }
 
 func cleanSearchTitle(input string) string {
@@ -187,6 +200,30 @@ func scoreMatchCandidate(item metadataSearchItem, mediaType string, query matchS
 		yearScore:     yearScore,
 		extraScore:    extraScore,
 	}
+}
+
+func acceptableAutomatedMatchCandidate(candidate NormalizedMetadataCandidate) bool {
+	if !strings.Contains(candidate.ReasonSummary, "标题弱匹配") {
+		return true
+	}
+	queryTokens := significantMatchTokens(normalizeMatchText(candidate.MatchedQuery))
+	if len(queryTokens) < 2 {
+		return true
+	}
+	candidateTokens := significantMatchTokens(normalizeMatchText(candidate.Title + " " + candidate.OriginalTitle))
+	return tokenOverlap(queryTokens, candidateTokens) > 0
+}
+
+func significantMatchTokens(input string) []string {
+	tokens := splitTokens(input)
+	result := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if _, ok := map[string]struct{}{"a": {}, "an": {}, "the": {}, "to": {}, "of": {}, "and": {}}[token]; ok {
+			continue
+		}
+		result = append(result, token)
+	}
+	return result
 }
 
 func scoredCandidateLess(current, next scoredMatchCandidate) bool {
@@ -234,6 +271,9 @@ func compareNormalizedTitles(query, candidate string) float64 {
 	}
 	if query == candidate {
 		return 0.9
+	}
+	if strings.ReplaceAll(query, " ", "") == strings.ReplaceAll(candidate, " ", "") {
+		return 0.86
 	}
 	if strings.Contains(candidate, query) || strings.Contains(query, candidate) {
 		return 0.74

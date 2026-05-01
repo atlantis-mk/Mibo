@@ -26,6 +26,74 @@ type Library struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type LibraryPath struct {
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	LibraryID     uint       `gorm:"not null;index;uniqueIndex:idx_library_paths_library_source_path,priority:1" json:"library_id"`
+	MediaSourceID uint       `gorm:"not null;index;uniqueIndex:idx_library_paths_library_source_path,priority:2" json:"media_source_id"`
+	RootPath      string     `gorm:"size:1024;not null;uniqueIndex:idx_library_paths_library_source_path,priority:3" json:"root_path"`
+	DisplayName   string     `gorm:"size:255" json:"display_name"`
+	Enabled       bool       `gorm:"not null;default:true;index" json:"enabled"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	DeletedAt     *time.Time `gorm:"index" json:"deleted_at,omitempty"`
+}
+
+func (LibraryPath) TableName() string {
+	return "library_paths"
+}
+
+type LibraryScanPolicy struct {
+	ID                         uint      `gorm:"primaryKey" json:"id"`
+	LibraryID                  uint      `gorm:"not null;uniqueIndex" json:"library_id"`
+	ScannerEnabled             bool      `gorm:"not null;default:true" json:"scanner_enabled"`
+	RealtimeMonitorEnabled     bool      `gorm:"not null;default:true" json:"realtime_monitor_enabled"`
+	ScheduledRefreshEnabled    bool      `gorm:"not null;default:true" json:"scheduled_refresh_enabled"`
+	RefreshIntervalHours       int       `gorm:"not null;default:24" json:"refresh_interval_hours"`
+	IgnoreHiddenFiles          bool      `gorm:"not null;default:true" json:"ignore_hidden_files"`
+	IgnoreFileExtensionsJSON   string    `gorm:"type:text" json:"ignore_file_extensions_json"`
+	MinFileSizeBytes           int64     `gorm:"not null;default:0" json:"min_file_size_bytes"`
+	SampleIgnoreSizeBytes      int64     `gorm:"not null;default:0" json:"sample_ignore_size_bytes"`
+	ConfigurableExclusionRules bool      `gorm:"not null;default:true" json:"configurable_exclusion_rules"`
+	CreatedAt                  time.Time `json:"created_at"`
+	UpdatedAt                  time.Time `json:"updated_at"`
+}
+
+type LibraryMetadataPolicy struct {
+	ID                        uint      `gorm:"primaryKey" json:"id"`
+	LibraryID                 uint      `gorm:"not null;uniqueIndex" json:"library_id"`
+	PreferredMetadataLanguage string    `gorm:"size:32" json:"preferred_metadata_language"`
+	PreferredImageLanguage    string    `gorm:"size:32" json:"preferred_image_language"`
+	MetadataCountryCode       string    `gorm:"size:16" json:"metadata_country_code"`
+	LocalMetadataEnabled      bool      `gorm:"not null;default:true" json:"local_metadata_enabled"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
+}
+
+type LibraryPlaybackPolicy struct {
+	ID                       uint      `gorm:"primaryKey" json:"id"`
+	LibraryID                uint      `gorm:"not null;uniqueIndex" json:"library_id"`
+	ResumeEnabled            bool      `gorm:"not null;default:true" json:"resume_enabled"`
+	MinResumePct             int       `gorm:"not null;default:5" json:"min_resume_pct"`
+	MaxResumePct             int       `gorm:"not null;default:90" json:"max_resume_pct"`
+	MinResumeDurationSeconds int       `gorm:"not null;default:300" json:"min_resume_duration_seconds"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
+}
+
+type LibrarySubtitlePolicy struct {
+	ID                             uint      `gorm:"primaryKey" json:"id"`
+	LibraryID                      uint      `gorm:"not null;uniqueIndex" json:"library_id"`
+	ExternalSidecarsEnabled        bool      `gorm:"not null;default:true" json:"external_sidecars_enabled"`
+	PreferredLanguagesJSON         string    `gorm:"type:text" json:"preferred_languages_json"`
+	RequirePerfectMatch            bool      `gorm:"not null;default:false" json:"require_perfect_match"`
+	SaveWithMedia                  bool      `gorm:"not null;default:false" json:"save_with_media"`
+	TolerateUnavailableSubtitles   bool      `gorm:"not null;default:true" json:"tolerate_unavailable_subtitles"`
+	SkipIfEmbeddedSubtitlesPresent bool      `gorm:"not null;default:false" json:"skip_if_embedded_subtitles_present"`
+	SkipIfAudioTrackMatches        bool      `gorm:"not null;default:false" json:"skip_if_audio_track_matches"`
+	CreatedAt                      time.Time `json:"created_at"`
+	UpdatedAt                      time.Time `json:"updated_at"`
+}
+
 type Job struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	JobKey       string     `gorm:"size:255;index" json:"job_key"`
@@ -97,6 +165,10 @@ type Session struct {
 	ID         uint       `gorm:"primaryKey" json:"id"`
 	UserID     uint       `gorm:"not null;index" json:"user_id"`
 	TokenHash  string     `gorm:"size:128;not null;uniqueIndex" json:"-"`
+	UserAgent  *string    `gorm:"type:text" json:"user_agent,omitempty"`
+	RemoteAddr *string    `gorm:"size:255" json:"remote_addr,omitempty"`
+	DeviceName *string    `gorm:"size:255" json:"device_name,omitempty"`
+	ClientType *string    `gorm:"size:128" json:"client_type,omitempty"`
 	ExpiresAt  time.Time  `gorm:"not null;index" json:"expires_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`

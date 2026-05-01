@@ -1,20 +1,20 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useEffect, useMemo } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   CastIcon,
   HeartIcon,
   LoaderCircleIcon,
+  MonitorSmartphoneIcon,
   SearchIcon,
   Settings2Icon,
+  ShieldAlertIcon,
   UserCircleIcon,
-} from 'lucide-react'
-import type { Swiper as SwiperType } from 'swiper/types'
+} from "lucide-react"
+import "swiper/css"
 
-import 'swiper/css'
-
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '#/components/ui/dialog'
+} from "#/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,24 +30,30 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
-import { AppTopBar } from '#/components/app-top-bar'
-import { SidebarTrigger } from '#/components/ui/sidebar'
-import type { CatalogListItem } from '#/lib/mibo-api'
+} from "#/components/ui/dropdown-menu"
 import {
-  createAuthedMiboApi,
-  favoritesQueryOptions,
-  homeDataQueryOptions,
-  miboQueryKeys,
-} from '#/lib/mibo-query'
-import { useAuthStore } from '#/stores/auth-store'
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "#/components/ui/tooltip"
+import { AppTopBar } from "#/components/app-top-bar"
+import { SidebarTrigger } from "#/components/ui/sidebar"
+import { createAuthedMiboApi, homeDataQueryOptions } from "#/lib/mibo-query"
+import {
+  affectedLibraryNames,
+  findBlockingHomeIssue,
+  healthReasonMessage,
+  healthReasonTitle,
+} from "#/lib/health-presentation"
+import { useAuthStore } from "#/stores/auth-store"
 
 import {
   ContinueWatchingRail,
   HeroCarousel,
   LatestLibraryRail,
   MyMediaSection,
-} from './home-sections'
+} from "./home-sections"
 
 export default function Home() {
   const token = useAuthStore((state) => state.token)
@@ -55,36 +61,11 @@ export default function Home() {
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
   const clearSession = useAuthStore((state) => state.clearSession)
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
 
-  const [swiper, setSwiper] = useState<SwiperType | null>(null)
-  const [selectedIndex, setSelectedIndex] = useState(0)
   const homeQuery = useQuery({
     ...homeDataQueryOptions(queryToken),
     enabled: hasHydrated && !!token,
-  })
-  const favoritesQuery = useQuery({
-    ...favoritesQueryOptions(queryToken),
-    enabled: hasHydrated && !!token,
-  })
-  const favoriteMutation = useMutation({
-    mutationFn: async ({
-      item,
-      favorite,
-    }: {
-      item: CatalogListItem
-      favorite: boolean
-    }) => {
-      if (!token) throw new Error('当前未登录，无法更新收藏。')
-      const api = createAuthedMiboApi(token)
-      return favorite ? api.addFavorite(item.id) : api.removeFavorite(item.id)
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: miboQueryKeys.favorites(queryToken),
-      })
-    },
   })
 
   const data = homeQuery.data ?? {
@@ -94,53 +75,41 @@ export default function Home() {
     libraries: [],
     libraryCount: 0,
     latestByLibrary: [],
+    healthIssues: [],
   }
-  const favoriteIds = useMemo(
-    () => new Set((favoritesQuery.data ?? []).map((entry) => entry.item.id)),
-    [favoritesQuery.data],
-  )
+  const homeBlockingIssue = findBlockingHomeIssue(data.healthIssues)
   const heroItems = data.items.slice(0, 6)
   const canLoopHeroItems = heroItems.length > 2
   const latestLibrarySections = useMemo(
     () => data.latestByLibrary.filter((section) => section.items.length > 0),
-    [data.latestByLibrary],
+    [data.latestByLibrary]
   )
+  const hasDisplayableHomeContent =
+    data.items.length > 0 ||
+    latestLibrarySections.length > 0 ||
+    data.continueWatching.length > 0
   const movieCount = useMemo(
-    () => data.items.filter((item) => item.type === 'movie').length,
-    [data.items],
+    () => data.items.filter((item) => item.type === "movie").length,
+    [data.items]
   )
   const showCount = useMemo(
     () =>
       data.items.filter(
-        (item) => item.type === 'show' || item.type === 'series',
+        (item) => item.type === "show" || item.type === "series"
       ).length,
-    [data.items],
+    [data.items]
   )
-
   useEffect(() => {
     if (!hasHydrated || (token && user)) {
       return
     }
 
     void navigate({
-      to: '/login',
-      search: { redirect: '/' },
+      to: "/login",
+      search: { redirect: "/" },
       replace: true,
     })
   }, [hasHydrated, navigate, token, user])
-
-  const scrollHeroTo = (index: number) => {
-    if (!swiper) return
-    if (canLoopHeroItems) {
-      swiper.slideToLoop(index)
-      return
-    }
-    swiper.slideTo(index)
-  }
-
-  const handleFavoriteToggle = (item: CatalogListItem, favorite: boolean) => {
-    favoriteMutation.mutate({ item, favorite })
-  }
 
   const handleLogout = async () => {
     if (token) {
@@ -151,7 +120,7 @@ export default function Home() {
       }
     }
     clearSession()
-    await navigate({ to: '/login', search: { redirect: '/' }, replace: true })
+    await navigate({ to: "/login", search: { redirect: "/" }, replace: true })
   }
 
   if (!hasHydrated || (token && homeQuery.isLoading)) {
@@ -209,12 +178,6 @@ export default function Home() {
       leftSlot={
         <>
           <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
-          <Link
-            to="/"
-            className="hidden text-base font-semibold tracking-tight sm:block"
-          >
-            Mibo
-          </Link>
           <div className="hidden rounded-full border border-border/50 bg-background/80 p-1 sm:flex">
             <Button asChild size="sm" className="h-8 rounded-full px-4">
               <Link to="/">首页</Link>
@@ -228,8 +191,8 @@ export default function Home() {
               <Link to="/favorites">收藏</Link>
             </Button>
           </div>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">Mibo Home</div>
+          <div className="flex min-w-0 items-baseline gap-2">
+            <div className="shrink-0 text-lg font-semibold">Mibo Home</div>
             <div className="truncate text-xs text-muted-foreground">
               最近加入轮播 · {data.items.length} 条内容
             </div>
@@ -250,6 +213,45 @@ export default function Home() {
           >
             媒体库 {data.libraryCount}
           </Badge>
+          {data.healthIssues.length > 0 ? (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    to="/settings/health"
+                    className="relative inline-flex size-9 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10 text-destructive shadow-sm transition-colors hover:bg-destructive/15 focus-visible:ring-2 focus-visible:ring-destructive/40 focus-visible:outline-none"
+                  >
+                    <ShieldAlertIcon className="size-4" />
+                    <span className="absolute -top-0.5 -right-0.5 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] leading-4 font-semibold text-destructive-foreground">
+                      {data.healthIssues.length}
+                    </span>
+                    <span className="sr-only">查看健康中心</span>
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="bottom"
+                  align="end"
+                  sideOffset={8}
+                  className="flex max-w-sm flex-col items-start gap-2 rounded-xl px-4 py-3 text-left"
+                >
+                  <div className="font-medium">
+                    {data.healthIssues.length} 个健康问题需要关注
+                  </div>
+                  <div className="text-xs opacity-85">
+                    {homeBlockingIssue
+                      ? healthReasonTitle(homeBlockingIssue)
+                      : healthReasonTitle(data.healthIssues[0])}
+                  </div>
+                  {homeBlockingIssue && affectedLibraryNames(homeBlockingIssue) ? (
+                    <div className="text-xs opacity-75">
+                      影响：{affectedLibraryNames(homeBlockingIssue)}
+                    </div>
+                  ) : null}
+                  <div className="text-xs opacity-70">点击进入设置里的健康中心</div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : null}
           <Button
             asChild
             size="icon-sm"
@@ -308,6 +310,12 @@ export default function Home() {
                   设置
                 </Link>
               </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/settings/devices">
+                  <MonitorSmartphoneIcon className="size-4" />
+                  登录设备
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => void handleLogout()}>
                 退出登录
@@ -340,7 +348,7 @@ export default function Home() {
       <div className="relative min-w-0 flex-1 bg-background text-foreground">
         {topBar}
 
-        <div className="flex min-h-svh items-center justify-center px-6 pb-8 pt-24">
+        <div className="flex min-h-svh items-center justify-center px-6 pt-24 pb-8">
           <div className="max-w-xl space-y-4 text-center">
             <Badge
               className="border-border/60 bg-background/80"
@@ -360,40 +368,69 @@ export default function Home() {
     )
   }
 
+  if (!hasDisplayableHomeContent && homeBlockingIssue) {
+    return (
+      <div className="relative min-w-0 flex-1 bg-background text-foreground">
+        {topBar}
+
+        <div className="flex min-h-svh items-center justify-center px-6 pt-24 pb-8">
+          <div className="max-w-2xl space-y-5 text-center">
+            <Badge
+              className="border-destructive/40 bg-destructive/10 text-destructive"
+              variant="outline"
+            >
+              媒体库需要处理
+            </Badge>
+            <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10">
+              <ShieldAlertIcon className="size-6 text-destructive" />
+            </div>
+            <h1 className="text-4xl font-semibold tracking-tight">
+              {healthReasonTitle(homeBlockingIssue)}
+            </h1>
+            <p className="text-sm leading-7 text-muted-foreground sm:text-base">
+              {healthReasonMessage(homeBlockingIssue)}
+            </p>
+            {affectedLibraryNames(homeBlockingIssue) ? (
+              <p className="text-sm text-muted-foreground">
+                受影响媒体库：{affectedLibraryNames(homeBlockingIssue)}
+              </p>
+            ) : null}
+            <div className="flex flex-col justify-center gap-3 sm:flex-row">
+              <Button asChild>
+                <Link to="/settings/health">处理问题</Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link to="/settings/jobs">查看失败任务</Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
       {topBar}
+      <div className="relative">
+        <HeroCarousel
+          heroItems={heroItems}
+          canLoopHeroItems={canLoopHeroItems}
+          userName={user.username}
+          continueWatchingCount={data.continueWatchingCount}
+          movieCount={movieCount}
+          showCount={showCount}
+          hasBottomOverlay={data.libraries.length > 0}
+        />
 
-      <HeroCarousel
-        heroItems={heroItems}
-        canLoopHeroItems={canLoopHeroItems}
-        selectedIndex={selectedIndex}
-        userName={user.username}
-        continueWatchingCount={data.continueWatchingCount}
-        movieCount={movieCount}
-        showCount={showCount}
-        onSwiper={(instance) => {
-          setSwiper(instance)
-          setSelectedIndex(instance.realIndex)
-        }}
-        onSlideChange={(instance) => setSelectedIndex(instance.realIndex)}
-        onDotClick={scrollHeroTo}
-      />
-
-      <MyMediaSection
-        libraries={data.libraries}
-        latestLibrarySections={latestLibrarySections}
-      />
-      <ContinueWatchingRail
-        entries={data.continueWatching}
-        favoriteIds={favoriteIds}
-        onFavoriteToggle={handleFavoriteToggle}
-      />
-      <LatestLibraryRail
-        latestLibrarySections={latestLibrarySections}
-        favoriteIds={favoriteIds}
-        onFavoriteToggle={handleFavoriteToggle}
-      />
+        <MyMediaSection
+          libraries={data.libraries}
+          latestLibrarySections={latestLibrarySections}
+          variant="heroOverlay"
+        />
+      </div>
+      <ContinueWatchingRail entries={data.continueWatching} />
+      <LatestLibraryRail latestLibrarySections={latestLibrarySections} />
     </div>
   )
 }

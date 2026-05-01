@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClockIcon, CircleHelpIcon } from 'lucide-react'
 import { toast } from 'sonner'
@@ -14,9 +14,18 @@ import {
   schedulesQueryOptions,
 } from '#/lib/mibo-query'
 
-import { ScheduleFormDialog } from './components/schedule-form-dialog'
 import { ScheduleList } from './components/schedule-list'
-import { ScheduleRunHistoryDrawer } from './components/schedule-run-history-drawer'
+
+const ScheduleFormDialog = lazy(() =>
+  import('./components/schedule-form-dialog').then((module) => ({
+    default: module.ScheduleFormDialog,
+  })),
+)
+const ScheduleRunHistoryDrawer = lazy(() =>
+  import('./components/schedule-run-history-drawer').then((module) => ({
+    default: module.ScheduleRunHistoryDrawer,
+  })),
+)
 
 export function SchedulesWorkspace({ token }: { token: string }) {
   const queryClient = useQueryClient()
@@ -138,32 +147,38 @@ export function SchedulesWorkspace({ token }: { token: string }) {
         />
       )}
 
-      <ScheduleFormDialog
-        open={formOpen}
-        onOpenChange={(open) => {
-          setFormOpen(open)
-          if (!open) {
-            setEditingSchedule(null)
-          }
-        }}
-        libraries={librariesQuery.data ?? []}
-        schedule={editingSchedule}
-        onSubmit={async (input) => {
-          await saveMutation.mutateAsync(input)
-        }}
-      />
+      <Suspense fallback={null}>
+        {formOpen ? (
+          <ScheduleFormDialog
+            open={formOpen}
+            onOpenChange={(open) => {
+              setFormOpen(open)
+              if (!open) {
+                setEditingSchedule(null)
+              }
+            }}
+            libraries={librariesQuery.data ?? []}
+            schedule={editingSchedule}
+            onSubmit={async (input) => {
+              await saveMutation.mutateAsync(input)
+            }}
+          />
+        ) : null}
 
-      <ScheduleRunHistoryDrawer
-        open={Boolean(historySchedule)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setHistorySchedule(null)
-          }
-        }}
-        schedule={historySchedule}
-        runs={historyQuery.data ?? []}
-        isLoading={historyQuery.isLoading}
-      />
+        {historySchedule ? (
+          <ScheduleRunHistoryDrawer
+            open={Boolean(historySchedule)}
+            onOpenChange={(open) => {
+              if (!open) {
+                setHistorySchedule(null)
+              }
+            }}
+            schedule={historySchedule}
+            runs={historyQuery.data ?? []}
+            isLoading={historyQuery.isLoading}
+          />
+        ) : null}
+      </Suspense>
     </div>
   )
 }

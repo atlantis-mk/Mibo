@@ -539,7 +539,7 @@ export function MetadataGovernanceDetail({
   const item = buildPreviewItem(workspace)
   const activeCandidates = uniqueMetadataCandidates(searchMutation.data ?? [])
   const firstInventoryFileId = workspaceAssets.find(
-    (asset) => asset.file_ids.length > 0,
+    (asset) => (asset.file_ids ?? []).length > 0,
   )?.file_ids[0]
 
   async function handleNavigateAway(

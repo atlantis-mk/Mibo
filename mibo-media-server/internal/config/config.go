@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	HTTP     HTTPConfig
+	Web      WebConfig
 	Storage  StorageConfig
 	Local    LocalStorageConfig
 	Database DatabaseConfig
@@ -21,11 +22,16 @@ type Config struct {
 	FFprobe  FFprobeConfig
 	HLS      HLSConfig
 	Worker   WorkerConfig
+	Cleanup  CleanupConfig
 }
 
 type HTTPConfig struct {
 	Addr            string
 	ShutdownTimeout time.Duration
+}
+
+type WebConfig struct {
+	DistDir string
 }
 
 type CORSConfig struct {
@@ -56,8 +62,9 @@ type OpenListConfig struct {
 }
 
 type MetadataConfig struct {
-	TMDB TMDBConfig
-	TVDB TVDBConfig
+	TMDB     TMDBConfig
+	TVDB     TVDBConfig
+	MetaTube MetaTubeConfig
 }
 
 type TMDBConfig struct {
@@ -73,6 +80,14 @@ type TVDBConfig struct {
 	BaseURL  string
 	Language string
 	Timeout  time.Duration
+}
+
+type MetaTubeConfig struct {
+	Token                  string
+	BaseURL                string
+	UpstreamProviderFilter string
+	FallbackEnabled        bool
+	Timeout                time.Duration
 }
 
 type FFmpegConfig struct {
@@ -102,11 +117,20 @@ type WorkerConfig struct {
 	ProbeWorkers         int
 }
 
+type CleanupConfig struct {
+	MissingCleanupEnabled   bool
+	MissingRetention        time.Duration
+	MissingCleanupBatchSize int
+}
+
 func Load() (Config, error) {
 	cfg := Config{
 		HTTP: HTTPConfig{
 			Addr:            getEnv("MIBO_HTTP_ADDR", ":8080"),
 			ShutdownTimeout: getDurationEnv("MIBO_HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+		},
+		Web: WebConfig{
+			DistDir: strings.TrimSpace(os.Getenv("MIBO_WEB_DIST_DIR")),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins: parseCSVEnv("MIBO_CORS_ALLOWED_ORIGINS", []string{"*"}),
@@ -144,6 +168,13 @@ func Load() (Config, error) {
 				Language: getEnv("MIBO_TVDB_LANGUAGE", "en"),
 				Timeout:  getDurationEnv("MIBO_TVDB_TIMEOUT", 10*time.Second),
 			},
+			MetaTube: MetaTubeConfig{
+				Token:                  strings.TrimSpace(os.Getenv("MIBO_METATUBE_TOKEN")),
+				BaseURL:                strings.TrimRight(getEnv("MIBO_METATUBE_BASE_URL", "http://127.0.0.1:8081"), "/"),
+				UpstreamProviderFilter: strings.TrimSpace(os.Getenv("MIBO_METATUBE_UPSTREAM_PROVIDER_FILTER")),
+				FallbackEnabled:        getBoolEnv("MIBO_METATUBE_FALLBACK_ENABLED", true),
+				Timeout:                getDurationEnv("MIBO_METATUBE_TIMEOUT", 10*time.Second),
+			},
 		},
 		FFmpeg: FFmpegConfig{
 			Enabled:         getBoolEnv("MIBO_FFMPEG_ENABLED", true),
@@ -167,6 +198,11 @@ func Load() (Config, error) {
 			PollInterval:         getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
 			RefreshIntervalHours: getIntEnv("MIBO_WORKER_REFRESH_INTERVAL_HOURS", 0),
 			ProbeWorkers:         getBoundedIntEnv("MIBO_PROBE_WORKERS", 2, 1, 8),
+		},
+		Cleanup: CleanupConfig{
+			MissingCleanupEnabled:   getBoolEnv("MIBO_MISSING_CLEANUP_ENABLED", false),
+			MissingRetention:        getDurationEnv("MIBO_MISSING_CLEANUP_RETENTION", 30*24*time.Hour),
+			MissingCleanupBatchSize: getBoundedIntEnv("MIBO_MISSING_CLEANUP_BATCH_SIZE", 100, 1, 1000),
 		},
 	}
 

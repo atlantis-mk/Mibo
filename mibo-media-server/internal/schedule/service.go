@@ -119,7 +119,23 @@ type ScheduleRun struct {
 	ScheduleID   uint       `json:"schedule_id"`
 	Status       string     `json:"status"`
 	JobID        *uint      `json:"job_id,omitempty"`
+	Job          *JobDetail `json:"job,omitempty"`
 	ErrorSummary string     `json:"error_summary"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type JobDetail struct {
+	ID           uint       `json:"id"`
+	JobKey       string     `json:"job_key"`
+	Kind         string     `json:"kind"`
+	Status       string     `json:"status"`
+	PayloadJSON  string     `json:"payload_json"`
+	ErrorMessage string     `json:"error_message"`
+	Attempts     int        `json:"attempts"`
+	AvailableAt  time.Time  `json:"available_at"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -266,9 +282,13 @@ func (s *Service) ListHistory(ctx context.Context, scheduleID uint, limit int) (
 	if err := s.db.WithContext(ctx).Where("schedule_id = ?", scheduleID).Order("created_at desc").Limit(limit).Find(&runs).Error; err != nil {
 		return nil, err
 	}
+	jobsByID, err := s.jobsByRunJobID(ctx, runs)
+	if err != nil {
+		return nil, err
+	}
 	projected := make([]ScheduleRun, 0, len(runs))
 	for _, run := range runs {
-		projected = append(projected, projectRun(run))
+		projected = append(projected, projectRun(run, jobsByID))
 	}
 	return projected, nil
 }
@@ -359,10 +379,14 @@ func (s *Service) MarkRunFinished(ctx context.Context, input RunTransitionInput)
 		if finished.IsZero() {
 			finished = s.now()
 		}
-		if err := tx.Model(&database.ScheduleRun{}).Where("id = ?", run.ID).Updates(map[string]any{"status": input.Status, "error_summary": strings.TrimSpace(input.Message), "finished_at": finished}).Error; err != nil {
+		message := strings.TrimSpace(input.Message)
+		if message == StatusCompleted && strings.TrimSpace(run.ErrorSummary) != "" {
+			message = strings.TrimSpace(run.ErrorSummary)
+		}
+		if err := tx.Model(&database.ScheduleRun{}).Where("id = ?", run.ID).Updates(map[string]any{"status": input.Status, "error_summary": message, "finished_at": finished}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&database.Schedule{}).Where("id = ?", run.ScheduleID).Updates(map[string]any{"latest_run_status": input.Status, "latest_run_message": strings.TrimSpace(input.Message), "latest_job_id": input.JobID, "latest_run_finished_at": finished}).Error
+		return tx.Model(&database.Schedule{}).Where("id = ?", run.ScheduleID).Updates(map[string]any{"latest_run_status": input.Status, "latest_run_message": message, "latest_job_id": input.JobID, "latest_run_finished_at": finished}).Error
 	})
 }
 
@@ -425,7 +449,7 @@ func (s *Service) RecordRunResult(ctx context.Context, scheduleID uint, input Re
 	if err != nil {
 		return ScheduleRun{}, err
 	}
-	return projectRun(run), nil
+	return projectRun(run, nil), nil
 }
 
 func validateCreateInput(input CreateScheduleInput) error {
@@ -465,7 +489,7 @@ func normalizeKind(kind string) string {
 
 func isValidRunStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case StatusQueued, StatusRunning, StatusCompleted, StatusFailed:
+	case StatusQueued, StatusRunning, StatusCompleted, StatusFailed, "cancel_requested", "cancelled":
 		return true
 	default:
 		return false
@@ -493,14 +517,51 @@ func projectSchedule(record database.Schedule, runs []database.ScheduleRun) Sche
 	if len(runs) > 0 {
 		projected.RecentRuns = make([]ScheduleRun, 0, len(runs))
 		for _, run := range runs {
-			projected.RecentRuns = append(projected.RecentRuns, projectRun(run))
+			projected.RecentRuns = append(projected.RecentRuns, projectRun(run, nil))
 		}
 	}
 	return projected
 }
 
-func projectRun(record database.ScheduleRun) ScheduleRun {
-	return ScheduleRun{ID: record.ID, ScheduleID: record.ScheduleID, Status: record.Status, JobID: record.JobID, ErrorSummary: record.ErrorSummary, StartedAt: record.StartedAt, FinishedAt: record.FinishedAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+func projectRun(record database.ScheduleRun, jobsByID map[uint]database.Job) ScheduleRun {
+	projected := ScheduleRun{ID: record.ID, ScheduleID: record.ScheduleID, Status: record.Status, JobID: record.JobID, ErrorSummary: record.ErrorSummary, StartedAt: record.StartedAt, FinishedAt: record.FinishedAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	if record.JobID != nil && jobsByID != nil {
+		if job, ok := jobsByID[*record.JobID]; ok {
+			projected.Job = projectJobDetail(job)
+		}
+	}
+	return projected
+}
+
+func (s *Service) jobsByRunJobID(ctx context.Context, runs []database.ScheduleRun) (map[uint]database.Job, error) {
+	ids := make([]uint, 0, len(runs))
+	seen := make(map[uint]struct{})
+	for _, run := range runs {
+		if run.JobID == nil {
+			continue
+		}
+		if _, ok := seen[*run.JobID]; ok {
+			continue
+		}
+		seen[*run.JobID] = struct{}{}
+		ids = append(ids, *run.JobID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var records []database.Job
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	jobsByID := make(map[uint]database.Job, len(records))
+	for _, record := range records {
+		jobsByID[record.ID] = record
+	}
+	return jobsByID, nil
+}
+
+func projectJobDetail(record database.Job) *JobDetail {
+	return &JobDetail{ID: record.ID, JobKey: record.JobKey, Kind: record.Kind, Status: record.Status, PayloadJSON: record.PayloadJSON, ErrorMessage: record.ErrorMessage, Attempts: record.Attempts, AvailableAt: record.AvailableAt, StartedAt: record.StartedAt, FinishedAt: record.FinishedAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 }
 
 func timePtr(value time.Time) *time.Time {

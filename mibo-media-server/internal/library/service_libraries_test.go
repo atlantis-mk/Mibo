@@ -85,8 +85,10 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 		&database.MediaStream{FileID: otherInventoryFile.ID, StreamIndex: 0, StreamType: "video"},
 		&database.MediaStream{FileID: 999999, StreamIndex: 0, StreamType: "video"},
 		&database.CatalogExternalID{ItemID: item.ID, Provider: "tmdb", ProviderType: "movie", ExternalID: "deleted"},
+		&database.CatalogIdentity{ItemID: item.ID, Provider: "scanner", IdentityType: "movie", IdentityKey: "deleted"},
 		&database.MetadataSource{ItemID: item.ID, SourceType: "remote", SourceName: "tmdb", FetchedAt: time.Now()},
 		&database.MetadataFieldState{ItemID: item.ID, FieldKey: "title", ValueJSON: `"Gone"`},
+		&database.MetadataOperation{Operation: "match", OriginItemID: item.ID, TargetItemID: item.ID, LibraryID: library.ID, Status: "applied", StartedAt: time.Now()},
 		&database.ItemImage{ItemID: item.ID, ImageType: "poster", URL: "https://example.test/poster.jpg"},
 		&database.ItemPerson{ItemID: item.ID, PersonID: person.ID, Role: "cast"},
 		&database.ItemPerson{ItemID: otherItem.ID, PersonID: otherPerson.ID, Role: "cast"},
@@ -94,6 +96,8 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 		&database.ItemTag{ItemID: otherItem.ID, TagID: otherTag.ID},
 		&database.ItemRollup{ItemID: item.ID, UpdatedAt: time.Now()},
 		&database.CatalogSearchDocument{ItemID: item.ID, LibraryID: library.ID, ItemType: "movie", Title: "Gone", AvailabilityStatus: "available"},
+		&database.LibraryMetadataStrategy{LibraryID: library.ID},
+		&database.ScanExclusion{LibraryID: library.ID, StorageProvider: "local", StoragePath: "/media/delete/ad.mkv", Reason: "advertisement", Enabled: true},
 		&database.User{Username: "user", PasswordHash: "hash", Role: "admin"},
 	}
 	for _, record := range seed {
@@ -159,13 +163,17 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	assertRawTableCount(t, db, "media_streams", "file_id = ?", 0, inventoryFile.ID)
 	assertRawTableCount(t, db, "media_streams", "file_id = 999999", 0)
 	assertRawTableCount(t, db, "catalog_external_ids", "item_id = ?", 0, item.ID)
+	assertRawTableCount(t, db, "catalog_identities", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "metadata_sources", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "metadata_field_states", "item_id = ?", 0, item.ID)
+	assertRawTableCount(t, db, "metadata_operations", "library_id = ? OR origin_item_id = ? OR target_item_id = ?", 0, library.ID, item.ID, item.ID)
 	assertRawTableCount(t, db, "item_images", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "item_people", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "item_tags", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "item_rollups", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "catalog_search_documents", "item_id = ? OR library_id = ?", 0, item.ID, library.ID)
+	assertRawTableCount(t, db, "library_metadata_strategies", "library_id = ?", 0, library.ID)
+	assertRawTableCount(t, db, "scan_exclusions", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "user_item_data", "item_id = ? OR asset_id = ?", 0, item.ID, asset.ID)
 	assertRawTableCount(t, db, "schedules", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "schedule_runs", "schedule_id = ?", 0, schedule.ID)

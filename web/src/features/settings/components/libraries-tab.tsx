@@ -10,24 +10,34 @@ import {
   CardTitle,
 } from '#/components/ui/card'
 import { Separator } from '#/components/ui/separator'
-import type { Library, MediaSource } from '#/lib/mibo-api'
+import {
+  healthReasonMessage,
+  healthReasonTitle,
+  healthSeverityClassName,
+} from '#/lib/health-presentation'
+import { formatLibraryType } from '#/lib/library-presentation'
+import type { HealthIssue, Library, MediaSource } from '#/lib/mibo-api'
 
 import { EmptyCard, InfoRow } from './settings-aside-card'
 
 export function LibrariesTab({
   libraries,
   mediaSources,
+  healthIssues,
   isLoading,
   isScanning,
   onCreate,
+  onEdit,
   onScan,
   onDelete,
 }: {
   libraries: Library[]
   mediaSources: MediaSource[]
+  healthIssues: HealthIssue[]
   isLoading: boolean
   isScanning: boolean
   onCreate: () => void
+  onEdit: (library: Library) => void
   onScan: (libraryId: number) => void
   onDelete: (library: Library) => void
 }) {
@@ -53,6 +63,9 @@ export function LibrariesTab({
               mediaSources.find(
                 (source) => source.id === library.media_source_id,
               )?.name ?? `媒体源 #${library.media_source_id}`
+            const issue = healthIssues.find((entry) =>
+              entry.affected.libraries.some((ref) => ref.id === library.id),
+            )
 
             return (
               <Card
@@ -66,24 +79,47 @@ export function LibrariesTab({
                       className="border-border/60 bg-muted text-foreground"
                       variant="outline"
                     >
-                      {library.type}
+                      {formatLibraryType(library.type)}
                     </Badge>
                   </CardTitle>
                   <CardDescription>绑定媒体源：{sourceName}</CardDescription>
                 </CardHeader>
                 <Separator className="bg-border" />
                 <CardContent className="space-y-3 px-4 py-4 text-sm text-muted-foreground">
-                  <InfoRow label="目录" value={library.root_path} />
+                  <InfoRow
+                    label="目录"
+                    value={`${library.paths?.filter((path) => path.enabled).length || 1} 个路径`}
+                  />
                   <InfoRow label="状态" value={library.status} />
+                  {issue ? (
+                    <div className="rounded-[1rem] border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                      <Badge
+                        className={healthSeverityClassName(issue.severity)}
+                        variant="outline"
+                      >
+                        {healthReasonTitle(issue)}
+                      </Badge>
+                      <div className="mt-2 leading-6 text-foreground">
+                        {healthReasonMessage(issue)}
+                      </div>
+                    </div>
+                  ) : null}
                   <InfoRow
                     label="扫描"
                     value={library.scanner_enabled ? '已启用' : '已关闭'}
+                  />
+                  <InfoRow
+                    label="元数据 Template"
+                    value={
+                      library.policies?.metadata?.metadata_profile_name ||
+                      '迁移默认配置'
+                    }
                   />
                   <div className="flex justify-end gap-2 pt-2">
                     <Button
                       variant="outline"
                       className="border-border/60 bg-card/80 text-foreground hover:bg-muted hover:text-foreground"
-                      disabled
+                      onClick={() => onEdit(library)}
                     >
                       编辑
                     </Button>

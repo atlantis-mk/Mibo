@@ -33,10 +33,6 @@ func (s *hlsService) Enabled() bool {
 	return s.cfg.FFmpeg.Enabled && s.cfg.HLS.Enabled
 }
 
-func (s *hlsService) InventoryPlaylistURL(fileID uint) string {
-	return fmt.Sprintf("/api/v1/inventory-files/%d/hls/index.m3u8", fileID)
-}
-
 func (s *hlsService) EnsureInventoryPlaylist(ctx context.Context, fileID uint) (string, error) {
 	if !s.Enabled() {
 		return "", fmt.Errorf("hls playback is disabled")

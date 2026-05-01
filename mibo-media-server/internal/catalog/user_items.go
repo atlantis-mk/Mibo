@@ -37,9 +37,11 @@ func (s *Service) ListContinueWatching(ctx context.Context, userID uint, limit i
 
 	var rows []database.UserItemData
 	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id > 0", userID).
+		Joins("JOIN catalog_items ON catalog_items.id = user_item_data.item_id").
+		Where("user_item_data.user_id = ? AND user_item_data.item_id > 0", userID).
+		Where("catalog_items.deleted_at IS NULL AND catalog_items.availability_status = ?", AvailabilityAvailable).
 		Where("last_played_at IS NOT NULL AND completed_at IS NULL AND position_seconds > 0").
-		Order("last_played_at desc").
+		Order("user_item_data.last_played_at desc").
 		Limit(limit).
 		Find(&rows).Error; err != nil {
 		return nil, err
