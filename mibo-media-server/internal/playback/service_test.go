@@ -60,6 +60,48 @@ func TestCatalogPlaybackDirectFromAssetAndInventoryFile(t *testing.T) {
 	}
 }
 
+func TestCatalogPlaybackDirectStreamsUnsupportedWebContainer(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Catalog Movie", AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := fixture.db.WithContext(context.Background()).Create(&item).Error; err != nil {
+		fixture.t.Fatalf("create catalog item: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: fixture.library.ID, AssetType: "main", Status: "available", ProbeStatus: probe.StatusReady}
+	if err := fixture.db.WithContext(context.Background()).Create(&asset).Error; err != nil {
+		fixture.t.Fatalf("create media asset: %v", err)
+	}
+	filePath := filepath.Join(fixture.rootPath, "catalog-movie.mkv")
+	if err := os.WriteFile(filePath, []byte("video"), 0o644); err != nil {
+		fixture.t.Fatalf("write inventory file: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: filePath, Container: "mkv", Status: "available"}
+	if err := fixture.db.WithContext(context.Background()).Create(&file).Error; err != nil {
+		fixture.t.Fatalf("create inventory file row: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetItem{AssetID: asset.ID, ItemID: item.ID, Role: "primary", SegmentIndex: 0}).Error; err != nil {
+		fixture.t.Fatalf("create asset item: %v", err)
+	}
+	if err := fixture.db.WithContext(context.Background()).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: "source", PartIndex: 0}).Error; err != nil {
+		fixture.t.Fatalf("create asset file: %v", err)
+	}
+	width := 1280
+	height := 720
+	if err := fixture.db.WithContext(context.Background()).Create(&database.MediaStream{FileID: file.ID, StreamIndex: 0, StreamType: "video", Codec: "hevc", Width: &width, Height: &height}).Error; err != nil {
+		fixture.t.Fatalf("create video stream: %v", err)
+	}
+
+	source, err := fixture.service.GetPlaybackSource(context.Background(), PlaybackRequest{ItemID: item.ID, ClientProfile: ClientProfileWeb})
+	if err != nil {
+		fixture.t.Fatalf("get catalog playback source: %v", err)
+	}
+	if source.Decision.Kind != "direct" || !source.Direct || !source.Playable || source.URL != fmt.Sprintf("/api/v1/inventory-files/%d/stream", file.ID) {
+		fixture.t.Fatalf("expected direct stream for unsupported web container, got %#v", source)
+	}
+	if !hasDecisionReasonCode(source.Decision.Reasons, "direct_play_unsupported_container") {
+		fixture.t.Fatalf("expected direct-play warning reason, got %#v", source.Decision.Reasons)
+	}
+}
+
 func TestCatalogPlaybackReturnsUnplayableWhenNoAssetAvailable(t *testing.T) {
 	fixture := newPlaybackDecisionFixture(t)
 	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Missing Catalog Movie", AvailabilityStatus: "missing", GovernanceStatus: "pending"}

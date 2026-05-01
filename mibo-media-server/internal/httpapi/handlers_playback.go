@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -9,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/database"
@@ -27,56 +25,6 @@ func parseClientProfileQuery(req *http.Request) (playback.ClientProfile, error) 
 	default:
 		return "", fmt.Errorf("client_profile must be one of web, mobile, tv")
 	}
-}
-
-func (r *Router) handleGetInventoryHLSPlaylist(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requirePlaybackUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
-		return
-	}
-	fileID, err := parseUintPathValue(req, "id")
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	playlistPath, err := r.hls.EnsureInventoryPlaylist(req.Context(), fileID)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	playlistBytes, err := os.ReadFile(playlistPath)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	_, _ = w.Write(rewriteInventoryHLSPlaylist(req, fileID, playlistBytes))
-}
-
-func (r *Router) handleGetInventoryHLSArtifact(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requirePlaybackUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
-		return
-	}
-	fileID, err := parseUintPathValue(req, "id")
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	name := req.PathValue("name")
-	if _, err := r.hls.EnsureInventoryPlaylist(req.Context(), fileID); err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	artifactPath, err := r.hls.InventoryArtifactPath(fileID, name)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	if strings.HasSuffix(strings.ToLower(name), ".ts") {
-		w.Header().Set("Content-Type", "video/mp2t")
-	}
-	http.ServeFile(w, req, artifactPath)
 }
 
 func (r *Router) handleStreamInventoryFile(w http.ResponseWriter, req *http.Request) {
@@ -157,22 +105,6 @@ func (r *Router) handleStreamInventoryFile(w http.ResponseWriter, req *http.Requ
 	if _, err := io.Copy(w, upstreamResp.Body); err != nil {
 		log.Printf("http stream proxy inventory_path=%s error=%v", file.StoragePath, err)
 	}
-}
-
-func rewriteInventoryHLSPlaylist(req *http.Request, fileID uint, playlist []byte) []byte {
-	scanner := bufio.NewScanner(strings.NewReader(string(playlist)))
-	lines := make([]string, 0, 128)
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.Contains(trimmed, "://") {
-			lines = append(lines, line)
-			continue
-		}
-		artifactPath := fmt.Sprintf("/api/v1/inventory-files/%d/hls/%s", fileID, path.Base(trimmed))
-		lines = append(lines, buildPlaybackURL(req, artifactPath))
-	}
-	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 func buildPlaybackURL(req *http.Request, rawURL string) string {

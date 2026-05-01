@@ -42,7 +42,6 @@ type Router struct {
 	listener *listener.Service
 	jobs     *jobs.Service
 	playback *playback.Service
-	hls      *hlsService
 	progress *progress.Service
 	search   *search.Service
 	metadata *metadata.Service
@@ -89,7 +88,6 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 		listener: listenerSvc,
 		jobs:     jobsSvc,
 		playback: playbackSvc,
-		hls:      newHLSService(cfg, db, registry),
 		progress: progressSvc,
 		search:   searchSvc,
 		metadata: metadataSvc,
@@ -202,8 +200,6 @@ func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *
 	mux.HandleFunc("POST /api/v1/items/{id}/match", router.handleMatchCatalogItem)
 	mux.HandleFunc("GET /api/v1/discovery", router.handleDiscoverMedia)
 	mux.HandleFunc("GET /api/v1/search/history", router.handleListSearchHistory)
-	mux.HandleFunc("GET /api/v1/inventory-files/{id}/hls/index.m3u8", router.handleGetInventoryHLSPlaylist)
-	mux.HandleFunc("GET /api/v1/inventory-files/{id}/hls/{name}", router.handleGetInventoryHLSArtifact)
 	mux.HandleFunc("GET /api/v1/inventory-files/{id}/stream", router.handleStreamInventoryFile)
 	mux.HandleFunc("POST /api/v1/inventory-files/{id}/probe", router.handleQueueInventoryFileProbe)
 	mux.HandleFunc("POST /api/v1/inventory-files/{id}/scan-exclusion", router.handleMarkInventoryFileScanExclusion)

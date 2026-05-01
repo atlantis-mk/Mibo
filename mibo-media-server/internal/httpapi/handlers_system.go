@@ -109,7 +109,6 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 			},
 			"ffmpeg":   map[string]any{"enabled": r.cfg.FFmpeg.Enabled, "path": r.cfg.FFmpeg.Path},
 			"ffprobe":  map[string]any{"enabled": r.cfg.FFprobe.Enabled, "path": r.cfg.FFprobe.Path},
-			"hls":      map[string]any{"enabled": r.hls.Enabled(), "root_path": r.cfg.HLS.RootPath, "segment_duration": r.cfg.HLS.SegmentDuration},
 			"playback": r.playback.Status(),
 			"progress": r.progress.Status(),
 			"search":   r.search.Status(),

@@ -159,7 +159,6 @@ func (r *Router) handleAdminConsoleSummary(w http.ResponseWriter, req *http.Requ
 				{Name: "worker", Status: boolStatus(r.cfg.Worker.Enabled), Message: enabledMessage(r.cfg.Worker.Enabled)},
 				{Name: "metadata", Status: "ok"},
 				{Name: "playback", Status: "ok"},
-				{Name: "hls", Status: boolStatus(r.hls.Enabled()), Message: enabledMessage(r.hls.Enabled())},
 			},
 		},
 		QuickAction: buildAdminConsoleQuickActions(),

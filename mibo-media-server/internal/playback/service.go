@@ -177,7 +177,7 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 		Type:           item.Type,
 		Container:      selected.File.Container,
 		URL:            fileLink.URL,
-		Direct:         directDecision.direct && fileLink.Playable,
+		Direct:         fileLink.Playable,
 		SizeBytes:      selected.File.SizeBytes,
 		RuntimeSeconds: item.RuntimeSeconds,
 		QualityLabel:   selected.Asset.QualityLabel,
@@ -188,18 +188,10 @@ func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequ
 		AudioTracks:    audioTracks,
 		SubtitleTracks: subtitleTracks,
 		Checks:         checks,
-		Playable:       directDecision.direct && fileLink.Playable,
+		Playable:       fileLink.Playable,
 	}
 	if base.Playable {
 		base.Decision = PlaybackDecision{Kind: "direct", ClientProfile: req.ClientProfile, SelectedBy: selectedBy, Reasons: directDecision.reasons}
-		return base, nil
-	}
-	if req.AllowHLSFallback && fileLink.Playable {
-		base.Container = "m3u8"
-		base.URL = fmt.Sprintf("/api/v1/inventory-files/%d/hls/index.m3u8", selected.File.ID)
-		base.Direct = false
-		base.Playable = true
-		base.Decision = PlaybackDecision{Kind: "fallback", ClientProfile: req.ClientProfile, SelectedBy: selectedBy, FallbackKind: "hls", Reasons: append(append([]DecisionReason{}, directDecision.reasons...), DecisionReason{Code: "hls_fallback_selected", Category: "fallback", Message: "switched to HLS fallback for this asset"})}
 		return base, nil
 	}
 	base.URL = ""

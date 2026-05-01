@@ -20,7 +20,6 @@ type Config struct {
 	Metadata MetadataConfig
 	FFmpeg   FFmpegConfig
 	FFprobe  FFprobeConfig
-	HLS      HLSConfig
 	Worker   WorkerConfig
 	Cleanup  CleanupConfig
 }
@@ -103,13 +102,6 @@ type FFprobeConfig struct {
 	Timeout time.Duration
 }
 
-type HLSConfig struct {
-	Enabled         bool
-	RootPath        string
-	SegmentDuration int
-	CleanupAge      time.Duration
-}
-
 type WorkerConfig struct {
 	Enabled              bool
 	PollInterval         time.Duration
@@ -186,12 +178,6 @@ func Load() (Config, error) {
 			Enabled: getBoolEnv("MIBO_FFPROBE_ENABLED", true),
 			Path:    getEnv("MIBO_FFPROBE_PATH", "ffprobe"),
 			Timeout: getDurationEnv("MIBO_FFPROBE_TIMEOUT", 30*time.Second),
-		},
-		HLS: HLSConfig{
-			Enabled:         getBoolEnv("MIBO_HLS_ENABLED", true),
-			RootPath:        normalizeWorkPath(getEnv("MIBO_HLS_ROOT_PATH", filepath.Join("tmp", "hls"))),
-			SegmentDuration: getIntEnv("MIBO_HLS_SEGMENT_DURATION", 6),
-			CleanupAge:      getDurationEnv("MIBO_HLS_CLEANUP_AGE", 24*time.Hour),
 		},
 		Worker: WorkerConfig{
 			Enabled:              getBoolEnv("MIBO_WORKER_ENABLED", true),
@@ -332,7 +318,7 @@ func normalizeLocalRootPath(path string) string {
 func normalizeWorkPath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
-		return filepath.Clean(filepath.Join("tmp", "hls"))
+		return filepath.Clean("tmp")
 	}
 	return filepath.Clean(trimmed)
 }

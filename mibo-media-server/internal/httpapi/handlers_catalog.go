@@ -293,7 +293,7 @@ func (r *Router) handleGetCatalogPlaybackSource(w http.ResponseWriter, req *http
 		return
 	}
 	userID := user.ID
-	source, err := r.playback.GetPlaybackSource(req.Context(), playback.PlaybackRequest{ItemID: itemID, AssetID: assetID, UserID: &userID, ClientProfile: clientProfile, AllowHLSFallback: r.hls.Enabled()})
+	source, err := r.playback.GetPlaybackSource(req.Context(), playback.PlaybackRequest{ItemID: itemID, AssetID: assetID, UserID: &userID, ClientProfile: clientProfile})
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return

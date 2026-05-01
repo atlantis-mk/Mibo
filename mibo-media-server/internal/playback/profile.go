@@ -9,11 +9,10 @@ const (
 )
 
 type PlaybackRequest struct {
-	ItemID           uint
-	AssetID          uint
-	UserID           *uint
-	ClientProfile    ClientProfile
-	AllowHLSFallback bool
+	ItemID        uint
+	AssetID       uint
+	UserID        *uint
+	ClientProfile ClientProfile
 }
 
 type PlaybackDecision struct {
