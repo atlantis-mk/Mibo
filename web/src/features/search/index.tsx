@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   CastIcon,
   HeartIcon,
@@ -8,11 +8,11 @@ import {
   SearchIcon,
   Settings2Icon,
   UserCircleIcon,
-} from 'lucide-react'
+} from "lucide-react"
 
-import { AppTopBar } from '#/components/app-top-bar'
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
+import { AppTopBar } from "#/components/app-top-bar"
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '#/components/ui/dialog'
+} from "#/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,21 +28,21 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
-import { Input } from '#/components/ui/input'
-import { SidebarTrigger } from '#/components/ui/sidebar'
-import { createDefaultDiscoveryFilters } from '#/features/discovery/controls'
+} from "#/components/ui/dropdown-menu"
+import { Input } from "#/components/ui/input"
+import { SidebarTrigger } from "#/components/ui/sidebar"
+import { createDefaultDiscoveryFilters } from "#/features/discovery/controls"
 import {
   formatMediaCardYearRange,
   formatMediaCardTitle,
   getMediaCardPosterUrl,
   getMediaCardType,
-} from '#/lib/media-presentation'
-import type { CatalogListItem } from '#/lib/mibo-api'
-import { createAuthedMiboApi } from '#/lib/mibo-query'
-import { useAuthStore } from '#/stores/auth-store'
+} from "#/lib/media-presentation"
+import type { CatalogListItem } from "#/lib/mibo-api"
+import { createAuthedMiboApi } from "#/lib/mibo-query"
+import { useAuthStore } from "#/stores/auth-store"
 
-const DEFAULT_RECOMMENDATION = '死侍与金刚狼'
+const DEFAULT_RECOMMENDATION = "死侍与金刚狼"
 
 export default function SearchPage({
   initialQuery,
@@ -55,9 +55,9 @@ export default function SearchPage({
   const clearSession = useAuthStore((state) => state.clearSession)
   const navigate = useNavigate()
   const [filters, setFilters] = useState(
-    createDefaultDiscoveryFilters({ q: initialQuery ?? '', sort: 'title' }),
+    createDefaultDiscoveryFilters({ q: initialQuery ?? "", sort: "title" })
   )
-  const urlQuery = initialQuery ?? ''
+  const urlQuery = initialQuery ?? ""
   const queryFilters = { ...filters, q: urlQuery }
 
   useEffect(() => {
@@ -73,7 +73,7 @@ export default function SearchPage({
 
     const timeoutId = window.setTimeout(() => {
       void navigate({
-        to: '/search',
+        to: "/search",
         search: { q: nextQuery || undefined },
         replace: true,
       })
@@ -83,10 +83,10 @@ export default function SearchPage({
   }, [filters.q, navigate, urlQuery])
 
   const searchQuery = useQuery({
-    queryKey: ['search', token, queryFilters],
+    queryKey: ["search", token, queryFilters],
     enabled: hasHydrated && !!token,
     queryFn: async () => {
-      if (!token) throw new Error('当前未登录，无法搜索媒体库。')
+      if (!token) throw new Error("当前未登录，无法搜索媒体库。")
       const api = createAuthedMiboApi(token)
       const history = await api.listSearchHistory()
       const query = queryFilters.q.trim()
@@ -133,7 +133,7 @@ export default function SearchPage({
           <h1 className="text-3xl font-semibold">登录后使用全局搜索</h1>
           <Link
             to="/login"
-            search={{ redirect: '/search' }}
+            search={{ redirect: "/search" }}
             className="mt-4 inline-flex rounded-full bg-primary px-5 py-2 text-primary-foreground"
           >
             前往登录
@@ -152,7 +152,7 @@ export default function SearchPage({
 
   const submitSearch = () => {
     void navigate({
-      to: '/search',
+      to: "/search",
       search: { q: trimmedInputQuery || undefined },
       replace: true,
     })
@@ -166,8 +166,8 @@ export default function SearchPage({
     const api = createAuthedMiboApi(token)
     const results = await api.discoverMedia({
       q: nextQuery,
-      sort: 'title',
-      sort_direction: 'asc',
+      sort: "title",
+      sort_direction: "asc",
       limit: 1,
     })
     const recommendedItem = results.items[0]
@@ -175,11 +175,11 @@ export default function SearchPage({
     if (!recommendedItem) return
 
     void navigate({
-      to: '/media/$id',
+      to: "/media/$id",
       params: { id: String(recommendedItem.id) },
       search: {
         view:
-          getMediaCardType(recommendedItem) === 'show' ? 'series' : undefined,
+          getMediaCardType(recommendedItem) === "show" ? "series" : undefined,
       },
     })
   }
@@ -187,8 +187,8 @@ export default function SearchPage({
   const handleLogout = () => {
     clearSession()
     void navigate({
-      to: '/login',
-      search: { redirect: '/search' },
+      to: "/login",
+      search: { redirect: "/search" },
       replace: true,
     })
   }
@@ -198,12 +198,12 @@ export default function SearchPage({
       <AppTopBar
         leftSlot={
           <>
-            <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+            <SidebarTrigger />
             <Button
               asChild
               size="sm"
               variant="default"
-              className="hidden h-8 rounded-full px-4 sm:inline-flex"
+              className="hidden sm:inline-flex"
             >
               <Link to="/">首页</Link>
             </Button>
@@ -211,7 +211,7 @@ export default function SearchPage({
               asChild
               size="sm"
               variant="ghost"
-              className="hidden h-8 rounded-full px-4 text-muted-foreground sm:inline-flex"
+              className="hidden sm:inline-flex"
             >
               <Link to="/favorites">收藏</Link>
             </Button>
@@ -225,14 +225,14 @@ export default function SearchPage({
         }
         rightSlot={
           <SearchTopBarActions
-            username={user?.username ?? '当前用户'}
+            username={user?.username ?? "当前用户"}
             resultCount={data.items.length}
             onLogout={handleLogout}
           />
         }
       />
 
-      <main className="relative z-10 min-h-svh px-4 pb-12 pt-24 sm:px-8 sm:pt-32">
+      <main className="relative z-10 min-h-svh px-4 pt-24 pb-12 sm:px-8 sm:pt-32">
         <form
           className="mx-auto w-full max-w-[1550px]"
           onSubmit={(event) => {
@@ -253,7 +253,7 @@ export default function SearchPage({
               }))
             }
             placeholder="搜索"
-            className="h-9 rounded-lg border-transparent bg-input px-3.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-0 dark:bg-input sm:h-10 sm:text-base md:text-base"
+            className="h-9 rounded-lg border-transparent bg-input px-3.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-0 sm:h-10 sm:text-base md:text-base dark:bg-input"
           />
         </form>
 
@@ -262,31 +262,25 @@ export default function SearchPage({
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               推荐
             </h1>
-            <button
+            <Button
               type="button"
-              className="mt-6 text-base font-semibold text-primary hover:text-primary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-xl"
+              variant="link"
               onClick={() => void selectRecommendation(recommendedQuery)}
             >
               {recommendedQuery}
-            </button>
+            </Button>
           </section>
         ) : null}
 
         {trimmedQuery ? (
           <div className="mx-auto mt-7 w-full max-w-[calc(100vw-2rem)] sm:mt-8 sm:max-w-none">
             <div className="flex items-center justify-center gap-4 text-sm font-semibold sm:text-lg">
-              <button
-                type="button"
-                className="rounded-full bg-muted px-3.5 py-1.5 text-foreground sm:px-4 sm:py-2"
-              >
+              <Button type="button" variant="secondary">
                 热门结果
-              </button>
-              <button
-                type="button"
-                className="px-1.5 py-1.5 text-muted-foreground hover:text-foreground"
-              >
+              </Button>
+              <Button type="button" variant="ghost">
                 影片
-              </button>
+              </Button>
             </div>
             <div className="mt-5 border-t border-border/60" />
 
@@ -324,7 +318,7 @@ function SearchResultCard({ item }: { item: CatalogListItem }) {
     <Link
       to="/media/$id"
       params={{ id: String(item.id) }}
-      search={{ view: mediaType === 'show' ? 'series' : undefined }}
+      search={{ view: mediaType === "show" ? "series" : undefined }}
       className="group block w-[150px] text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-[220px]"
     >
       <div className="aspect-[2/3] overflow-hidden rounded-xl bg-muted transition-transform duration-200 group-hover:-translate-y-1">
@@ -344,7 +338,7 @@ function SearchResultCard({ item }: { item: CatalogListItem }) {
         {formatMediaCardTitle(item)}
       </div>
       <div className="mt-1.5 text-sm text-muted-foreground sm:text-base">
-        {mediaType === 'movie' ? '影片' : '剧集'}
+        {mediaType === "movie" ? "影片" : "剧集"}
       </div>
       <div className="mt-1.5 text-sm text-muted-foreground sm:text-base">
         {formatMediaCardYearRange(item)}
@@ -370,12 +364,7 @@ function SearchTopBarActions({
       <Badge className="border-border/50 bg-background/80" variant="outline">
         结果 {resultCount}
       </Badge>
-      <Button
-        asChild
-        size="icon-sm"
-        variant="outline"
-        className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-      >
+      <Button asChild size="icon-sm" variant="outline">
         <Link to="/search" search={{ q: undefined }}>
           <SearchIcon className="size-4" />
           <span className="sr-only">搜索</span>
@@ -383,11 +372,7 @@ function SearchTopBarActions({
       </Button>
       <Dialog>
         <DialogTrigger asChild>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-          >
+          <Button size="icon-sm" variant="outline">
             <CastIcon className="size-4" />
             <span className="sr-only">投屏</span>
           </Button>
@@ -404,11 +389,7 @@ function SearchTopBarActions({
       </Dialog>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-          >
+          <Button size="icon-sm" variant="outline">
             <UserCircleIcon className="size-4" />
             <span className="sr-only">用户菜单</span>
           </Button>
@@ -434,12 +415,7 @@ function SearchTopBarActions({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button
-        asChild
-        size="icon-sm"
-        variant="outline"
-        className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-      >
+      <Button asChild size="icon-sm" variant="outline">
         <Link to="/settings">
           <Settings2Icon className="size-4" />
           <span className="sr-only">进入设置</span>

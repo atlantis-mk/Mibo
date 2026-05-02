@@ -38,6 +38,7 @@ var (
 	fpsTokenPattern          = regexp.MustCompile(`^\d{2,3}fps$`)
 	bitDepthTokenPattern     = regexp.MustCompile(`^\d{1,2}bit$`)
 	multiAudioTokenPattern   = regexp.MustCompile(`^\d+audios?$`)
+	audioSubtitleTokenPattern = regexp.MustCompile(`^(?:[257]1|ddp[257]1|aac[257]1|truehd[257]1|dd[257]1)(?:sub|subs|subtitle|subtitles)$`)
 )
 
 func Normalize(input NormalizeInput) NormalizeResult {
@@ -93,6 +94,15 @@ func Normalize(input NormalizeInput) NormalizeResult {
 		}
 		if idx+1 < len(tokens) {
 			next := strings.Trim(tokens[idx+1], "-_.()[]{}【】")
+			if idx+2 < len(tokens) {
+				third := strings.Trim(tokens[idx+2], "-_.()[]{}【】")
+				if reason, ok := classifyTriple(token, next, third); ok {
+					seenReleaseMetadata = true
+					result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token + " " + next + " " + third, Reason: reason})
+					idx += 2
+					continue
+				}
+			}
 			if reason, ok := classifyPair(token, next); ok {
 				seenReleaseMetadata = true
 				result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token + " " + next, Reason: reason})
@@ -293,6 +303,15 @@ func classifyPair(left, right string) (string, bool) {
 	return "", false
 }
 
+func classifyTriple(left, middle, right string) (string, bool) {
+	combined := normalizeToken(left) + " " + normalizeToken(middle) + " " + normalizeToken(right)
+	switch combined {
+	case "dd 5 1sub", "dd 7 1sub", "ddp 5 1sub", "ddp 7 1sub", "truehd 5 1sub", "truehd 7 1sub", "aac 5 1sub", "aac 7 1sub":
+		return "audio", true
+	}
+	return "", false
+}
+
 func classifyToken(input string) (string, bool) {
 	normalized := normalizeToken(input)
 	if normalized == "" {
@@ -326,6 +345,9 @@ func classifyToken(input string) (string, bool) {
 		return "video_codec", true
 	}
 	if multiAudioTokenPattern.MatchString(normalized) {
+		return "audio", true
+	}
+	if audioSubtitleTokenPattern.MatchString(normalized) {
 		return "audio", true
 	}
 	if _, ok := map[string]struct{}{"multi": {}, "multisub": {}, "multisubs": {}, "sub": {}, "subs": {}, "subbed": {}, "dub": {}, "dubbed": {}, "chs": {}, "cht": {}, "eng": {}, "jpn": {}, "gb": {}, "big5": {}}[normalized]; ok {
@@ -390,7 +412,20 @@ func looksLikeReleaseGroupToken(input string) bool {
 			hasLower = true
 		}
 	}
+	if hasUpper && hasLower && upperRuneCount(trimmed) >= 2 && !strings.ContainsAny(trimmed, " ") {
+		return true
+	}
 	return hasUpper && !hasLower
+}
+
+func upperRuneCount(input string) int {
+	count := 0
+	for _, r := range input {
+		if r >= 'A' && r <= 'Z' {
+			count++
+		}
+	}
+	return count
 }
 
 func looksLikeShortReleaseToken(input string) bool {

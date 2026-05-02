@@ -298,13 +298,13 @@ export function DetailHeroSection({
               '当前条目的元数据仍然较少。你可以手动识别、重新匹配，或者等待后续扫描完善内容。'}
           </div>
           {item.overview && item.overview.length > 120 ? (
-            <button
+            <Button
               type="button"
-              className="text-base text-muted-foreground transition hover:text-foreground"
+              variant="ghost"
               onClick={() => onOverviewExpandedChange(!overviewExpanded)}
             >
               {overviewExpanded ? '收起' : '更多'}
-            </button>
+            </Button>
           ) : null}
         </div>
 
@@ -347,7 +347,6 @@ function PillButton({
     <Button
       size="lg"
       variant="outline"
-      className="h-11 rounded-full border-border/50 bg-background/75 px-5 text-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-90"
       onClick={onClick}
       disabled={!onClick}
     >

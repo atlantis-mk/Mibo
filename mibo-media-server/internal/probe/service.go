@@ -182,6 +182,9 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 				return err
 			}
 		}
+		if err := updateClassificationTechnicalEvidence(tx, file.ID, runtimeSeconds, streams); err != nil {
+			return err
+		}
 
 		return nil
 	}); err != nil {
@@ -190,6 +193,26 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 	s.tryGenerateCatalogFallbackArtwork(ctx, file, provider, target, runtimeSeconds)
 
 	return nil
+}
+
+func updateClassificationTechnicalEvidence(tx *gorm.DB, fileID uint, runtimeSeconds *int, streams []database.MediaStream) error {
+	if runtimeSeconds == nil && len(streams) == 0 {
+		return nil
+	}
+	evidence := make([]map[string]any, 0, 2)
+	if runtimeSeconds != nil {
+		evidence = append(evidence, map[string]any{"kind": "duration_seconds", "source": "ffprobe", "value": *runtimeSeconds})
+	}
+	if len(streams) > 0 {
+		evidence = append(evidence, map[string]any{"kind": "stream_count", "source": "ffprobe", "value": len(streams)})
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	return tx.Model(&database.ClassificationDecision{}).
+		Where("inventory_file_id = ? AND status IN ?", fileID, []string{"provisional", "review_required"}).
+		Update("evidence_json", string(encoded)).Error
 }
 
 func (s *Service) tryGenerateCatalogFallbackArtwork(ctx context.Context, file database.InventoryFile, provider storage.Provider, target string, runtimeSeconds *int) {

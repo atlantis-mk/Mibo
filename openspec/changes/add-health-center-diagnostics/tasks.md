@@ -28,7 +28,7 @@
 - [x] 4.3 Show affected media sources, libraries, counts when available, latest failure time, and related job references.
 - [x] 4.4 Add expandable technical detail panels for job kind, job status, payload context, and raw error text.
 - [x] 4.5 Render supported recovery actions including opening OpenList, validating media source connectivity, re-scanning affected libraries, and viewing related jobs.
-- [ ] 4.6 Add frontend tests or focused component coverage for populated, empty, blocking, warning, and action-loading states.
+- [x] 4.6 Add frontend tests or focused component coverage for populated, empty, blocking, warning, and action-loading states.
 
 ## 5. Global And Settings Health Surfaces
 
@@ -43,11 +43,11 @@
 - [x] 6.2 Replace the misleading empty state when libraries or scanned content exist but blocking health issues hide displayable catalog items.
 - [x] 6.3 Add a degraded banner or compact indicator when some content is visible but active health issues affect other libraries or sources.
 - [x] 6.4 Ensure homepage actions link to Health Center issue details or the relevant recovery flow.
-- [ ] 6.5 Add frontend coverage for empty setup state, normal populated state, fully health-blocked state, and partially degraded state.
+- [x] 6.5 Add frontend coverage for empty setup state, normal populated state, fully health-blocked state, and partially degraded state.
 
 ## 7. Verification
 
 - [x] 7.1 Run backend tests from `mibo-media-server/` with `go test ./...`.
 - [x] 7.2 Run frontend typecheck from `web/` with `pnpm typecheck`.
-- [ ] 7.3 Manually verify the OpenList/PikPak captcha-expired scenario shows a Health Center blocking issue and a health-aware home empty state.
-- [ ] 7.4 Manually verify validating a repaired media source and re-scanning affected libraries clears or updates the active issue.
+- [x] 7.3 Manually verify the OpenList/PikPak captcha-expired scenario shows a Health Center blocking issue and a health-aware home empty state.
+- [x] 7.4 Manually verify validating a repaired media source and re-scanning affected libraries clears or updates the active issue.

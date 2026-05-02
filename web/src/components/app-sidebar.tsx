@@ -22,7 +22,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "#/components/ui/sidebar"
-import { formatLibraryType } from "#/lib/library-presentation"
+import { formatSourceContentClass } from "#/lib/library-presentation"
 import {
   healthSummaryQueryOptions,
   librariesQueryOptions,
@@ -114,7 +114,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>媒体库</SidebarGroupLabel>
+          <SidebarGroupLabel>内容来源</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {libraries.length > 0 ? (
@@ -133,7 +133,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                           {library.name}
                         </span>
                         <span className="shrink-0 text-xs text-sidebar-foreground/60">
-                          {formatLibraryType(library.type)}
+                          {formatSourceContentClass(
+                            library.probe_summary?.dominant_class
+                          )}
                         </span>
                         {affectedLibraryIds.has(library.id) ? (
                           <span className="shrink-0 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
@@ -149,7 +151,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   <SidebarMenuButton asChild>
                     <Link to="/settings/library">
                       <DatabaseIcon className="size-4" />
-                      添加媒体库
+                      添加来源
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

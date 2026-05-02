@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +175,99 @@ func TestMarkScanExclusionFromItemAllowsNonScannerAssetLink(t *testing.T) {
 	}
 	if assetItems != 0 {
 		t.Fatalf("expected non-scanner asset links to be removed, got %d", assetItems)
+	}
+}
+
+func TestCreateFilenameExclusionRuleHidesExistingMatchesAndRecalculatesAvailability(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	showsRoot := filepath.Join(rootPath, "shows")
+	if err := os.MkdirAll(moviesRoot, 0o755); err != nil {
+		t.Fatalf("mkdir movies root: %v", err)
+	}
+	if err := os.MkdirAll(showsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir shows root: %v", err)
+	}
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	otherLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "series", showsRoot)
+	firstItem, firstFile := createFilenameExclusionLinkedFixture(t, ctx, db, libraryRecord.ID, "/movies/Movie A/SharedName.mp4")
+	secondItem, secondFile := createFilenameExclusionLinkedFixture(t, ctx, db, otherLibrary.ID, "/shows/Show B/SharedName.mp4")
+	otherItem, otherFile := createFilenameExclusionLinkedFixture(t, ctx, db, libraryRecord.ID, "/movies/Movie C/SharedName.mkv")
+
+	rule, err := svc.CreateFilenameExclusionRule(ctx, CreateFilenameExclusionRuleInput{FilenameExclusionTargetInput: FilenameExclusionTargetInput{InventoryFileID: firstFile.ID}, Reason: ScanExclusionReasonWrongImport})
+	if err != nil {
+		t.Fatalf("create filename exclusion rule: %v", err)
+	}
+	if !rule.Enabled || rule.NormalizedFilename != "sharedname.mp4" || rule.AffectedCount != 2 {
+		t.Fatalf("unexpected filename exclusion rule: %#v", rule)
+	}
+
+	assertInventoryStatus(t, ctx, db, firstFile.ID, inventory.FileStatusMissing)
+	assertInventoryStatus(t, ctx, db, secondFile.ID, inventory.FileStatusMissing)
+	assertInventoryStatus(t, ctx, db, otherFile.ID, inventory.FileStatusAvailable)
+	assertCatalogAvailability(t, ctx, db, firstItem.ID, catalog.AvailabilityMissing)
+	assertCatalogAvailability(t, ctx, db, secondItem.ID, catalog.AvailabilityMissing)
+	assertCatalogAvailability(t, ctx, db, otherItem.ID, catalog.AvailabilityAvailable)
+	assertAssetItemCountForItems(t, ctx, db, []uint{firstItem.ID, secondItem.ID}, 0)
+	assertAssetItemCountForItems(t, ctx, db, []uint{otherItem.ID}, 1)
+}
+
+func createFilenameExclusionLinkedFixture(t *testing.T, ctx context.Context, db *gorm.DB, libraryID uint, storagePath string) (database.CatalogItem, database.InventoryFile) {
+	t.Helper()
+	item := database.CatalogItem{LibraryID: libraryID, Type: catalog.ItemTypeMovie, Title: filepath.Base(storagePath), Path: storagePath, SortKey: storagePath, AvailabilityStatus: catalog.AvailabilityAvailable, GovernanceStatus: catalog.GovernancePending}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: libraryID, StorageProvider: "local", StoragePath: storagePath, SizeBytes: 1024, ContentClass: "video", Status: inventory.FileStatusAvailable}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: libraryID, AssetType: inventory.AssetTypeMain, DisplayName: filepath.Base(storagePath), Status: inventory.AssetStatusAvailable, ProbeStatus: "ready"}
+	if err := db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create media asset: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: inventory.FileRoleSource, PartIndex: 0}).Error; err != nil {
+		t.Fatalf("create asset file: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: item.ID, Role: inventory.AssetItemRolePrimary, Source: "scanner"}).Error; err != nil {
+		t.Fatalf("create asset item: %v", err)
+	}
+	return item, file
+}
+
+func assertInventoryStatus(t *testing.T, ctx context.Context, db *gorm.DB, fileID uint, expected string) {
+	t.Helper()
+	var file database.InventoryFile
+	if err := db.WithContext(ctx).First(&file, fileID).Error; err != nil {
+		t.Fatalf("load inventory file: %v", err)
+	}
+	if file.Status != expected {
+		t.Fatalf("expected inventory file %d status %q, got %q", fileID, expected, file.Status)
+	}
+}
+
+func assertCatalogAvailability(t *testing.T, ctx context.Context, db *gorm.DB, itemID uint, expected string) {
+	t.Helper()
+	var item database.CatalogItem
+	if err := db.WithContext(ctx).First(&item, itemID).Error; err != nil {
+		t.Fatalf("load catalog item: %v", err)
+	}
+	if item.AvailabilityStatus != expected {
+		t.Fatalf("expected catalog item %d availability %q, got %q", itemID, expected, item.AvailabilityStatus)
+	}
+}
+
+func assertAssetItemCountForItems(t *testing.T, ctx context.Context, db *gorm.DB, itemIDs []uint, expected int64) {
+	t.Helper()
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.AssetItem{}).Where("item_id IN ?", itemIDs).Count(&count).Error; err != nil {
+		t.Fatalf("count asset item links: %v", err)
+	}
+	if count != expected {
+		t.Fatalf("expected %d asset item links for items %v, got %d", expected, itemIDs, count)
 	}
 }
 

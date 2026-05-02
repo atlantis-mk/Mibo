@@ -34,3 +34,33 @@ export function formatMatchStatus(value: string) {
       return value || '未知状态'
   }
 }
+
+export function formatClassificationStatus(value: string) {
+  switch (value) {
+    case 'confirmed_fast':
+      return '快速确认'
+    case 'provisional':
+      return '待后台验证'
+    case 'review_required':
+      return '需要复核'
+    default:
+      return value || '未知状态'
+  }
+}
+
+export function formatClassificationType(value: string) {
+  switch (value) {
+    case 'movie':
+      return '电影'
+    case 'episode':
+      return '单集'
+    case 'attachment':
+      return '附属视频'
+    case 'movie_version':
+      return '电影版本'
+    case 'independent_movie':
+      return '独立电影'
+    default:
+      return value || '未知候选'
+  }
+}

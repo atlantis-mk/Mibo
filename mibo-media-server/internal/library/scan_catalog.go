@@ -83,6 +83,9 @@ func (s *Service) writeCatalogScanMovie(ctx context.Context, library database.Li
 		if err := syncCatalogScanHashtagTags(ctx, tx, item.ID, artifact.Tags); err != nil {
 			return err
 		}
+		if err := persistCatalogScanClassificationDecisions(ctx, tx, library.ID, artifact, file.ID, asset.ID, item.ID); err != nil {
+			return err
+		}
 
 		result = catalogScanWriteResult{Item: item, File: file, Asset: asset}
 		return nil
@@ -122,7 +125,7 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 			SortKey:            defaultCatalogSortKey(artifact.SeriesTitle, artifact.SeriesPath),
 			Title:              defaultCatalogTitle(artifact.SeriesTitle, artifact.SeriesPath),
 			AvailabilityStatus: catalog.AvailabilityAvailable,
-			GovernanceStatus:   catalog.GovernancePending,
+			GovernanceStatus:   governanceStatusForScanArtifact(artifact),
 		})
 		if err != nil {
 			return err
@@ -146,7 +149,7 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 			Title:              seasonTitle,
 			IndexNumber:        artifact.SeasonNumber,
 			AvailabilityStatus: catalog.AvailabilityAvailable,
-			GovernanceStatus:   catalog.GovernancePending,
+			GovernanceStatus:   governanceStatusForScanArtifact(artifact),
 		})
 		if err != nil {
 			return err
@@ -172,7 +175,7 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 				IndexNumber:        &episodeNumber,
 				ParentIndexNumber:  artifact.SeasonNumber,
 				AvailabilityStatus: catalog.AvailabilityAvailable,
-				GovernanceStatus:   catalog.GovernancePending,
+				GovernanceStatus:   governanceStatusForScanArtifact(artifact),
 			})
 			if err != nil {
 				return err
@@ -225,6 +228,9 @@ func (s *Service) writeCatalogScanEpisodeHierarchy(ctx context.Context, library 
 				return err
 			}
 		}
+		if err := persistCatalogScanClassificationDecisions(ctx, tx, library.ID, artifact, file.ID, asset.ID, result.Item.ID); err != nil {
+			return err
+		}
 
 		result.File = file
 		result.Asset = asset
@@ -268,6 +274,57 @@ func syncCatalogScanHashtagTags(ctx context.Context, tx *gorm.DB, itemID uint, t
 		}
 	}
 	return nil
+}
+
+func persistCatalogScanClassificationDecisions(ctx context.Context, tx *gorm.DB, libraryID uint, artifact catalogScanArtifact, fileID uint, assetID uint, itemID uint) error {
+	if len(artifact.Decisions) == 0 {
+		return nil
+	}
+	for _, decision := range artifact.Decisions {
+		if strings.TrimSpace(decision.Type) == "" {
+			continue
+		}
+		alternativesJSON := encodeCatalogScanJSON(decision.Alternatives)
+		evidenceJSON := encodeCatalogScanJSON(decision.Evidence)
+		warningsJSON := encodeCatalogScanJSON(decision.Warnings)
+		affectedFilesJSON := encodeCatalogScanJSON([]string{artifact.SourcePath})
+		inventoryFileID := fileID
+		mediaAssetID := assetID
+		catalogItemID := itemID
+		record := database.ClassificationDecision{
+			LibraryID:         libraryID,
+			InventoryFileID:   &inventoryFileID,
+			AssetID:           &mediaAssetID,
+			ItemID:            &catalogItemID,
+			SourcePath:        strings.TrimSpace(artifact.SourcePath),
+			DecisionType:      strings.TrimSpace(decision.Type),
+			Role:              strings.TrimSpace(decision.Role),
+			CandidateType:     strings.TrimSpace(decision.CandidateType),
+			TargetKind:        strings.TrimSpace(decision.TargetKind),
+			TargetKey:         strings.TrimSpace(decision.TargetKey),
+			Status:            defaultCatalogState(decision.Status, scanDecisionStatusProvisional),
+			Confidence:        decision.Confidence,
+			AlternativesJSON:  alternativesJSON,
+			EvidenceJSON:      evidenceJSON,
+			AffectedFilesJSON: affectedFilesJSON,
+			Reason:            strings.TrimSpace(decision.Reason),
+			WarningsJSON:      warningsJSON,
+		}
+		if err := tx.WithContext(ctx).Where("library_id = ? AND source_path = ? AND decision_type = ? AND target_key = ?", record.LibraryID, record.SourcePath, record.DecisionType, record.TargetKey).
+			Assign(record).
+			FirstOrCreate(&database.ClassificationDecision{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func encodeCatalogScanJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func uniqueCatalogScanTags(tags []string) []string {
@@ -403,6 +460,7 @@ func upsertCatalogScanFile(ctx context.Context, tx *gorm.DB, inventorySvc *inven
 		SizeBytes:         artifact.SizeBytes,
 		ModifiedAt:        artifact.ModifiedAt,
 		Container:         container,
+		ContentClass:      SourceContentClassVideo,
 		Status:            inventory.FileStatusAvailable,
 	})
 }
@@ -477,6 +535,7 @@ func upsertCatalogScanSubtitleFile(ctx context.Context, inventorySvc *inventory.
 		SizeBytes:         sidecar.SizeBytes,
 		ModifiedAt:        sidecar.ModifiedAt,
 		Container:         container,
+		ContentClass:      SourceContentClassText,
 		Status:            inventory.FileStatusAvailable,
 	})
 }
@@ -758,7 +817,7 @@ func findOrCreateCatalogMovieItem(ctx context.Context, tx *gorm.DB, catalogSvc *
 			"year":                  artifact.Year,
 			"availability_status":   catalog.AvailabilityAvailable,
 			"missing_since":         nil,
-			"governance_status":     governanceStatusForScanUpdate(existing.GovernanceStatus, catalog.GovernancePending),
+			"governance_status":     governanceStatusForScanUpdate(existing.GovernanceStatus, governanceStatusForScanArtifact(artifact)),
 			"last_canonicalized_at": time.Now().UTC(),
 			"deleted_at":            nil,
 		}
@@ -788,8 +847,20 @@ func findOrCreateCatalogMovieItem(ctx context.Context, tx *gorm.DB, catalogSvc *
 		OriginalTitle:      strings.TrimSpace(artifact.OriginalTitle),
 		Year:               artifact.Year,
 		AvailabilityStatus: catalog.AvailabilityAvailable,
-		GovernanceStatus:   catalog.GovernancePending,
+		GovernanceStatus:   governanceStatusForScanArtifact(artifact),
 	})
+}
+
+func governanceStatusForScanArtifact(artifact catalogScanArtifact) string {
+	for _, decision := range artifact.Decisions {
+		if strings.TrimSpace(decision.Status) == scanDecisionStatusReviewRequired {
+			return catalog.GovernanceNeedsReview
+		}
+		if decision.Confidence != nil && *decision.Confidence > 0 && *decision.Confidence < 0.6 {
+			return catalog.GovernanceNeedsReview
+		}
+	}
+	return catalog.GovernancePending
 }
 
 func findCatalogItemForAsset(ctx context.Context, tx *gorm.DB, assetID uint) (database.CatalogItem, error) {
@@ -937,6 +1008,12 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 	if len(artifact.RemovedTokens) > 0 {
 		payload["removed_tokens"] = artifact.RemovedTokens
 	}
+	if hints := filenameReleaseHintsPayload(artifact.FilenameSignals.ReleaseHints); len(hints) > 0 {
+		payload["filename_release_hints"] = hints
+	}
+	if evidence := filenameEvidencePayload(artifact.FilenameSignals.Evidence); len(evidence) > 0 {
+		payload["filename_signal_evidence"] = evidence
+	}
 	if tags := uniqueCatalogScanTags(artifact.Tags); len(tags) > 0 {
 		payload["hashtag_tags"] = tags
 	}
@@ -969,6 +1046,54 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 		return "{}"
 	}
 	return string(encoded)
+}
+
+func filenameReleaseHintsPayload(hints filenameReleaseHints) map[string]any {
+	payload := make(map[string]any)
+	if strings.TrimSpace(hints.Quality) != "" {
+		payload["quality"] = strings.TrimSpace(hints.Quality)
+	}
+	if len(hints.SourceTags) > 0 {
+		payload["source_tags"] = append([]string(nil), hints.SourceTags...)
+	}
+	if strings.TrimSpace(hints.Codec) != "" {
+		payload["codec"] = strings.TrimSpace(hints.Codec)
+	}
+	if strings.TrimSpace(hints.Audio) != "" {
+		payload["audio"] = strings.TrimSpace(hints.Audio)
+	}
+	if strings.TrimSpace(hints.Subtitle) != "" {
+		payload["subtitle"] = strings.TrimSpace(hints.Subtitle)
+	}
+	if strings.TrimSpace(hints.HDR) != "" {
+		payload["hdr"] = strings.TrimSpace(hints.HDR)
+	}
+	if strings.TrimSpace(hints.Edition) != "" {
+		payload["edition"] = strings.TrimSpace(hints.Edition)
+	}
+	if strings.TrimSpace(hints.ReleaseGroup) != "" {
+		payload["release_group"] = strings.TrimSpace(hints.ReleaseGroup)
+	}
+	return payload
+}
+
+func filenameEvidencePayload(evidence []filenameEvidenceSummary) []map[string]any {
+	items := make([]map[string]any, 0, len(evidence))
+	for _, summary := range evidence {
+		item := map[string]any{
+			"kind":   strings.TrimSpace(summary.Kind),
+			"source": strings.TrimSpace(summary.Source),
+			"value":  strings.TrimSpace(summary.Value),
+		}
+		if strings.TrimSpace(summary.Reason) != "" {
+			item["reason"] = strings.TrimSpace(summary.Reason)
+		}
+		if item["kind"] == "" || item["source"] == "" || item["value"] == "" {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func imageCandidateEvidencePayload(candidates []catalogScanImageCandidate) []map[string]any {
@@ -1045,8 +1170,23 @@ func resolverDecisionEvidencePayload(decisions []scanDecision) []map[string]any 
 			"target_key":  strings.TrimSpace(decision.TargetKey),
 			"reason":      strings.TrimSpace(decision.Reason),
 		}
+		if strings.TrimSpace(decision.Role) != "" {
+			item["role"] = strings.TrimSpace(decision.Role)
+		}
+		if strings.TrimSpace(decision.CandidateType) != "" {
+			item["candidate_type"] = strings.TrimSpace(decision.CandidateType)
+		}
+		if strings.TrimSpace(decision.Status) != "" {
+			item["status"] = strings.TrimSpace(decision.Status)
+		}
 		if decision.Confidence != nil {
 			item["confidence"] = *decision.Confidence
+		}
+		if alternatives := resolverDecisionAlternativesPayload(decision.Alternatives); len(alternatives) > 0 {
+			item["alternatives"] = alternatives
+		}
+		if evidence := resolverDecisionEvidenceItemsPayload(decision.Evidence); len(evidence) > 0 {
+			item["evidence"] = evidence
 		}
 		if len(decision.EvidenceRefs) > 0 {
 			item["evidence_refs"] = append([]string(nil), decision.EvidenceRefs...)
@@ -1056,6 +1196,40 @@ func resolverDecisionEvidencePayload(decisions []scanDecision) []map[string]any 
 		}
 		if !decision.CreatedAt.IsZero() {
 			item["created_at"] = decision.CreatedAt.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func resolverDecisionAlternativesPayload(alternatives []scanDecisionAlternative) []map[string]any {
+	items := make([]map[string]any, 0, len(alternatives))
+	for _, alternative := range alternatives {
+		item := map[string]any{
+			"type":        strings.TrimSpace(alternative.Type),
+			"role":        strings.TrimSpace(alternative.Role),
+			"target_kind": strings.TrimSpace(alternative.TargetKind),
+			"target_key":  strings.TrimSpace(alternative.TargetKey),
+			"reason":      strings.TrimSpace(alternative.Reason),
+		}
+		if alternative.Confidence != nil {
+			item["confidence"] = *alternative.Confidence
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func resolverDecisionEvidenceItemsPayload(evidence []scanDecisionEvidence) []map[string]any {
+	items := make([]map[string]any, 0, len(evidence))
+	for _, itemEvidence := range evidence {
+		item := map[string]any{
+			"kind":   strings.TrimSpace(itemEvidence.Kind),
+			"source": strings.TrimSpace(itemEvidence.Source),
+			"value":  strings.TrimSpace(itemEvidence.Value),
+		}
+		if itemEvidence.Weight != nil {
+			item["weight"] = *itemEvidence.Weight
 		}
 		items = append(items, item)
 	}

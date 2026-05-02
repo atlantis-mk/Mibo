@@ -3,6 +3,7 @@ package library
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/storage"
@@ -15,6 +16,7 @@ var (
 	seasonDirectoryPattern     = regexp.MustCompile(`(?i)^(?:season|s)[\s._-]*0*(\d{1,2})(?:$|[\s._-]+.*$)|^第?\s*([0-9一二三四五六七八九十两零]+)\s*季(?:$|[\s._-]+.*$)`)
 	embeddedSeasonDirPattern   = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:season[\s._-]*0*(\d{1,2})|s0*(\d{1,2}))(?:$|[\s._\-(]+.*$)`)
 	episodeOnlyPattern         = regexp.MustCompile(`(?i)^(?:e|ep|episode)[\s._-]*0*(\d{1,3})(?:[\s._-]+.*)?$`)
+	embeddedEpisodePattern     = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:e|ep|episode)[\s._-]*0*([1-9]\d{0,2})(?:$|[\s._-])`)
 	numericEpisodePattern      = regexp.MustCompile(`^0*([1-9]\d{0,2})(?:[\s._-]+.*)?$`)
 	chineseEpisodePattern      = regexp.MustCompile(`^第?\s*(\d{1,3})\s*[集话話](?:[\s._-]+.*)?$`)
 	trailingEpisodePattern     = regexp.MustCompile(`(?i)^.*?[\s._-]+(?:e|ep|episode)?[\s._-]*0*([1-9]\d{0,2})(?:v\d+)?(?:[\s._-]+.*)?$`)
@@ -65,6 +67,7 @@ type classifiedMedia struct {
 	Status               string
 	NormalizationVersion string
 	RemovedTokens        []titleclean.RemovedToken
+	FilenameSignals      filenameSignalModel
 }
 
 type catalogEpisodeSlot struct {
@@ -98,6 +101,7 @@ type catalogScanArtifact struct {
 	PreferredAssetRole   string
 	NormalizationVersion string
 	RemovedTokens        []titleclean.RemovedToken
+	FilenameSignals      filenameSignalModel
 	SubtitleSidecars     []catalogScanSidecar
 	MetadataSidecars     []catalogScanMetadataSidecar
 	ImageCandidates      []catalogScanImageCandidate
@@ -161,6 +165,24 @@ type scanMode struct {
 	rootPath              string
 	catalogMatchItemIDs   []uint
 	inventoryProbeFileIDs []uint
+	classificationFileIDs []uint
+	directorySummaries    map[string]scanDirectorySummary
+}
+
+func (m *scanMode) directorySummary(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot) scanDirectorySummary {
+	if m == nil {
+		return buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
+	}
+	if m.directorySummaries == nil {
+		m.directorySummaries = make(map[string]scanDirectorySummary)
+	}
+	key := strings.TrimSpace(snapshot.Path)
+	if summary, ok := m.directorySummaries[key]; ok {
+		return summary
+	}
+	summary := buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
+	m.directorySummaries[key] = summary
+	return summary
 }
 
 func (m *scanMode) recordCatalogMatchCandidate(itemID uint) {
@@ -175,6 +197,13 @@ func (m *scanMode) recordInventoryProbeCandidate(fileID uint) {
 		return
 	}
 	m.inventoryProbeFileIDs = append(m.inventoryProbeFileIDs, fileID)
+}
+
+func (m *scanMode) recordClassificationValidationCandidate(fileID uint) {
+	if m == nil || fileID == 0 {
+		return
+	}
+	m.classificationFileIDs = append(m.classificationFileIDs, fileID)
 }
 
 type scanDirectorySnapshot struct {

@@ -67,6 +67,7 @@ type UpsertFileInput struct {
 	SizeBytes         int64
 	ModifiedAt        *time.Time
 	Container         string
+	ContentClass      string
 	Status            string
 }
 
@@ -123,13 +124,14 @@ func (s *Service) UpsertFile(ctx context.Context, input UpsertFileInput) (databa
 		SizeBytes:         input.SizeBytes,
 		ModifiedAt:        input.ModifiedAt,
 		Container:         strings.TrimSpace(input.Container),
+		ContentClass:      defaultString(input.ContentClass, "video"),
 		Status:            defaultString(input.Status, FileStatusAvailable),
 	}
 	if file.Status == FileStatusMissing {
 		now := time.Now().UTC()
 		file.MissingSince = &now
 	}
-	updateColumns := []string{"library_id", "stable_identity_key", "hashes_json", "size_bytes", "modified_at", "container", "status", "updated_at"}
+	updateColumns := []string{"library_id", "stable_identity_key", "hashes_json", "size_bytes", "modified_at", "container", "content_class", "status", "updated_at"}
 	if file.Status == FileStatusAvailable {
 		updateColumns = append(updateColumns, "missing_since")
 	}

@@ -9,9 +9,9 @@ import type {
   CatalogSourceEvidence,
   CatalogExternalIdentity,
   CatalogTagDetail,
-} from '#/lib/mibo-api'
+} from "#/lib/mibo-api"
 
-export type MediaDetailView = 'episode' | 'series'
+export type MediaDetailView = "episode" | "series"
 export type MediaCardItem = CatalogListItem
 export type CatalogSeasonRail = {
   season_number: number
@@ -61,14 +61,14 @@ export type CatalogDetailPresentation = {
   external_identities: CatalogExternalIdentity[]
   tags: CatalogTagDetail[]
   genres: string[]
-  child_summary?: CatalogItemDetail['child_summary']
+  child_summary?: CatalogItemDetail["child_summary"]
   related_items: CatalogListItem[]
   availability_status: string
   governance_status: string
   series_title_display: string
   episode_label: string
   episode_context?: CatalogEpisodeParentContext
-  series_playback_target?: CatalogItemDetail['series_playback_target']
+  series_playback_target?: CatalogItemDetail["series_playback_target"]
   primary_visual_url: string
   default_season_number?: number
   same_season_episodes: CatalogEpisodeRail[]
@@ -82,52 +82,52 @@ const seasonFolderPattern =
   /^(?:season|s)\s*0*\d+$|^第\s*[0-9一二三四五六七八九十两零]+\s*季$/i
 
 export function parseMediaDetailView(value: unknown): MediaDetailView {
-  return value === 'series' ? 'series' : 'episode'
+  return value === "series" ? "series" : "episode"
 }
 
 export function catalogItemDetailToPresentation(
-  item: CatalogItemDetail,
+  item: CatalogItemDetail
 ): CatalogDetailPresentation {
   const primaryIdentity = item.external_identities?.[0]
   const seasons = item.seasons ?? []
   const episodeContext = item.episode_context
   const episodeStill =
-    selectedCatalogImageUrl(item.selected_images, 'still') ||
-    selectedCatalogImageUrl(item.selected_images, 'backdrop')
+    selectedCatalogImageUrl(item.selected_images, "still") ||
+    selectedCatalogImageUrl(item.selected_images, "backdrop")
   const seriesBackdrop = selectedCatalogImageUrl(
     episodeContext?.series?.selected_images,
-    'backdrop',
+    "backdrop"
   )
   const seriesPoster = selectedCatalogImageUrl(
     episodeContext?.series?.selected_images,
-    'poster',
+    "poster"
   )
-  const posterUrl = selectedCatalogImageUrl(item.selected_images, 'poster')
-  const backdropUrl = selectedCatalogImageUrl(item.selected_images, 'backdrop')
+  const posterUrl = selectedCatalogImageUrl(item.selected_images, "poster")
+  const backdropUrl = selectedCatalogImageUrl(item.selected_images, "backdrop")
 
   return {
     id: item.id,
     type: item.type,
     title: item.title,
-    original_title: item.original_title ?? '',
-    overview: item.overview ?? '',
+    original_title: item.original_title ?? "",
+    overview: item.overview ?? "",
     year: item.year,
     end_year: item.end_year,
     runtime_seconds: item.runtime_seconds,
     community_rating: item.community_rating,
-    official_rating: item.official_rating ?? '',
-    series_status: item.series_status ?? '',
+    official_rating: item.official_rating ?? "",
+    series_status: item.series_status ?? "",
     release_date: item.release_date,
     first_air_date: item.first_air_date,
     last_air_date: item.last_air_date,
     poster_url:
-      item.type === 'episode' ? episodeStill || seriesPoster : posterUrl,
+      item.type === "episode" ? episodeStill || seriesPoster : posterUrl,
     logo_url:
-      selectedCatalogImageUrl(item.selected_images, 'logo') || undefined,
+      selectedCatalogImageUrl(item.selected_images, "logo") || undefined,
     backdrop_url:
-      item.type === 'episode' ? episodeStill || seriesBackdrop : backdropUrl,
-    metadata_provider: primaryIdentity?.provider ?? '',
-    external_id: primaryIdentity?.external_id ?? '',
+      item.type === "episode" ? episodeStill || seriesBackdrop : backdropUrl,
+    metadata_provider: primaryIdentity?.provider ?? "",
+    external_id: primaryIdentity?.external_id ?? "",
     metadata_confidence: primaryIdentity?.confidence,
     external_identities: item.external_identities ?? [],
     tags: item.tags ?? [],
@@ -140,17 +140,17 @@ export function catalogItemDetailToPresentation(
     episode_label: formatEpisodeLabel(
       episodeContext?.season_number,
       episodeContext?.episode_number,
-      episodeContext?.episode_number_end,
+      episodeContext?.episode_number_end
     ),
     episode_context: episodeContext,
     series_playback_target: item.series_playback_target,
     primary_visual_url:
-      item.type === 'episode'
+      item.type === "episode"
         ? episodeStill || seriesBackdrop || seriesPoster
         : posterUrl,
     default_season_number: seasons[0]?.index_number,
     same_season_episodes: catalogEpisodeShelfToRails(
-      item.same_season_episodes ?? [],
+      item.same_season_episodes ?? []
     ),
     source_evidence: item.source_evidence ?? [],
     cast: item.cast ?? [],
@@ -160,9 +160,9 @@ export function catalogItemDetailToPresentation(
 }
 
 export function catalogEpisodeShelfToSeasonRails(
-  item: CatalogDetailPresentation,
+  item: CatalogDetailPresentation
 ): CatalogSeasonRail[] {
-  if (item.type !== 'episode' || item.same_season_episodes.length === 0) {
+  if (item.type !== "episode" || item.same_season_episodes.length === 0) {
     return []
   }
   const seasonNumber =
@@ -174,10 +174,10 @@ export function catalogEpisodeShelfToSeasonRails(
     {
       season_number: seasonNumber,
       name: item.episode_context?.season?.title ?? `Season ${seasonNumber}`,
-      overview: '',
+      overview: "",
       poster_url: selectedCatalogImageUrl(
         item.episode_context?.season?.selected_images,
-        'poster',
+        "poster"
       ),
       episodes: item.same_season_episodes,
     },
@@ -185,23 +185,23 @@ export function catalogEpisodeShelfToSeasonRails(
 }
 
 export function catalogSeasonsToRails(
-  seasons: CatalogSeasonDetail[],
+  seasons: CatalogSeasonDetail[]
 ): CatalogSeasonRail[] {
   return seasons.map((season) => ({
     season_number: season.index_number ?? 0,
     name: season.title,
-    overview: season.overview ?? '',
-    poster_url: selectedCatalogImageUrl(season.selected_images, 'poster'),
+    overview: season.overview ?? "",
+    poster_url: selectedCatalogImageUrl(season.selected_images, "poster"),
     runtime_seconds: season.runtime_seconds,
     episodes: (season.episodes ?? []).map((episode) => ({
       item_id: episode.id,
       season_number: episode.parent_index_number ?? season.index_number ?? 0,
       episode_number: episode.index_number ?? 0,
       name: episode.title,
-      overview: episode.overview ?? '',
+      overview: episode.overview ?? "",
       still_url:
-        selectedCatalogImageUrl(episode.selected_images, 'still') ||
-        selectedCatalogImageUrl(episode.selected_images, 'backdrop'),
+        selectedCatalogImageUrl(episode.selected_images, "still") ||
+        selectedCatalogImageUrl(episode.selected_images, "backdrop"),
       air_date: episode.release_date ?? episode.first_air_date,
       runtime_seconds: episode.runtime_seconds,
       availability_status: episode.availability_status,
@@ -212,8 +212,8 @@ export function catalogSeasonsToRails(
 }
 
 export function formatMediaRating(value?: number) {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    return ''
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return ""
   }
   return value.toFixed(value >= 10 ? 0 : 1)
 }
@@ -221,14 +221,14 @@ export function formatMediaRating(value?: number) {
 export function formatMediaDetailYearRange(
   item: Pick<
     CatalogDetailPresentation,
-    | 'type'
-    | 'year'
-    | 'end_year'
-    | 'release_date'
-    | 'first_air_date'
-    | 'last_air_date'
-    | 'series_status'
-  >,
+    | "type"
+    | "year"
+    | "end_year"
+    | "release_date"
+    | "first_air_date"
+    | "last_air_date"
+    | "series_status"
+  >
 ) {
   const startYear =
     item.year ??
@@ -237,9 +237,9 @@ export function formatMediaDetailYearRange(
   const endYear = item.end_year ?? yearFromDate(item.last_air_date)
 
   if (!startYear) {
-    return ''
+    return ""
   }
-  if (item.type === 'series' || item.type === 'show') {
+  if (item.type === "series" || item.type === "show") {
     if (endYear && endYear !== startYear) return `${startYear} - ${endYear}`
     if (isContinuingSeries(item.series_status)) return `${startYear} - 现在`
   }
@@ -247,11 +247,11 @@ export function formatMediaDetailYearRange(
 }
 
 export function formatSeasonSummary(
-  item: Pick<CatalogDetailPresentation, 'type' | 'child_summary'>,
+  item: Pick<CatalogDetailPresentation, "type" | "child_summary">
 ) {
-  if (item.type !== 'series' && item.type !== 'show') return ''
+  if (item.type !== "series" && item.type !== "show") return ""
   const summary = item.child_summary
-  if (!summary?.child_count) return ''
+  if (!summary?.child_count) return ""
   const episodeCount = Math.max(0, summary.child_count)
   const available = summary.available_count
   if (available > 0 && available !== episodeCount) {
@@ -263,59 +263,65 @@ export function formatSeasonSummary(
 export function formatProviderLabel(provider?: string) {
   const normalized = provider?.trim().toLowerCase()
   switch (normalized) {
-    case 'tmdb':
-      return 'TMDB'
-    case 'imdb':
-      return 'IMDb'
-    case 'tvdb':
-      return 'TVDB'
+    case "tmdb":
+      return "TMDB"
+    case "imdb":
+      return "IMDb"
+    case "tvdb":
+      return "TVDB"
     default:
-      return provider?.trim() || ''
+      return provider?.trim() || ""
   }
 }
 
 export function getExternalIdentityUrl(
   identity: Pick<
     CatalogExternalIdentity,
-    'provider' | 'provider_type' | 'external_id'
-  >,
+    "provider" | "provider_type" | "external_id"
+  >
 ) {
   const provider = identity.provider.trim().toLowerCase()
   const providerType = identity.provider_type.trim().toLowerCase()
   const externalID = identity.external_id.trim()
-  const isPerson = providerType === 'person' || providerType === 'name'
-  if (!externalID) return ''
-  if (provider === 'imdb') {
-    return `https://www.imdb.com/${isPerson ? 'name' : 'title'}/${externalID}/`
+  const isPerson = providerType === "person" || providerType === "name"
+  if (!externalID) return ""
+  if (provider === "imdb") {
+    return `https://www.imdb.com/${isPerson ? "name" : "title"}/${externalID}/`
   }
-  if (provider === 'tmdb') {
+  if (provider === "tmdb") {
     if (isPerson) {
-      const cleanID = externalID.replace(/^person:/i, '')
+      const cleanID = externalID.replace(/^person:/i, "")
       return `https://www.themoviedb.org/person/${cleanID}`
     }
     const pathType =
-      providerType === 'tv' || providerType === 'series' ? 'tv' : 'movie'
-    const cleanID = externalID.replace(/^(movie|tv):/i, '')
+      providerType === "tv" || providerType === "series" ? "tv" : "movie"
+    const cleanID = externalID.replace(/^(movie|tv):/i, "")
     return `https://www.themoviedb.org/${pathType}/${cleanID}`
   }
-  if (provider === 'tvdb')
+  if (provider === "tvdb")
     return `https://thetvdb.com/dereferrer/series/${externalID}`
-  return ''
+  return ""
 }
 
 export function formatMediaCardTitle(
-  item: Pick<MediaCardItem, 'type' | 'title'> & {
+  item: Pick<MediaCardItem, "type" | "title"> & {
     series_title?: string
     source_path?: string
-  },
+  }
 ) {
   const title = getPrimarySeriesTitle(item)
-  if (item.type === 'show' || item.type === 'series') {
+  if (item.type === "show" || item.type === "series") {
     return title
   }
 
-  const episodeTitle = item.title?.trim() ?? ''
-  if (item.series_title?.trim() && title && title !== episodeTitle) {
+  const episodeTitle = item.title?.trim() ?? ""
+  const explicitSeriesTitle = item.series_title?.trim() ?? ""
+  if (
+    explicitSeriesTitle &&
+    title &&
+    !sameMediaTitle(title, episodeTitle) &&
+    !mediaTitleStartsWith(episodeTitle, title)
+  ) {
     return `${title} · ${episodeTitle}`
   }
 
@@ -325,9 +331,9 @@ export function formatMediaCardTitle(
 export function buildPresentedCatalogItem(
   item: CatalogDetailPresentation,
   _seasons: CatalogSeasonRail[],
-  view: MediaDetailView,
+  view: MediaDetailView
 ) {
-  if (item.type === 'episode' || view === 'episode') {
+  if (item.type === "episode" || view === "episode") {
     const episodeTitle = item.title || item.original_title
     return {
       ...item,
@@ -343,17 +349,17 @@ export function buildPresentedCatalogItem(
 }
 
 export function getPrimarySeriesTitle(
-  item: Pick<MediaCardItem, 'type' | 'title'> & {
+  item: Pick<MediaCardItem, "type" | "title"> & {
     series_title?: string
     source_path?: string
-  },
+  }
 ) {
   if (
-    item.type === 'show' ||
-    item.type === 'series' ||
-    item.type === 'episode'
+    item.type === "show" ||
+    item.type === "series" ||
+    item.type === "episode"
   ) {
-    const pathTitle = titleFromSourcePath(item.source_path ?? '')
+    const pathTitle = titleFromSourcePath(item.source_path ?? "")
     if (pathTitle) {
       return pathTitle
     }
@@ -364,23 +370,23 @@ export function getPrimarySeriesTitle(
     return seriesTitle
   }
 
-  return stripEpisodeSuffix(item.title?.trim() ?? '')
+  return stripEpisodeSuffix(item.title?.trim() ?? "")
 }
 
 export function getMediaCardType(item: MediaCardItem) {
-  return item.type === 'series' ? 'show' : item.type
+  return item.type === "series" ? "show" : item.type
 }
 
 export function getMediaCardPosterUrl(item: MediaCardItem) {
-  return selectedCatalogImageUrl(item.selected_images, 'poster')
+  return selectedCatalogImageUrl(item.selected_images, "poster")
 }
 
 export function getMediaCardBackdropUrl(item: MediaCardItem) {
-  return selectedCatalogImageUrl(item.selected_images, 'backdrop')
+  return selectedCatalogImageUrl(item.selected_images, "backdrop")
 }
 
 export function getMediaCardMetadataProvider(item: MediaCardItem) {
-  return item.external_identities?.[0]?.provider ?? ''
+  return item.external_identities?.[0]?.provider ?? ""
 }
 
 export function getMediaCardMatchStatus(item: MediaCardItem) {
@@ -399,10 +405,10 @@ export function formatMediaCardYearRange(item: MediaCardItem) {
   const endYear = yearFromDate(item.last_air_date)
 
   if (!startYear) {
-    return '未知年份'
+    return "未知年份"
   }
 
-  if (getMediaCardType(item) === 'show') {
+  if (getMediaCardType(item) === "show") {
     if (endYear && endYear !== startYear) {
       return `${startYear} - ${endYear}`
     }
@@ -422,7 +428,7 @@ export function getMediaCardBadgeCount(item: MediaCardItem) {
 
   const unwatchedCount = Math.max(
     0,
-    summary.available_count - summary.played_count,
+    summary.available_count - summary.played_count
   )
   if (unwatchedCount > 0) return unwatchedCount
   if (summary.in_progress_count > 0) return summary.in_progress_count
@@ -432,15 +438,38 @@ export function getMediaCardBadgeCount(item: MediaCardItem) {
 }
 
 export function isMediaCardPlayable(item: MediaCardItem) {
-  return item.availability_status === 'available'
+  return item.availability_status === "available"
 }
 
 function stripEpisodeSuffix(input: string) {
   const stripped = input.replace(
     /(?:[\s._-]+s\d{1,2}e\d{1,3})(?:[\s._-]+.*)?$/i,
-    '',
+    ""
   )
   return stripped.trim() || input.trim()
+}
+
+function sameMediaTitle(left: string, right: string) {
+  return normalizeMediaTitle(left) === normalizeMediaTitle(right)
+}
+
+function mediaTitleStartsWith(title: string, prefix: string) {
+  const normalizedTitle = normalizeMediaTitle(title)
+  const normalizedPrefix = normalizeMediaTitle(prefix)
+  return Boolean(
+    normalizedPrefix &&
+    (normalizedTitle === normalizedPrefix ||
+      normalizedTitle.startsWith(`${normalizedPrefix} `))
+  )
+}
+
+function normalizeMediaTitle(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[._:：·-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
 }
 
 function titleFromSourcePath(sourcePath: string) {
@@ -449,7 +478,7 @@ function titleFromSourcePath(sourcePath: string) {
     .map((segment) => segment.trim())
     .filter(Boolean)
   if (segments.length < 2) {
-    return ''
+    return ""
   }
 
   let index = segments.length - 2
@@ -460,7 +489,7 @@ function titleFromSourcePath(sourcePath: string) {
     }
   }
 
-  return segments[index]?.trim() || ''
+  return segments[index]?.trim() || ""
 }
 
 function yearFromDate(value?: string) {
@@ -471,30 +500,30 @@ function yearFromDate(value?: string) {
 
 function isContinuingSeries(status?: string) {
   const normalized = status?.trim().toLowerCase()
-  return normalized === 'continuing' || normalized === 'returning series'
+  return normalized === "continuing" || normalized === "returning series"
 }
 
 function selectedCatalogImageUrl(
   images: { image_type: string; url: string }[] | undefined,
-  imageType: string,
+  imageType: string
 ) {
   return (
-    (images || []).find((image) => image.image_type === imageType)?.url ?? ''
+    (images || []).find((image) => image.image_type === imageType)?.url ?? ""
   )
 }
 
 function catalogEpisodeShelfToRails(
-  episodes: CatalogEpisodeShelfItem[],
+  episodes: CatalogEpisodeShelfItem[]
 ): CatalogEpisodeRail[] {
   return episodes.map((episode) => ({
     item_id: episode.id,
     season_number: episode.season_number ?? 0,
     episode_number: episode.episode_number ?? 0,
     name: episode.title,
-    overview: episode.overview ?? '',
+    overview: episode.overview ?? "",
     still_url:
-      selectedCatalogImageUrl(episode.selected_images, 'still') ||
-      selectedCatalogImageUrl(episode.selected_images, 'backdrop'),
+      selectedCatalogImageUrl(episode.selected_images, "still") ||
+      selectedCatalogImageUrl(episode.selected_images, "backdrop"),
     air_date: episode.release_date ?? episode.first_air_date,
     runtime_seconds: episode.runtime_seconds,
     availability_status: episode.availability_status,
@@ -507,15 +536,15 @@ function catalogEpisodeShelfToRails(
 function formatEpisodeLabel(
   seasonNumber?: number,
   episodeNumber?: number,
-  episodeNumberEnd?: number,
+  episodeNumberEnd?: number
 ) {
-  if (typeof seasonNumber !== 'number' && typeof episodeNumber !== 'number') {
-    return ''
+  if (typeof seasonNumber !== "number" && typeof episodeNumber !== "number") {
+    return ""
   }
-  const season = typeof seasonNumber === 'number' ? `S${seasonNumber}` : ''
+  const season = typeof seasonNumber === "number" ? `S${seasonNumber}` : ""
   const episode =
-    typeof episodeNumber === 'number'
-      ? `E${episodeNumber}${typeof episodeNumberEnd === 'number' && episodeNumberEnd !== episodeNumber ? `-E${episodeNumberEnd}` : ''}`
-      : ''
-  return [season, episode].filter(Boolean).join(':')
+    typeof episodeNumber === "number"
+      ? `E${episodeNumber}${typeof episodeNumberEnd === "number" && episodeNumberEnd !== episodeNumber ? `-E${episodeNumberEnd}` : ""}`
+      : ""
+  return [season, episode].filter(Boolean).join(":")
 }

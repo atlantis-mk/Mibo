@@ -1,5 +1,8 @@
+# sidecar-metadata-files Specification
+
 ## Purpose
 Defines how scanner-supported sidecar metadata and subtitle files are discovered, recorded, and applied safely during catalog scans.
+
 ## Requirements
 ### Requirement: Discover same-folder sidecar files
 The scanner SHALL discover supported sidecar files with `.srt`, `.ass`, `.nfo`, and `.json` extensions from the same storage folder as each scanned video file.
@@ -42,6 +45,10 @@ The scanner SHALL parse supported `.nfo` and `.json` sidecars for high-confidenc
 - **WHEN** a matching metadata sidecar contains a supported external identity such as a TMDB or MetaTube identifier
 - **THEN** the scanner MUST persist that identity on the catalog item with scanner provenance so later metadata enrichment can fetch detail without first performing a remote search
 
+#### Scenario: Sidecar identity records local evidence source
+- **WHEN** a metadata operation uses a sidecar-provided external identity to fetch provider detail
+- **THEN** the operation evidence MUST identify the scanner metadata source as the seed and the provider detail source as the applied metadata source
+
 #### Scenario: Curated metadata is preserved
 - **WHEN** a catalog item is locked, manual, matched, or needs review
 - **THEN** sidecar metadata hints SHALL NOT overwrite preserved descriptive fields for that item
@@ -80,8 +87,16 @@ The scanner SHALL treat supported sidecar metadata as resolver evidence at group
 - **THEN** the scanner MUST use that sidecar as evidence for the movie candidate and metadata source without forcing one catalog item per video file
 
 ### Requirement: Sidecar hints respect field ownership
-The scanner SHALL apply sidecar hints through catalog field ownership and governance rules.
+The scanner SHALL record supported sidecar hints as local evidence and metadata operations SHALL apply those hints through catalog field ownership and governance rules.
 
 #### Scenario: Manual field is locked
 - **WHEN** a sidecar contains a title, year, overview, or provider ID for an item whose corresponding field has been locked or manually curated
 - **THEN** the scanner MUST record sidecar evidence without overwriting the protected field
+
+#### Scenario: Local apply respects locked field
+- **WHEN** a local evidence metadata operation applies sidecar hints to an item with a locked title field
+- **THEN** the operation MUST skip the locked title, apply eligible unlocked fields, and report the skipped title in the operation result
+
+#### Scenario: Local-only strategy applies sidecar evidence
+- **WHEN** a library strategy permits local evidence application and a scanned item has parsed sidecar metadata
+- **THEN** a local metadata operation MUST be able to apply supported sidecar hints without requiring a remote provider configuration

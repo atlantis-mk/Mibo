@@ -143,7 +143,7 @@ export function MetadataGovernanceWorkspace({ token }: { token: string }) {
                               </div>
                             </div>
 
-                            <Button asChild className="w-full rounded-xl">
+                            <Button asChild>
                               <Link
                                 to="/settings/metadata/$id"
                                 params={{ id: String(rawItem.id) }}

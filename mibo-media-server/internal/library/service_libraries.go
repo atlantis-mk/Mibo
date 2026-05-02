@@ -14,12 +14,6 @@ import (
 )
 
 func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (database.Library, database.Job, error) {
-	if strings.TrimSpace(input.Name) == "" {
-		return database.Library{}, database.Job{}, fmt.Errorf("name is required")
-	}
-	if strings.TrimSpace(input.Type) == "" {
-		return database.Library{}, database.Job{}, fmt.Errorf("type is required")
-	}
 	if input.MediaSourceID == 0 {
 		return database.Library{}, database.Job{}, fmt.Errorf("media_source_id is required")
 	}
@@ -39,7 +33,16 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 	if _, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: rootPath}); err != nil {
 		return database.Library{}, database.Job{}, fmt.Errorf("resolve library root %s: %w", rootPath, err)
 	}
-	library := database.Library{Name: strings.TrimSpace(input.Name), Type: normalizeLibraryType(input.Type), MediaSourceID: source.ID, RootPath: rootPath, Status: "pending", ScannerEnabled: true}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = deriveLibraryNameFromPath(rootPath, source.Name)
+	}
+	probe := s.ProbeSource(ctx, provider, rootPath)
+	libraryType := normalizeLibraryType(input.Type)
+	if libraryType == "" {
+		libraryType = LibraryTypeAuto
+	}
+	library := database.Library{Name: name, Type: libraryType, MediaSourceID: source.ID, RootPath: rootPath, Status: "pending", ScannerEnabled: true, ProbeStatus: probe.Status, ProbeSummaryJSON: encodeSourceProbeSummary(probe)}
 	if err := s.db.WithContext(ctx).Create(&library).Error; err != nil {
 		return database.Library{}, database.Job{}, err
 	}
@@ -84,6 +87,21 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 		return database.Library{}, database.Job{}, err
 	}
 	return library, job, nil
+}
+
+func deriveLibraryNameFromPath(rootPath string, fallback string) string {
+	trimmed := strings.Trim(strings.TrimSpace(rootPath), "/")
+	if trimmed == "" {
+		trimmed = strings.TrimSpace(fallback)
+	}
+	if trimmed == "" {
+		return "媒体来源"
+	}
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool { return r == '/' || r == '\\' })
+	if len(parts) == 0 {
+		return trimmed
+	}
+	return parts[len(parts)-1]
 }
 
 func (s *Service) QueueTargetedRefresh(ctx context.Context, libraryID uint, rootPath, reason string) (database.Job, error) {

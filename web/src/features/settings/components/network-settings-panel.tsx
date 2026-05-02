@@ -155,7 +155,7 @@ export function NetworkSettingsPanel({ token }: { token: string | null }) {
         <AlertTitle>登录后可管理网络设置</AlertTitle>
         <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <span>当前页面需要管理员会话来读取和更新服务器网络配置。</span>
-          <Button asChild variant="outline" className="w-fit">
+          <Button asChild variant="outline">
             <Link to="/login" search={{ redirect: '/settings/network' }}>
               前往登录
             </Link>

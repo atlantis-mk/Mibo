@@ -428,7 +428,7 @@ export default function PlayExperience({
           <p className="text-sm leading-7 text-white/60 sm:text-base">
             当前播放页需要已登录会话来请求后端播放地址和同步观看进度。
           </p>
-          <Button asChild size="lg" className="min-w-36">
+          <Button asChild size="lg">
             <Link to="/login" search={{ redirect: `/play/${itemId}` }}>
               前往登录
             </Link>
@@ -502,9 +502,9 @@ export default function PlayExperience({
             event.stopPropagation()
           }}
         >
-          <button
+          <Button
             type="button"
-            className="pointer-events-auto inline-flex min-w-0 items-center gap-3 text-left text-white transition hover:text-white/80"
+            variant="ghost"
             onClick={() => {
               if (window.history.length > 1) {
                 window.history.back()
@@ -522,13 +522,14 @@ export default function PlayExperience({
             <span className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">
               {item.title}
             </span>
-          </button>
+          </Button>
 
           <div className="pointer-events-auto hidden items-center gap-3 lg:flex">
             <div className="flex items-center gap-3 rounded-full bg-white/6 px-4 py-2 backdrop-blur-md">
-              <button
+              <Button
                 type="button"
-                className="text-white/80 transition hover:text-white"
+                variant="ghost"
+                size="icon"
                 onClick={toggleMute.bind(null, playerRef)}
               >
                 {isMuted || volume <= 0 ? (
@@ -536,7 +537,7 @@ export default function PlayExperience({
                 ) : (
                   <Volume2Icon className="size-5" />
                 )}
-              </button>
+              </Button>
               <input
                 type="range"
                 min="0"
@@ -726,13 +727,14 @@ function PlayerIconButton({
   onClick?: () => void
 }) {
   return (
-    <button
+    <Button
       type="button"
       onClick={onClick}
-      className="inline-flex size-10 items-center justify-center rounded-full bg-white/6 text-white/82 transition hover:bg-white/12 hover:text-white"
+      variant="ghost"
+      size="icon"
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -740,13 +742,14 @@ function SubtitleMenu({ side }: { side: 'top' | 'bottom' }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <Button
           type="button"
           aria-label="字幕设置"
-          className="inline-flex size-10 items-center justify-center rounded-full bg-white/6 text-white/82 transition hover:bg-white/12 hover:text-white"
+          variant="ghost"
+          size="icon"
         >
           <SubtitleGlyph className="scale-90" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" side={side} sideOffset={8}>
         <DropdownMenuLabel>字幕</DropdownMenuLabel>
@@ -819,13 +822,14 @@ function PlaybackRateMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <Button
           type="button"
           aria-label={`播放速度 ${formatPlaybackRate(playbackRate)}`}
-          className="inline-flex size-10 items-center justify-center rounded-full bg-white/6 text-white/82 transition hover:bg-white/12 hover:text-white"
+          variant="ghost"
+          size="icon"
         >
           <GaugeIcon className="size-5" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
@@ -866,14 +870,14 @@ function ControlButton({
   label: string
 }) {
   return (
-    <button
+    <Button
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="inline-flex items-center gap-1 text-white transition hover:text-white/70"
+      variant="ghost"
     >
       {children}
-    </button>
+    </Button>
   )
 }
 

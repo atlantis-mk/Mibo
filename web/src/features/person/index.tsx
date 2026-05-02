@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   ArrowLeftIcon,
   ChevronRightIcon,
@@ -12,11 +12,11 @@ import {
   Share2Icon,
   SearchIcon,
   Settings2Icon,
-} from 'lucide-react'
+} from "lucide-react"
 
-import { AppTopBar } from '#/components/app-top-bar'
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
+import { AppTopBar } from "#/components/app-top-bar"
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,28 +24,28 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '#/components/ui/dropdown-menu'
-import { SidebarTrigger } from '#/components/ui/sidebar'
-import type { CatalogListItem, CatalogPersonPageDetail } from '#/lib/mibo-api'
-import { ApiError } from '#/lib/mibo-api'
-import { catalogPersonDetailQueryOptions } from '#/lib/mibo-query'
+} from "#/components/ui/dropdown-menu"
+import { SidebarTrigger } from "#/components/ui/sidebar"
+import type { CatalogListItem, CatalogPersonPageDetail } from "#/lib/mibo-api"
+import { ApiError } from "#/lib/mibo-api"
+import { catalogPersonDetailQueryOptions } from "#/lib/mibo-query"
 import {
   formatMediaCardYearRange,
   getExternalIdentityUrl,
   getMediaCardBackdropUrl,
   getMediaCardPosterUrl,
-} from '#/lib/media-presentation'
-import { cn } from '#/lib/utils'
-import { useAuthStore } from '#/stores/auth-store'
+} from "#/lib/media-presentation"
+import { cn } from "#/lib/utils"
+import { useAuthStore } from "#/stores/auth-store"
 
-const personFavoritesStorageKey = 'mibo-web-favorite-people'
+const personFavoritesStorageKey = "mibo-web-favorite-people"
 
 export default function PersonDetailPage({ personId }: { personId: number }) {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
   const navigate = useNavigate()
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
   const hasValidPersonId = Number.isFinite(personId) && personId > 0
   const [isFavorite, setIsFavorite] = useState(false)
   const [overviewExpanded, setOverviewExpanded] = useState(false)
@@ -79,7 +79,7 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
 
   if (!token || !user) {
     void navigate({
-      to: '/login',
+      to: "/login",
       search: { redirect: `/person/${personId}` },
       replace: true,
     })
@@ -145,7 +145,7 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
   }
 
   const copyPageLink = async () => {
-    if (typeof window === 'undefined' || !navigator.clipboard) return
+    if (typeof window === "undefined" || !navigator.clipboard) return
     await navigator.clipboard.writeText(window.location.href)
   }
 
@@ -156,7 +156,7 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
         style={{
           backgroundImage: heroBackdrop
             ? `url(${heroBackdrop})`
-            : 'linear-gradient(135deg, rgba(47,67,98,0.92), rgba(20,24,37,0.98))',
+            : "linear-gradient(135deg, rgba(47,67,98,0.92), rgba(20,24,37,0.98))",
         }}
       />
       <div className="absolute inset-0 bg-gradient-to-b from-background/82 via-background/74 to-background" />
@@ -165,18 +165,17 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
       <AppTopBar
         leftSlot={
           <>
-            <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+            <SidebarTrigger />
             <Button
               type="button"
               size="icon-sm"
               variant="outline"
-              className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
               onClick={() => {
                 if (window.history.length > 1) {
                   window.history.back()
                   return
                 }
-                void navigate({ to: '/' })
+                void navigate({ to: "/" })
               }}
             >
               <ArrowLeftIcon className="size-4" />
@@ -192,23 +191,13 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
         }
         rightSlot={
           <div className="hidden items-center gap-2 sm:flex">
-            <Button
-              asChild
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button asChild size="icon-sm" variant="outline">
               <Link to="/search" search={{ q: undefined }}>
                 <SearchIcon className="size-4" />
                 <span className="sr-only">搜索</span>
               </Link>
             </Button>
-            <Button
-              asChild
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button asChild size="icon-sm" variant="outline">
               <Link to="/settings">
                 <Settings2Icon className="size-4" />
                 <span className="sr-only">设置</span>
@@ -218,7 +207,7 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
         }
       />
 
-      <main className="relative px-4 pb-16 pt-24 sm:px-6 lg:px-8">
+      <main className="relative px-4 pt-24 pb-16 sm:px-6 lg:px-8">
         <div className="mx-auto grid max-w-[1680px] gap-8 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
           <aside className="space-y-10 lg:pt-1">
             <div className="overflow-hidden rounded-xl border border-border/30 bg-card/30 shadow-2xl backdrop-blur-sm">
@@ -330,18 +319,18 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
                       size="icon"
                       variant="outline"
                       className={cn(
-                        'size-13 rounded-full border-border/50 bg-background/80',
+                        "size-13 rounded-full border-border/50 bg-background/80",
                         isFavorite
-                          ? 'text-rose-400 hover:text-rose-300'
-                          : 'text-muted-foreground hover:text-foreground',
+                          ? "text-rose-400 hover:text-rose-300"
+                          : "text-muted-foreground hover:text-foreground"
                       )}
                       onClick={toggleFavorite}
                     >
                       <HeartIcon
-                        className={cn('size-5', isFavorite && 'fill-current')}
+                        className={cn("size-5", isFavorite && "fill-current")}
                       />
                       <span className="sr-only">
-                        {isFavorite ? '取消喜欢' : '喜欢人物'}
+                        {isFavorite ? "取消喜欢" : "喜欢人物"}
                       </span>
                     </Button>
 
@@ -368,7 +357,7 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
                           onSelect={() => void toggleFavorite()}
                         >
                           <HeartIcon className="size-4" />
-                          {isFavorite ? '取消喜欢' : '加入喜欢'}
+                          {isFavorite ? "取消喜欢" : "加入喜欢"}
                         </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => void copyPageLink()}>
                           <Share2Icon className="size-4" />
@@ -400,21 +389,21 @@ export default function PersonDetailPage({ personId }: { personId: number }) {
               <div className="max-w-4xl">
                 <p
                   className={cn(
-                    'text-lg leading-10 text-foreground/92',
-                    !overviewExpanded && 'line-clamp-3',
+                    "text-lg leading-10 text-foreground/92",
+                    !overviewExpanded && "line-clamp-3"
                   )}
                 >
                   {person.biography ||
                     `${person.name} 当前只有基础人物资料，后续可通过元数据刷新补充更完整的生平与背景介绍。`}
                 </p>
                 {person.biography && person.biography.length > 220 ? (
-                  <button
+                  <Button
                     type="button"
-                    className="mt-2 text-base text-muted-foreground transition hover:text-foreground"
+                    variant="ghost"
                     onClick={() => setOverviewExpanded((value) => !value)}
                   >
-                    {overviewExpanded ? '收起' : '更多'}
-                  </button>
+                    {overviewExpanded ? "收起" : "更多"}
+                  </Button>
                 ) : null}
               </div>
             </div>
@@ -438,7 +427,7 @@ function PersonDetailError({
     <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
       <div className="max-w-lg rounded-[2rem] border border-border/40 bg-card/80 p-8 text-center backdrop-blur-xl">
         <Badge className="border-border/60 bg-background/80" variant="outline">
-          {missing ? '未找到' : '加载失败'}
+          {missing ? "未找到" : "加载失败"}
         </Badge>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight">{title}</h1>
         <p className="mt-3 text-sm leading-7 text-muted-foreground">
@@ -466,7 +455,7 @@ function getPersonHeroBackdropUrl(relatedItems: CatalogListItem[]) {
     const poster = getMediaCardPosterUrl(item)
     if (poster) return poster
   }
-  return ''
+  return ""
 }
 
 function buildPrimaryFacts(person: CatalogPersonPageDetail) {
@@ -475,16 +464,16 @@ function buildPrimaryFacts(person: CatalogPersonPageDetail) {
   if (birthday) {
     const age = formatPersonAge(person.birthday, person.deathday)
     facts.push({
-      label: '出生',
+      label: "出生",
       value: age ? `${birthday} · ${age}` : birthday,
     })
   }
   const deathday = formatPersonDate(person.deathday)
   if (deathday) {
-    facts.push({ label: '逝世', value: deathday })
+    facts.push({ label: "逝世", value: deathday })
   }
   if (person.place_of_birth?.trim()) {
-    facts.push({ label: '出生地', value: person.place_of_birth.trim() })
+    facts.push({ label: "出生地", value: person.place_of_birth.trim() })
   }
   return facts
 }
@@ -492,13 +481,13 @@ function buildPrimaryFacts(person: CatalogPersonPageDetail) {
 function buildSecondaryFacts(person: CatalogPersonPageDetail) {
   const facts: Array<{ label: string; value: string }> = []
   if (person.known_for_department?.trim()) {
-    facts.push({ label: '领域', value: person.known_for_department.trim() })
+    facts.push({ label: "领域", value: person.known_for_department.trim() })
   }
   if ((person.related_items?.length ?? 0) > 0) {
     const lead = person.related_items?.[0]
     if (lead) {
       facts.push({
-        label: '代表作品',
+        label: "代表作品",
         value: `${lead.title} · ${formatMediaCardYearRange(lead)}`,
       })
     }
@@ -508,44 +497,44 @@ function buildSecondaryFacts(person: CatalogPersonPageDetail) {
 
 function formatExternalLinkLabel(provider: string) {
   switch (provider.trim().toLowerCase()) {
-    case 'imdb':
-      return 'IMDb'
-    case 'tmdb':
-      return 'TheMovieDb'
+    case "imdb":
+      return "IMDb"
+    case "tmdb":
+      return "TheMovieDb"
     default:
       return provider.toUpperCase()
   }
 }
 
 function formatPersonDate(value?: string) {
-  if (!value) return ''
+  if (!value) return ""
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
+  if (Number.isNaN(date.getTime())) return ""
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
   }).format(date)
 }
 
 function formatPersonAge(birthday?: string, deathday?: string) {
-  if (!birthday) return ''
+  if (!birthday) return ""
   const start = new Date(birthday)
   const end = deathday ? new Date(deathday) : new Date()
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return ''
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return ""
 
   let age = end.getFullYear() - start.getFullYear()
   const monthDelta = end.getMonth() - start.getMonth()
   if (monthDelta < 0 || (monthDelta === 0 && end.getDate() < start.getDate())) {
     age -= 1
   }
-  return age > 0 ? `${age} 岁` : ''
+  return age > 0 ? `${age} 岁` : ""
 }
 
 function getPersonInitial(name: string) {
   const normalized = name.trim()
-  if (!normalized) return '?'
-  return Array.from(normalized)[0]?.toUpperCase() ?? '?'
+  if (!normalized) return "?"
+  return Array.from(normalized)[0]?.toUpperCase() ?? "?"
 }
 
 function PersonRelatedWorkCard({ item }: { item: CatalogListItem }) {
@@ -555,7 +544,7 @@ function PersonRelatedWorkCard({ item }: { item: CatalogListItem }) {
     <Link
       to="/media/$id"
       params={{ id: String(item.id) }}
-      search={{ view: item.type === 'series' ? 'series' : undefined }}
+      search={{ view: item.type === "series" ? "series" : undefined }}
       className="group block min-w-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       <div className="overflow-hidden rounded-xl border border-border/30 bg-card/30 shadow-xl backdrop-blur-sm transition group-hover:border-border/60">
@@ -586,13 +575,13 @@ function PersonRelatedWorkCard({ item }: { item: CatalogListItem }) {
 }
 
 function readFavoritePeople() {
-  if (typeof window === 'undefined') return [] as number[]
+  if (typeof window === "undefined") return [] as number[]
   try {
     const raw = window.localStorage.getItem(personFavoritesStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((value): value is number => typeof value === 'number')
+    return parsed.filter((value): value is number => typeof value === "number")
   } catch {
     return []
   }
@@ -603,7 +592,7 @@ function toggleFavoritePerson(personId: number) {
   const next = current.includes(personId)
     ? current.filter((value) => value !== personId)
     : [...current, personId]
-  if (typeof window !== 'undefined') {
+  if (typeof window !== "undefined") {
     window.localStorage.setItem(personFavoritesStorageKey, JSON.stringify(next))
   }
   return next.includes(personId)

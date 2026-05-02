@@ -89,6 +89,14 @@ type LibraryDetail struct {
 	InventoryFilesCount int64               `json:"inventory_files_count"`
 	Paths               []LibraryPathView   `json:"paths"`
 	Policies            LibraryPoliciesView `json:"policies"`
+	ProbeSummary        SourceProbeSummary  `json:"probe_summary"`
+	Collections         []SourceCollection  `json:"collections"`
+}
+
+type SourceCollection struct {
+	ContentClass string `json:"content_class"`
+	Label        string `json:"label"`
+	Count        int64  `json:"count"`
 }
 
 type TrackDetail struct {

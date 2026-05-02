@@ -50,17 +50,12 @@ export default function FavoritesPage() {
       <AppTopBar
         leftSlot={
           <>
-            <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+            <SidebarTrigger />
             <div className="hidden rounded-full border border-border/50 bg-background/80 p-1 sm:flex">
-              <Button
-                asChild
-                size="sm"
-                variant="ghost"
-                className="h-8 rounded-full px-4 text-muted-foreground"
-              >
+              <Button asChild size="sm" variant="ghost">
                 <Link to="/">首页</Link>
               </Button>
-              <Button asChild size="sm" className="h-8 rounded-full px-4">
+              <Button asChild size="sm">
                 <Link to="/favorites">收藏</Link>
               </Button>
             </div>
@@ -74,23 +69,13 @@ export default function FavoritesPage() {
         }
         rightSlot={
           <div className="hidden items-center gap-2 sm:flex">
-            <Button
-              asChild
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button asChild size="icon-sm" variant="outline">
               <Link to="/search" search={{ q: undefined }}>
                 <SearchIcon className="size-4" />
                 <span className="sr-only">搜索</span>
               </Link>
             </Button>
-            <Button
-              asChild
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-            >
+            <Button asChild size="icon-sm" variant="outline">
               <Link to="/settings">
                 <Settings2Icon className="size-4" />
                 <span className="sr-only">设置</span>

@@ -15,15 +15,17 @@ type MediaSource struct {
 }
 
 type Library struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	Name           string    `gorm:"size:255;not null" json:"name"`
-	Type           string    `gorm:"size:64;not null;index" json:"type"`
-	MediaSourceID  uint      `gorm:"not null;index" json:"media_source_id"`
-	RootPath       string    `gorm:"size:1024;not null" json:"root_path"`
-	Status         string    `gorm:"size:64;not null;default:active" json:"status"`
-	ScannerEnabled bool      `gorm:"not null;default:true" json:"scanner_enabled"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	Name             string    `gorm:"size:255;not null" json:"name"`
+	Type             string    `gorm:"size:64;not null;index" json:"-"`
+	MediaSourceID    uint      `gorm:"not null;index" json:"media_source_id"`
+	RootPath         string    `gorm:"size:1024;not null" json:"root_path"`
+	Status           string    `gorm:"size:64;not null;default:active" json:"status"`
+	ScannerEnabled   bool      `gorm:"not null;default:true" json:"scanner_enabled"`
+	ProbeStatus      string    `gorm:"size:64;not null;default:pending" json:"probe_status"`
+	ProbeSummaryJSON string    `gorm:"type:text" json:"probe_summary_json"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type LibraryPath struct {

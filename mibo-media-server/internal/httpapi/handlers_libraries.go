@@ -27,9 +27,14 @@ func (r *Router) handleCreateLibrary(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
+	libraryDetail, err := r.library.GetLibrary(req.Context(), libraryRecord.ID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
 
 	writeJSON(req.Context(), w, http.StatusCreated, map[string]any{
-		"library": libraryRecord,
+		"library": libraryDetail,
 		"job":     job,
 	})
 }

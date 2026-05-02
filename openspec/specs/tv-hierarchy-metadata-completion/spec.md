@@ -32,11 +32,15 @@ The system SHALL provide convenience reads for TV-specific views such as missing
 - **THEN** the system MUST derive the response from catalog hierarchy, descendant availability, and user progress data without depending on legacy media-item semantics
 
 ### Requirement: Episode descendants retain episode-level metadata after series sync
-The system SHALL retain episode-level metadata on catalog descendants generated or updated by series-root provider sync.
+The system SHALL retain episode-level metadata on catalog descendants generated or updated by series-root provider sync, including supported baseline fields and rich provider fields that are available without unbounded per-episode requests.
 
 #### Scenario: Series sync returns episode details
 - **WHEN** a matched TV series provider response includes season episodes with names, overviews, air dates, runtimes, still images, and provider episode IDs
 - **THEN** the corresponding catalog episode descendants MUST retain those values as item fields, selected image candidates, source evidence, and external identities
+
+#### Scenario: Series sync returns episode ratings or external IDs
+- **WHEN** TMDB season or episode detail provides supported episode-level ratings, certifications, or external IDs within the bounded hierarchy sync
+- **THEN** the corresponding catalog episode descendants MUST retain those values where Mibo has stable catalog fields or identity storage
 
 #### Scenario: Local episode already exists
 - **WHEN** provider sync finds an existing local episode with matching season and episode numbers
@@ -80,25 +84,37 @@ The system SHALL preserve complete provider-known TV hierarchy state while allow
 - **THEN** the system MUST expose the complete matching set of provider-known descendants including missing and unaired episodes
 
 ### Requirement: TV hierarchy synchronization resolves the effective library metadata profile
-The system SHALL resolve the effective library metadata profile before executing rooted TV metadata synchronization for a series, season, or episode initiated action.
+The system SHALL resolve the effective library metadata strategy and metadata operation execution plan before executing rooted TV metadata synchronization for a series, season, or episode initiated action.
 
 #### Scenario: Episode-triggered match uses the library profile
-- **WHEN** a user triggers metadata matching from an episode that belongs to a library with a bound metadata profile
-- **THEN** the system MUST resolve that library profile and use its configured search, detail, hierarchy, and fallback behavior while still rooting the operation at the series catalog item
+- **WHEN** a user triggers metadata matching from an episode that belongs to a library with a bound metadata profile or copied strategy
+- **THEN** the system MUST resolve that library strategy and use its configured search, detail, hierarchy, local evidence, and fallback behavior while still rooting the operation at the series catalog item
+
+#### Scenario: Automated episode scan queues series operation
+- **WHEN** scanning an episode queues metadata enrichment
+- **THEN** the resulting metadata operation MUST target the series root and report descendant status for the originating episode when operation results are requested
 
 ### Requirement: TV descendant identities remain provider-normalized across profile stages
-The system SHALL preserve season and episode descendant identity and evidence semantics even when TV metadata stages are supplied by a profile-selected provider instance rather than a single global provider configuration.
+The system SHALL preserve season and episode descendant identity and evidence semantics when TV metadata stages are supplied by a strategy-selected provider instance and normalized through the metadata operation pipeline.
 
 #### Scenario: Profile-selected provider sync populates descendants
-- **WHEN** a TV metadata profile selects a provider instance that returns normalized season and episode hierarchy detail
+- **WHEN** a TV metadata strategy selects a provider instance that returns normalized season and episode hierarchy detail
 - **THEN** the system MUST persist descendant identities, evidence, and artwork candidates for the generated or updated seasons and episodes using the same durable catalog hierarchy rules as the existing rooted sync flow
 
+#### Scenario: Hierarchy stage records provider attempts
+- **WHEN** TV hierarchy synchronization attempts one or more hierarchy-capable provider instances
+- **THEN** the metadata operation evidence MUST record hierarchy-stage attempt outcomes and the provider instance that supplied descendant data
+
 ### Requirement: TV profile fallback does not bypass hierarchy mismatch safeguards
-The system SHALL preserve existing hierarchy mismatch protections when a TV metadata profile falls back between configured provider instances.
+The system SHALL preserve existing hierarchy mismatch protections when a TV metadata operation falls back between configured provider instances or local evidence sources.
 
 #### Scenario: Fallback provider lacks the local episode slot
 - **WHEN** a profile falls back to another provider instance and that provider's hierarchy does not contain the local episode's expected season or episode slot
 - **THEN** the system MUST preserve the local descendant, surface the mismatch for governance review, and MUST NOT silently link the episode to an unrelated provider slot
+
+#### Scenario: Local slot mismatch appears in operation result
+- **WHEN** a rooted TV metadata operation cannot match the originating episode to a provider descendant
+- **THEN** the operation result MUST identify the mismatch status for the originating item while preserving the local item and its asset links
 
 ### Requirement: TV hierarchy roots are scanner-identity stable
 The system SHALL create and update TV hierarchy descendants under a stable series root derived from scanner, sidecar, provider, or manual identity rather than from per-file title inference alone.
@@ -117,3 +133,21 @@ The system SHALL preserve local episode slots created by scanner identity when p
 #### Scenario: Provider lacks local episode slot
 - **WHEN** a local episode exists under a scanner-created series but the matched provider hierarchy does not contain that season and episode number
 - **THEN** the system MUST preserve the local episode and surface the mismatch for governance review instead of linking it to an unrelated provider episode or deleting it
+
+### Requirement: TV hierarchy synchronization preserves rich season metadata
+The system SHALL preserve supported TMDB season-level rich metadata when creating or updating catalog season descendants from a series-root sync.
+
+#### Scenario: Season detail includes supported fields
+- **WHEN** TMDB season detail includes name, overview, air date, poster, season ID, external IDs, credits, or images
+- **THEN** the catalog season descendant MUST retain the supported fields, artwork, identities, and source evidence without losing existing local descendant links
+
+#### Scenario: Season detail omits optional fields
+- **WHEN** TMDB season detail omits optional rich fields such as external IDs or credits
+- **THEN** hierarchy synchronization MUST still create or update the season and its episodes from available baseline data
+
+### Requirement: TV series rich metadata coexists with hierarchy completion
+The system SHALL apply series-level rich metadata and descendant hierarchy updates as one metadata operation scope.
+
+#### Scenario: Series detail and hierarchy both contain updates
+- **WHEN** a TMDB TV sync returns series-level genres, keywords, ratings, certifications, status, images, people, and season or episode hierarchy data
+- **THEN** the system MUST apply series fields, tags, identities, images, people, and descendant updates within the same operation result and affected scope

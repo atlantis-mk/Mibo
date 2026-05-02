@@ -41,8 +41,22 @@ func (r *Router) handleBrowseStorageProvider(w http.ResponseWriter, req *http.Re
 		return
 	}
 
-	providerName := strings.TrimSpace(req.PathValue("provider"))
-	result, err := r.library.BrowseProviderPath(req.Context(), providerName, req.URL.Query().Get("path"))
+	var input struct {
+		Provider string `json:"provider"`
+		Path     string `json:"path"`
+	}
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+
+	providerName := strings.TrimSpace(input.Provider)
+	if providerName == "" {
+		writeError(req.Context(), w, http.StatusBadRequest, errMissingJSONField("provider"))
+		return
+	}
+
+	result, err := r.library.BrowseProviderPath(req.Context(), providerName, input.Path)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -176,13 +190,20 @@ func (r *Router) handleBrowseMediaSource(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	sourceID, err := parseUintPathValue(req, "id")
-	if err != nil {
+	var input struct {
+		ID   uint   `json:"id"`
+		Path string `json:"path"`
+	}
+	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
+	if input.ID == 0 {
+		writeError(req.Context(), w, http.StatusBadRequest, errMissingJSONField("id"))
+		return
+	}
 
-	result, err := r.library.BrowseMediaSourcePath(req.Context(), sourceID, req.URL.Query().Get("path"))
+	result, err := r.library.BrowseMediaSourcePath(req.Context(), input.ID, input.Path)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return

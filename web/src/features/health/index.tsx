@@ -38,6 +38,8 @@ import type {
 } from "#/lib/mibo-api"
 import { useAuthStore } from "#/stores/auth-store"
 
+import { getHealthCenterState } from "./health-center-state"
+
 export default function HealthCenter() {
   const token = useAuthStore((state) => state.token)
   const hasHydrated = useAuthStore((state) => state.hasHydrated)
@@ -51,8 +53,6 @@ export default function HealthCenter() {
     enabled: hasHydrated && !!token,
   })
   const issues = issuesQuery.data ?? []
-  const blockingIssues = issues.filter((issue) => issue.severity === "blocking")
-  const otherIssues = issues.filter((issue) => issue.severity !== "blocking")
 
   const validateMutation = useMutation({
     mutationFn: (mediaSourceId: number) => {
@@ -104,21 +104,30 @@ export default function HealthCenter() {
       await queryClient.invalidateQueries({ queryKey: ["home"] })
     },
   })
+  const healthState = getHealthCenterState(issues, {
+    validatePending: validateMutation.isPending,
+    rescanPending: rescanMutation.isPending,
+    ignorePending: ignoreMutation.isPending,
+  })
 
   return (
     <div className="space-y-6">
       <section className="grid gap-4 md:grid-cols-3">
         <HealthStat
           label="阻断问题"
-          value={blockingIssues.length}
+          value={healthState.blockingIssues.length}
           tone="danger"
         />
         <HealthStat
           label="其他问题"
-          value={otherIssues.length}
+          value={healthState.otherIssues.length}
           tone="warning"
         />
-        <HealthStat label="活跃问题" value={issues.length} tone="neutral" />
+        <HealthStat
+          label="活跃问题"
+          value={healthState.activeIssueCount}
+          tone="neutral"
+        />
       </section>
 
       {issuesQuery.isLoading ? (
@@ -151,7 +160,7 @@ export default function HealthCenter() {
         </Card>
       ) : null}
 
-      {!issuesQuery.isLoading && !issuesQuery.error && issues.length === 0 ? (
+      {!issuesQuery.isLoading && !issuesQuery.error && healthState.isEmpty ? (
         <Card className="rounded-[1.5rem] border-emerald-500/30 bg-emerald-500/5">
           <CardContent className="flex items-center gap-3 p-6">
             <CheckCircle2Icon className="size-5 text-emerald-600" />
@@ -165,11 +174,11 @@ export default function HealthCenter() {
         </Card>
       ) : null}
 
-      {blockingIssues.length > 0 ? (
+      {healthState.hasBlockingIssues ? (
         <IssueGroup
           title="需要立即处理"
           description="这些问题会阻断扫描、首页展示或关键媒体库能力。"
-          issues={blockingIssues}
+          issues={healthState.blockingIssues}
           validatePending={validateMutation.isPending}
           validationResults={validationResults}
           rescanPending={rescanMutation.isPending}
@@ -180,11 +189,11 @@ export default function HealthCenter() {
         />
       ) : null}
 
-      {otherIssues.length > 0 ? (
+      {healthState.hasOtherIssues ? (
         <IssueGroup
           title="其他活跃问题"
           description="这些问题可能影响元数据、探测或后台维护，但不一定阻断首页展示。"
-          issues={otherIssues}
+          issues={healthState.otherIssues}
           validatePending={validateMutation.isPending}
           validationResults={validationResults}
           rescanPending={rescanMutation.isPending}

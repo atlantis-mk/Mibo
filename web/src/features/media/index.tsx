@@ -207,7 +207,7 @@ export default function MediaDetail({
           <p className="text-sm leading-7 text-muted-foreground sm:text-base">
             当前详情页依赖已登录会话访问后端媒体接口。
           </p>
-          <Button asChild size="lg" className="min-w-36">
+          <Button asChild size="lg">
             <Link to="/login" search={{ redirect: `/media/${itemId}` }}>
               前往登录
             </Link>

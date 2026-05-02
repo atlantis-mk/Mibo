@@ -58,6 +58,46 @@ func (s *Service) SetPersonProfileRefresher(refresher PersonProfileRefresher) {
 	s.personProfileRefresher = refresher
 }
 
+func (s *Service) CreateClassificationRule(ctx context.Context, input ClassificationRuleInput) (database.ClassificationRule, error) {
+	if input.LibraryID == 0 {
+		return database.ClassificationRule{}, errors.New("library_id is required")
+	}
+	key := strings.TrimSpace(input.Key)
+	if key == "" {
+		key = classificationRuleKey(input)
+	}
+	rule := database.ClassificationRule{
+		LibraryID:       input.LibraryID,
+		Key:             key,
+		Name:            defaultString(input.Name, input.RuleType),
+		Description:     strings.TrimSpace(input.Description),
+		PathPattern:     strings.TrimSpace(input.PathPattern),
+		RuleType:        strings.TrimSpace(input.RuleType),
+		Role:            strings.TrimSpace(input.Role),
+		CandidateType:   strings.TrimSpace(input.CandidateType),
+		SeriesTitle:     strings.TrimSpace(input.SeriesTitle),
+		SeasonNumber:    input.SeasonNumber,
+		NumberingSource: strings.TrimSpace(input.NumberingSource),
+		PayloadJSON:     strings.TrimSpace(input.PayloadJSON),
+		Enabled:         true,
+		System:          false,
+		CreatedByUserID: input.CreatedByUserID,
+		UpdatedByUserID: input.CreatedByUserID,
+	}
+	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"name", "description", "path_pattern", "rule_type", "role", "candidate_type", "series_title", "season_number", "numbering_source", "payload_json", "enabled", "updated_by_user_id", "updated_at"}),
+	}).Create(&rule).Error; err != nil {
+		return database.ClassificationRule{}, err
+	}
+	return rule, nil
+}
+
+func classificationRuleKey(input ClassificationRuleInput) string {
+	parts := []string{fmt.Sprintf("library-%d", input.LibraryID), strings.TrimSpace(input.RuleType), strings.TrimSpace(input.PathPattern), strings.TrimSpace(input.CandidateType), strings.TrimSpace(input.SeriesTitle)}
+	return strings.ToLower(strings.Join(parts, ":"))
+}
+
 type CreateItemInput struct {
 	LibraryID          uint
 	Type               string
@@ -101,6 +141,22 @@ type MetadataSourceInput struct {
 	Confidence           *float64
 	FetchedAt            time.Time
 	ExpiresAt            *time.Time
+}
+
+type ClassificationRuleInput struct {
+	LibraryID       uint
+	Key             string
+	Name            string
+	Description     string
+	PathPattern     string
+	RuleType        string
+	Role            string
+	CandidateType   string
+	SeriesTitle     string
+	SeasonNumber    *int
+	NumberingSource string
+	PayloadJSON     string
+	CreatedByUserID *uint
 }
 
 type ExternalIDInput struct {

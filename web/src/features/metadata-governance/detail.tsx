@@ -34,6 +34,7 @@ import {
   AssetLinksCard,
   AsyncActionsCard,
   CandidateSearchCard,
+  ClassificationReviewCard,
   DraftEditorCard,
   FieldLocksCard,
   ImageCandidatesCard,
@@ -533,6 +534,7 @@ export function MetadataGovernanceDetail({
   const workspaceAssets = workspace.assets ?? []
   const workspaceFieldStates = workspace.field_states ?? []
   const workspaceSourceEvidence = workspace.source_evidence ?? []
+  const workspaceClassification = workspace.classification_decisions ?? []
   const workspaceSelectedImages = workspace.selected_images ?? []
   const workspaceImageCandidates = workspace.image_candidates ?? []
   const workspaceRecommendedChildren = workspace.recommended_children ?? []
@@ -708,6 +710,8 @@ export function MetadataGovernanceDetail({
             />
 
             <SourceEvidenceCard sourceEvidence={workspaceSourceEvidence} />
+
+            <ClassificationReviewCard decisions={workspaceClassification} />
 
             <ImageCandidatesCard
               selectedImages={workspaceSelectedImages}

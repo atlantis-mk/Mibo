@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react"
+import { useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
@@ -42,12 +42,12 @@ import { SidebarTrigger } from "#/components/ui/sidebar"
 import { createAuthedMiboApi, homeDataQueryOptions } from "#/lib/mibo-query"
 import {
   affectedLibraryNames,
-  findBlockingHomeIssue,
   healthReasonMessage,
   healthReasonTitle,
 } from "#/lib/health-presentation"
 import { useAuthStore } from "#/stores/auth-store"
 
+import { getHomeDashboardState } from "./home-state"
 import {
   ContinueWatchingRail,
   HeroCarousel,
@@ -77,28 +77,10 @@ export default function Home() {
     latestByLibrary: [],
     healthIssues: [],
   }
-  const homeBlockingIssue = findBlockingHomeIssue(data.healthIssues)
+  const homeState = getHomeDashboardState(data)
+  const homeBlockingIssue = homeState.homeBlockingIssue
   const heroItems = data.items.slice(0, 6)
   const canLoopHeroItems = heroItems.length > 2
-  const latestLibrarySections = useMemo(
-    () => data.latestByLibrary.filter((section) => section.items.length > 0),
-    [data.latestByLibrary]
-  )
-  const hasDisplayableHomeContent =
-    data.items.length > 0 ||
-    latestLibrarySections.length > 0 ||
-    data.continueWatching.length > 0
-  const movieCount = useMemo(
-    () => data.items.filter((item) => item.type === "movie").length,
-    [data.items]
-  )
-  const showCount = useMemo(
-    () =>
-      data.items.filter(
-        (item) => item.type === "show" || item.type === "series"
-      ).length,
-    [data.items]
-  )
   useEffect(() => {
     if (!hasHydrated || (token && user)) {
       return
@@ -177,17 +159,12 @@ export default function Home() {
     <AppTopBar
       leftSlot={
         <>
-          <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+          <SidebarTrigger />
           <div className="hidden rounded-full border border-border/50 bg-background/80 p-1 sm:flex">
-            <Button asChild size="sm" className="h-8 rounded-full px-4">
+            <Button asChild size="sm">
               <Link to="/">首页</Link>
             </Button>
-            <Button
-              asChild
-              size="sm"
-              variant="ghost"
-              className="h-8 rounded-full px-4 text-muted-foreground"
-            >
+            <Button asChild size="sm" variant="ghost">
               <Link to="/favorites">收藏</Link>
             </Button>
           </div>
@@ -222,7 +199,7 @@ export default function Home() {
                     className="relative inline-flex size-9 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10 text-destructive shadow-sm transition-colors hover:bg-destructive/15 focus-visible:ring-2 focus-visible:ring-destructive/40 focus-visible:outline-none"
                   >
                     <ShieldAlertIcon className="size-4" />
-                    <span className="absolute -top-0.5 -right-0.5 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] leading-4 font-semibold text-destructive-foreground">
+                    <span className="text-destructive-foreground absolute -top-0.5 -right-0.5 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] leading-4 font-semibold">
                       {data.healthIssues.length}
                     </span>
                     <span className="sr-only">查看健康中心</span>
@@ -242,22 +219,20 @@ export default function Home() {
                       ? healthReasonTitle(homeBlockingIssue)
                       : healthReasonTitle(data.healthIssues[0])}
                   </div>
-                  {homeBlockingIssue && affectedLibraryNames(homeBlockingIssue) ? (
+                  {homeBlockingIssue &&
+                  affectedLibraryNames(homeBlockingIssue) ? (
                     <div className="text-xs opacity-75">
                       影响：{affectedLibraryNames(homeBlockingIssue)}
                     </div>
                   ) : null}
-                  <div className="text-xs opacity-70">点击进入设置里的健康中心</div>
+                  <div className="text-xs opacity-70">
+                    点击进入设置里的健康中心
+                  </div>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           ) : null}
-          <Button
-            asChild
-            size="icon-sm"
-            variant="outline"
-            className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-          >
+          <Button asChild size="icon-sm" variant="outline">
             <Link to="/search" search={{ q: undefined }}>
               <SearchIcon className="size-4" />
               <span className="sr-only">搜索</span>
@@ -265,11 +240,7 @@ export default function Home() {
           </Button>
           <Dialog>
             <DialogTrigger asChild>
-              <Button
-                size="icon-sm"
-                variant="outline"
-                className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-              >
+              <Button size="icon-sm" variant="outline">
                 <CastIcon className="size-4" />
                 <span className="sr-only">投屏</span>
               </Button>
@@ -286,11 +257,7 @@ export default function Home() {
           </Dialog>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                size="icon-sm"
-                variant="outline"
-                className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-              >
+              <Button size="icon-sm" variant="outline">
                 <UserCircleIcon className="size-4" />
                 <span className="sr-only">用户菜单</span>
               </Button>
@@ -322,12 +289,7 @@ export default function Home() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            asChild
-            size="icon-sm"
-            variant="outline"
-            className="rounded-full border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground"
-          >
+          <Button asChild size="icon-sm" variant="outline">
             <Link to="/settings">
               <Settings2Icon className="size-4" />
               <span className="sr-only">进入设置</span>
@@ -338,12 +300,7 @@ export default function Home() {
     />
   )
 
-  if (
-    data.items.length === 0 &&
-    data.libraries.length === 0 &&
-    latestLibrarySections.length === 0 &&
-    data.continueWatching.length === 0
-  ) {
+  if (homeState.hasEmptySetupState) {
     return (
       <div className="relative min-w-0 flex-1 bg-background text-foreground">
         {topBar}
@@ -368,7 +325,7 @@ export default function Home() {
     )
   }
 
-  if (!hasDisplayableHomeContent && homeBlockingIssue) {
+  if (homeState.isHealthBlocked && homeBlockingIssue) {
     return (
       <div className="relative min-w-0 flex-1 bg-background text-foreground">
         {topBar}
@@ -413,24 +370,35 @@ export default function Home() {
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
       {topBar}
       <div className="relative">
+        {homeState.isPartiallyDegraded ? (
+          <div className="absolute inset-x-4 top-24 z-20 rounded-[1.25rem] border border-amber-500/30 bg-background/85 px-4 py-3 text-sm text-amber-700 shadow-lg backdrop-blur-xl sm:inset-x-6 lg:inset-x-8 dark:text-amber-300">
+            部分媒体库存在健康问题，可用内容会继续展示。前往
+            <Link to="/settings/health" className="mx-1 font-medium underline">
+              健康中心
+            </Link>
+            查看影响范围。
+          </div>
+        ) : null}
         <HeroCarousel
           heroItems={heroItems}
           canLoopHeroItems={canLoopHeroItems}
           userName={user.username}
           continueWatchingCount={data.continueWatchingCount}
-          movieCount={movieCount}
-          showCount={showCount}
+          movieCount={homeState.movieCount}
+          showCount={homeState.showCount}
           hasBottomOverlay={data.libraries.length > 0}
         />
 
         <MyMediaSection
           libraries={data.libraries}
-          latestLibrarySections={latestLibrarySections}
+          latestLibrarySections={homeState.latestLibrarySections}
           variant="heroOverlay"
         />
       </div>
       <ContinueWatchingRail entries={data.continueWatching} />
-      <LatestLibraryRail latestLibrarySections={latestLibrarySections} />
+      <LatestLibraryRail
+        latestLibrarySections={homeState.latestLibrarySections}
+      />
     </div>
   )
 }

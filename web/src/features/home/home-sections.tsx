@@ -19,7 +19,7 @@ import type {
   CatalogUserItemEntry,
   Library,
 } from "#/lib/mibo-api"
-import { formatLibraryType } from "#/lib/library-presentation"
+import { formatSourceContentClass } from "#/lib/library-presentation"
 import {
   formatMediaCardTitle,
   getMediaCardBackdropUrl,
@@ -411,7 +411,7 @@ function LibraryCollageCard({
   posters: string[]
   variant?: "default" | "heroOverlay"
 }) {
-  const shouldUseCollage = posters.length >= 4
+  const shouldUseCollage = posters.length >= 3
   const primaryPoster = posters[0]
 
   return (
@@ -419,7 +419,7 @@ function LibraryCollageCard({
       to="/library/$id"
       params={{ id: String(library.id) }}
       className={cn(
-        "group overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        "group flex flex-col overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         variant === "heroOverlay"
           ? "h-full w-[240px] shrink-0 rounded-[1rem] sm:w-[280px] lg:w-[320px]"
           : ""
@@ -427,27 +427,26 @@ function LibraryCollageCard({
     >
       <div
         className={cn(
-          "relative overflow-hidden bg-muted",
-          variant === "heroOverlay" ? "aspect-[16/9]" : "aspect-[16/10]"
+          "relative overflow-hidden bg-muted"
         )}
       >
         {shouldUseCollage ? (
-          <div className="grid h-full grid-cols-4 gap-1 p-1">
-            {posters.slice(0, 4).map((poster, index) => (
+          <div className="flex justify-center overflow-hidden">
+            {posters.slice(0, 3).map((poster, index) => (
               <div
                 key={`${poster}-${index}`}
-                className="h-full rounded-xl bg-cover bg-center"
+                className="aspect-[2/3] w-1/3 shrink-0 rounded-none bg-cover bg-center"
                 style={{ backgroundImage: `url(${poster})` }}
               />
             ))}
           </div>
         ) : primaryPoster ? (
           <div
-            className="h-full bg-cover bg-center"
+            className="aspect-[2/3] w-full bg-cover bg-center"
             style={{ backgroundImage: `url(${primaryPoster})` }}
           />
         ) : (
-          <div className="flex h-full items-center justify-center bg-card/80 px-4 text-center text-sm text-muted-foreground">
+          <div className="flex aspect-[2/3] w-full items-center justify-center bg-card/80 px-4 text-center text-sm text-muted-foreground">
             暂无封面
           </div>
         )}
@@ -469,8 +468,16 @@ function LibraryCollageCard({
             {library.name}
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {formatLibraryType(library.type)} · {library.status}
+            {formatSourceContentClass(library.probe_summary?.dominant_class)} ·{" "}
+            {library.status}
           </div>
+          {library.collections?.length ? (
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {library.collections
+                .map((collection) => `${collection.label} ${collection.count}`)
+                .join(" · ")}
+            </div>
+          ) : null}
         </div>
         <ArrowUpRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
       </div>

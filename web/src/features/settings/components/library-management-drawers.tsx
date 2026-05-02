@@ -112,9 +112,9 @@ export function LibraryDrawer({
     <Drawer direction="right" open={open} onOpenChange={onOpenChange}>
       <DrawerContent className={DRAWER_CLASS_NAME}>
         <DrawerHeader className="border-b border-border/70 text-left">
-          <DrawerTitle>创建媒体库</DrawerTitle>
+          <DrawerTitle>添加内容来源</DrawerTitle>
           <DrawerDescription>
-            选择一个媒体源并挂载目录，创建媒体库。
+            选择一个媒体源目录，Mibo 会快速探测内容类型并在后台自动分类。
           </DrawerDescription>
         </DrawerHeader>
         <ScrollArea className="min-h-0 flex-1">
@@ -137,7 +137,7 @@ export function LibraryDrawer({
             {pending ? (
               <LoaderCircleIcon className="size-4 animate-spin" />
             ) : null}
-            创建
+            添加来源
           </Button>
         </DrawerFooter>
       </DrawerContent>

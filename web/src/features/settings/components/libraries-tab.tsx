@@ -1,24 +1,27 @@
-import { FolderPlusIcon, LoaderCircleIcon, Trash2Icon } from 'lucide-react'
+import { FolderPlusIcon, LoaderCircleIcon, Trash2Icon } from "lucide-react"
 
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from '#/components/ui/card'
-import { Separator } from '#/components/ui/separator'
+} from "#/components/ui/card"
+import { Separator } from "#/components/ui/separator"
 import {
   healthReasonMessage,
   healthReasonTitle,
   healthSeverityClassName,
-} from '#/lib/health-presentation'
-import { formatLibraryType } from '#/lib/library-presentation'
-import type { HealthIssue, Library, MediaSource } from '#/lib/mibo-api'
+} from "#/lib/health-presentation"
+import {
+  formatProbeStatus,
+  formatSourceContentClass,
+} from "#/lib/library-presentation"
+import type { HealthIssue, Library, MediaSource } from "#/lib/mibo-api"
 
-import { EmptyCard, InfoRow } from './settings-aside-card'
+import { EmptyCard, InfoRow } from "./settings-aside-card"
 
 export function LibrariesTab({
   libraries,
@@ -45,14 +48,14 @@ export function LibrariesTab({
     <Card className="rounded-[1.5rem] border-border/60 bg-card/80 py-0 shadow-sm backdrop-blur-sm">
       <CardHeader className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <CardTitle className="text-xl">媒体库</CardTitle>
+          <CardTitle className="text-xl">内容来源</CardTitle>
           <CardDescription className="mt-1">
-            绑定媒体源目录，控制扫描入口和库级管理操作。
+            绑定媒体源目录，Mibo 会探测内容类型并自动分类。
           </CardDescription>
         </div>
         <Button onClick={onCreate}>
           <FolderPlusIcon className="size-4" />
-          创建媒体库
+          添加来源
         </Button>
       </CardHeader>
       <Separator className="bg-border" />
@@ -61,10 +64,10 @@ export function LibrariesTab({
           {libraries.map((library) => {
             const sourceName =
               mediaSources.find(
-                (source) => source.id === library.media_source_id,
+                (source) => source.id === library.media_source_id
               )?.name ?? `媒体源 #${library.media_source_id}`
             const issue = healthIssues.find((entry) =>
-              entry.affected.libraries.some((ref) => ref.id === library.id),
+              entry.affected.libraries.some((ref) => ref.id === library.id)
             )
 
             return (
@@ -79,7 +82,9 @@ export function LibrariesTab({
                       className="border-border/60 bg-muted text-foreground"
                       variant="outline"
                     >
-                      {formatLibraryType(library.type)}
+                      {formatSourceContentClass(
+                        library.probe_summary?.dominant_class
+                      )}
                     </Badge>
                   </CardTitle>
                   <CardDescription>绑定媒体源：{sourceName}</CardDescription>
@@ -91,6 +96,31 @@ export function LibrariesTab({
                     value={`${library.paths?.filter((path) => path.enabled).length || 1} 个路径`}
                   />
                   <InfoRow label="状态" value={library.status} />
+                  <InfoRow
+                    label="探测"
+                    value={formatProbeStatus(
+                      library.probe_summary?.status || library.probe_status
+                    )}
+                  />
+                  {library.probe_summary ? (
+                    <InfoRow
+                      label="样本"
+                      value={`${library.probe_summary.sampled_files} 个文件 / ${library.probe_summary.sampled_dirs} 个目录${library.probe_summary.budget_limited ? " · 已达预算" : ""}`}
+                    />
+                  ) : null}
+                  {library.collections?.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {library.collections.map((collection) => (
+                        <Badge
+                          key={collection.content_class}
+                          variant="outline"
+                          className="border-border/60 bg-muted/60 text-muted-foreground"
+                        >
+                          {collection.label} {collection.count}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
                   {issue ? (
                     <div className="rounded-[1rem] border border-destructive/30 bg-destructive/5 p-3 text-sm">
                       <Badge
@@ -106,13 +136,13 @@ export function LibrariesTab({
                   ) : null}
                   <InfoRow
                     label="扫描"
-                    value={library.scanner_enabled ? '已启用' : '已关闭'}
+                    value={library.scanner_enabled ? "已启用" : "已关闭"}
                   />
                   <InfoRow
                     label="元数据 Template"
                     value={
                       library.policies?.metadata?.metadata_profile_name ||
-                      '迁移默认配置'
+                      "迁移默认配置"
                     }
                   />
                   <div className="flex justify-end gap-2 pt-2">
@@ -148,7 +178,7 @@ export function LibrariesTab({
           })}
 
           {!libraries.length && !isLoading ? (
-            <EmptyCard text="还没有媒体库，点击上方按钮创建一个媒体库。" />
+            <EmptyCard text="还没有内容来源，点击上方按钮添加一个目录。" />
           ) : null}
         </div>
       </CardContent>

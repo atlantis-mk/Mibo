@@ -41,9 +41,9 @@ export function ScheduleList({
         <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
           创建扫描、清理或链接检查任务后，这里会按维护类别显示上次运行时间、耗时和手动执行入口。
         </p>
-        <Button className="mt-5" onClick={onCreate}>
-          新建计划任务
-        </Button>
+        <div className="mt-5">
+          <Button onClick={onCreate}>新建计划任务</Button>
+        </div>
       </div>
     )
   }
@@ -93,29 +93,32 @@ export function ScheduleList({
                     </p>
 
                     <div className="flex flex-wrap gap-2 text-xs">
-                      <button
+                      <Button
                         type="button"
-                        className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        variant="link"
+                        size="xs"
                         onClick={() => onShowHistory(schedule)}
                       >
                         查看历史
-                      </button>
+                      </Button>
                       <span className="text-border">/</span>
-                      <button
+                      <Button
                         type="button"
-                        className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        variant="link"
+                        size="xs"
                         onClick={() => onEdit(schedule)}
                       >
                         编辑
-                      </button>
+                      </Button>
                       <span className="text-border">/</span>
-                      <button
+                      <Button
                         type="button"
-                        className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        variant="link"
+                        size="xs"
                         onClick={() => onToggle(schedule)}
                       >
                         {schedule.enabled ? '停用' : '启用'}
-                      </button>
+                      </Button>
                       <span className="text-muted-foreground">
                         {formatLatestResult(schedule)}
                       </span>
@@ -126,7 +129,6 @@ export function ScheduleList({
                     type="button"
                     variant="outline"
                     size="icon"
-                    className="size-11 rounded-full border-primary/35 text-primary hover:bg-primary hover:text-primary-foreground sm:justify-self-end"
                     disabled={running}
                     onClick={() => onRunNow(schedule)}
                   >

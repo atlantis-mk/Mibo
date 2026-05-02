@@ -652,6 +652,14 @@ func (s *Service) GetGovernanceWorkspace(ctx context.Context, itemID uint) (Cata
 	if err != nil {
 		return CatalogGovernanceWorkspace{}, err
 	}
+	classification, err := s.loadCatalogClassificationDecisions(ctx, item)
+	if err != nil {
+		return CatalogGovernanceWorkspace{}, err
+	}
+	classificationRules, err := s.loadCatalogClassificationRules(ctx, item.LibraryID)
+	if err != nil {
+		return CatalogGovernanceWorkspace{}, err
+	}
 
 	children, err := s.ListChildren(ctx, item.ID)
 	if err != nil {
@@ -669,8 +677,33 @@ func (s *Service) GetGovernanceWorkspace(ctx context.Context, itemID uint) (Cata
 		Sources:             sources[item.ID],
 		FieldStates:         fieldStates[item.ID],
 		Assets:              assetsByItem[item.ID],
+		Classification:      classification,
+		ClassificationRules: classificationRules,
 		RecommendedChildren: recommendedChildren,
 	}), nil
+}
+
+func (s *Service) loadCatalogClassificationDecisions(ctx context.Context, item database.CatalogItem) ([]database.ClassificationDecision, error) {
+	var decisions []database.ClassificationDecision
+	query := s.db.WithContext(ctx).
+		Where("library_id = ?", item.LibraryID).
+		Where("item_id = ? OR target_key = ? OR source_path = ?", item.ID, item.Path, item.Path).
+		Order("created_at desc").Order("id desc")
+	if err := query.Find(&decisions).Error; err != nil {
+		return nil, err
+	}
+	return decisions, nil
+}
+
+func (s *Service) loadCatalogClassificationRules(ctx context.Context, libraryID uint) ([]database.ClassificationRule, error) {
+	var rules []database.ClassificationRule
+	if err := s.db.WithContext(ctx).
+		Where("library_id = ? AND enabled = ?", libraryID, true).
+		Order("created_at desc").Order("id desc").
+		Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	return rules, nil
 }
 
 func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]CatalogListItem, error) {

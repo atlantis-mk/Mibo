@@ -9,7 +9,6 @@ import {
   RefreshCwIcon,
 } from "lucide-react"
 
-import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import {
   Dialog,
@@ -75,7 +74,6 @@ export function MediaPosterCard({
   playbackItem,
   progress,
   favorite,
-  libraryName,
   layout = "rail",
   className,
 }: MediaPosterCardProps) {
@@ -187,7 +185,7 @@ export function MediaPosterCard({
   return (
     <article
       className={cn(
-        "group relative transition-transform duration-200 hover:-translate-y-1 [content-visibility:auto]",
+        "group relative transition-transform duration-200 [content-visibility:auto] hover:-translate-y-1",
         layout === "grid"
           ? "w-full min-w-0 [contain-intrinsic-size:220px_533px]"
           : "w-[172px] shrink-0 [contain-intrinsic-size:204px_533px] sm:w-[204px]",
@@ -232,26 +230,8 @@ export function MediaPosterCard({
               {formatMediaCardYearRange(item)}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge
-              className="rounded-full border-border/50 bg-background/80 px-2 py-0.5 text-[10px]"
-              variant="outline"
-            >
-              {mediaType === "movie" ? "电影" : "剧集"}
-            </Badge>
-            {libraryName ? (
-              <span className="min-w-0 truncate text-[10px] text-muted-foreground">
-                {libraryName}
-              </span>
-            ) : null}
-          </div>
           <div className="relative z-20 flex items-center gap-2">
-            <Button
-              asChild
-              size="icon-sm"
-              variant="outline"
-              className="size-8 rounded-full border-border/50 bg-background/80"
-            >
+            <Button asChild size="icon-sm" variant="outline">
               <Link
                 to="/media/$id"
                 params={{ id: String(item.id) }}
@@ -266,10 +246,6 @@ export function MediaPosterCard({
               type="button"
               size="icon-sm"
               variant="outline"
-              className={cn(
-                "size-8 rounded-full border-border/50 bg-background/80",
-                isFavorite ? "text-rose-400" : "text-muted-foreground"
-              )}
               disabled={!token || favoriteMutation.isPending}
               onClick={() => favoriteMutation.mutate(!isFavorite)}
             >
@@ -286,7 +262,6 @@ export function MediaPosterCard({
                   type="button"
                   size="icon-sm"
                   variant="outline"
-                  className="size-8 rounded-full border-border/50 bg-background/80 text-muted-foreground"
                   disabled={!token}
                 >
                   <MoreHorizontalIcon className="size-3.5" />

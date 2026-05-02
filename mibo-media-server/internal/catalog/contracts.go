@@ -54,6 +54,64 @@ type CatalogFieldState struct {
 	EditedAt       *time.Time `json:"edited_at,omitempty"`
 }
 
+type CatalogClassificationEvidence struct {
+	Kind   string   `json:"kind"`
+	Source string   `json:"source,omitempty"`
+	Value  string   `json:"value,omitempty"`
+	Weight *float64 `json:"weight,omitempty"`
+}
+
+type CatalogClassificationAlternative struct {
+	Type       string   `json:"type"`
+	Role       string   `json:"role,omitempty"`
+	TargetKind string   `json:"target_kind,omitempty"`
+	TargetKey  string   `json:"target_key,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+}
+
+type CatalogClassificationDecision struct {
+	ID             uint                                `json:"id"`
+	SourcePath     string                              `json:"source_path"`
+	DecisionType   string                              `json:"decision_type"`
+	Role           string                              `json:"role,omitempty"`
+	CandidateType  string                              `json:"candidate_type,omitempty"`
+	TargetKind     string                              `json:"target_kind,omitempty"`
+	TargetKey      string                              `json:"target_key,omitempty"`
+	Status         string                              `json:"status"`
+	Confidence     *float64                            `json:"confidence,omitempty"`
+	Alternatives   []CatalogClassificationAlternative  `json:"alternatives"`
+	Evidence       []CatalogClassificationEvidence     `json:"evidence"`
+	AffectedFiles  []string                            `json:"affected_files"`
+	CorrectionActs []CatalogClassificationCorrection   `json:"correction_actions"`
+	Reason         string                              `json:"reason,omitempty"`
+	Warnings       []string                            `json:"warnings"`
+	CreatedAt      time.Time                           `json:"created_at"`
+	UpdatedAt      time.Time                           `json:"updated_at"`
+	ResolvedAt     *time.Time                          `json:"resolved_at,omitempty"`
+}
+
+type CatalogClassificationCorrection struct {
+	Action      string `json:"action"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type CatalogClassificationRuleSummary struct {
+	ID              uint   `json:"id"`
+	LibraryID       uint   `json:"library_id"`
+	Key             string `json:"key"`
+	Name            string `json:"name"`
+	PathPattern     string `json:"path_pattern"`
+	RuleType        string `json:"rule_type"`
+	Role            string `json:"role,omitempty"`
+	CandidateType   string `json:"candidate_type,omitempty"`
+	SeriesTitle     string `json:"series_title,omitempty"`
+	SeasonNumber    *int   `json:"season_number,omitempty"`
+	NumberingSource string `json:"numbering_source,omitempty"`
+	Enabled         bool   `json:"enabled"`
+}
+
 type CatalogChildSummary struct {
 	ChildCount      int        `json:"child_count"`
 	AvailableCount  int        `json:"available_count"`
@@ -337,6 +395,8 @@ type CatalogGovernanceWorkspace struct {
 	SourceEvidence      []CatalogSourceEvidence   `json:"source_evidence"`
 	FieldStates         []CatalogFieldState       `json:"field_states"`
 	Assets              []CatalogAssetDetail      `json:"assets"`
+	Classification      []CatalogClassificationDecision `json:"classification_decisions"`
+	ClassificationRules []CatalogClassificationRuleSummary `json:"classification_rules"`
 	RecommendedChildren []CatalogListItem         `json:"recommended_children"`
 	MetadataOperation   any                       `json:"metadata_operation,omitempty"`
 }
@@ -407,6 +467,8 @@ type CatalogGovernanceWorkspaceInput struct {
 	Sources             []database.MetadataSource
 	FieldStates         []database.MetadataFieldState
 	Assets              []CatalogAssetDetail
+	Classification      []database.ClassificationDecision
+	ClassificationRules []database.ClassificationRule
 	RecommendedChildren []CatalogListItem
 }
 
@@ -616,6 +678,8 @@ func BuildCatalogGovernanceWorkspace(input CatalogGovernanceWorkspaceInput) Cata
 		SourceEvidence:      buildCatalogSourceEvidence(input.Sources),
 		FieldStates:         buildCatalogFieldStates(input.FieldStates),
 		Assets:              ensureCatalogAssetDetails(input.Assets),
+		Classification:      buildCatalogClassificationDecisions(input.Classification),
+		ClassificationRules: buildCatalogClassificationRuleSummaries(input.ClassificationRules),
 		RecommendedChildren: ensureCatalogListItems(input.RecommendedChildren),
 	}
 }
@@ -778,6 +842,105 @@ func buildCatalogFieldStates(states []database.MetadataFieldState) []CatalogFiel
 		})
 	}
 	return fieldStates
+}
+
+func buildCatalogClassificationDecisions(decisions []database.ClassificationDecision) []CatalogClassificationDecision {
+	if decisions == nil {
+		return []CatalogClassificationDecision{}
+	}
+	items := make([]CatalogClassificationDecision, 0, len(decisions))
+	for _, decision := range decisions {
+		items = append(items, CatalogClassificationDecision{
+			ID:             decision.ID,
+			SourcePath:     strings.TrimSpace(decision.SourcePath),
+			DecisionType:   strings.TrimSpace(decision.DecisionType),
+			Role:           strings.TrimSpace(decision.Role),
+			CandidateType:  strings.TrimSpace(decision.CandidateType),
+			TargetKind:     strings.TrimSpace(decision.TargetKind),
+			TargetKey:      strings.TrimSpace(decision.TargetKey),
+			Status:         strings.TrimSpace(decision.Status),
+			Confidence:     decision.Confidence,
+			Alternatives:   decodeCatalogClassificationAlternatives(decision.AlternativesJSON),
+			Evidence:       decodeCatalogClassificationEvidence(decision.EvidenceJSON),
+			AffectedFiles:  decodeCatalogStringList(decision.AffectedFilesJSON),
+			CorrectionActs: catalogClassificationCorrectionActions(decision),
+			Reason:         strings.TrimSpace(decision.Reason),
+			Warnings:       decodeCatalogStringList(decision.WarningsJSON),
+			CreatedAt:      decision.CreatedAt,
+			UpdatedAt:      decision.UpdatedAt,
+			ResolvedAt:     decision.ResolvedAt,
+		})
+	}
+	return items
+}
+
+func buildCatalogClassificationRuleSummaries(rules []database.ClassificationRule) []CatalogClassificationRuleSummary {
+	if rules == nil {
+		return []CatalogClassificationRuleSummary{}
+	}
+	items := make([]CatalogClassificationRuleSummary, 0, len(rules))
+	for _, rule := range rules {
+		items = append(items, CatalogClassificationRuleSummary{
+			ID:              rule.ID,
+			LibraryID:       rule.LibraryID,
+			Key:             strings.TrimSpace(rule.Key),
+			Name:            strings.TrimSpace(rule.Name),
+			PathPattern:     strings.TrimSpace(rule.PathPattern),
+			RuleType:        strings.TrimSpace(rule.RuleType),
+			Role:            strings.TrimSpace(rule.Role),
+			CandidateType:   strings.TrimSpace(rule.CandidateType),
+			SeriesTitle:     strings.TrimSpace(rule.SeriesTitle),
+			SeasonNumber:    rule.SeasonNumber,
+			NumberingSource: strings.TrimSpace(rule.NumberingSource),
+			Enabled:         rule.Enabled,
+		})
+	}
+	return items
+}
+
+func decodeCatalogClassificationAlternatives(raw string) []CatalogClassificationAlternative {
+	if strings.TrimSpace(raw) == "" {
+		return []CatalogClassificationAlternative{}
+	}
+	var decoded []CatalogClassificationAlternative
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return []CatalogClassificationAlternative{}
+	}
+	return decoded
+}
+
+func decodeCatalogClassificationEvidence(raw string) []CatalogClassificationEvidence {
+	if strings.TrimSpace(raw) == "" {
+		return []CatalogClassificationEvidence{}
+	}
+	var decoded []CatalogClassificationEvidence
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return []CatalogClassificationEvidence{}
+	}
+	return decoded
+}
+
+func decodeCatalogStringList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	var decoded []string
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return []string{}
+	}
+	return decoded
+}
+
+func catalogClassificationCorrectionActions(decision database.ClassificationDecision) []CatalogClassificationCorrection {
+	if strings.TrimSpace(decision.Status) != "review_required" {
+		return []CatalogClassificationCorrection{}
+	}
+	return []CatalogClassificationCorrection{
+		{Action: "episode_sequence", Label: "Treat as episode sequence", Description: "Create or update a series/season episode group."},
+		{Action: "movie_versions", Label: "Treat as one movie with versions", Description: "Link sibling videos as versions of one movie."},
+		{Action: "independent_movies", Label: "Treat as independent movies", Description: "Keep sibling videos as separate movie works."},
+		{Action: "attachment", Label: "Treat as attachment", Description: "Attach the file as a trailer, extra, sample, or related video."},
+	}
 }
 
 func buildCatalogChildSummary(rollup *database.ItemRollup) *CatalogChildSummary {

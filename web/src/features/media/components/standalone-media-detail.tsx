@@ -230,18 +230,13 @@ export function StandaloneMediaDetail({
                 label="返回上一页"
                 onClick={onGoBack}
               />
-              <Button
-                asChild
-                variant="ghost"
-                size="icon-sm"
-                className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              >
+              <Button asChild variant="ghost" size="icon-sm">
                 <Link to="/">
                   <Home className="size-4.5" />
                   <span className="sr-only">返回首页</span>
                 </Link>
               </Button>
-              <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+              <SidebarTrigger />
               <div className="min-w-0 pl-1">
                 {showHeaderLogo && item.logo_url ? (
                   <img
@@ -262,11 +257,7 @@ export function StandaloneMediaDetail({
             <div className="hidden items-center gap-2 text-muted-foreground md:flex">
               <Dialog>
                 <DialogTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  >
+                  <Button variant="ghost" size="icon-sm">
                     <Tv className="size-4.5" />
                     <span className="sr-only">投屏</span>
                   </Button>
@@ -281,12 +272,7 @@ export function StandaloneMediaDetail({
                   </DialogHeader>
                 </DialogContent>
               </Dialog>
-              <Button
-                asChild
-                variant="ghost"
-                size="icon-sm"
-                className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              >
+              <Button asChild variant="ghost" size="icon-sm">
                 <Link to="/search" search={{ q: undefined }}>
                   <Search className="size-4.5" />
                   <span className="sr-only">搜索</span>
@@ -294,11 +280,7 @@ export function StandaloneMediaDetail({
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  >
+                  <Button variant="ghost" size="icon-sm">
                     <User className="size-4.5" />
                     <span className="sr-only">用户菜单</span>
                   </Button>
@@ -320,12 +302,7 @@ export function StandaloneMediaDetail({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button
-                asChild
-                variant="ghost"
-                size="icon-sm"
-                className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              >
+              <Button asChild variant="ghost" size="icon-sm">
                 <Link to="/settings">
                   <Settings className="size-4.5" />
                   <span className="sr-only">进入设置</span>
@@ -422,12 +399,7 @@ function TopBarIconButton({
   onClick: () => void
 }) {
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      className="size-9 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      onClick={onClick}
-    >
+    <Button variant="ghost" size="icon-sm" onClick={onClick}>
       {icon}
       <span className="sr-only">{label}</span>
     </Button>

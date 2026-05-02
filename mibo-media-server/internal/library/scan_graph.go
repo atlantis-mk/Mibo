@@ -30,14 +30,35 @@ type scanGraphEdge struct {
 }
 
 type scanDecision struct {
-	Type         string
-	TargetKind   string
-	TargetKey    string
-	Confidence   *float64
-	EvidenceRefs []string
-	Reason       string
-	Warnings     []string
-	CreatedAt    time.Time
+	Type          string
+	TargetKind    string
+	TargetKey     string
+	Role          string
+	CandidateType string
+	Status        string
+	Confidence    *float64
+	Alternatives  []scanDecisionAlternative
+	Evidence      []scanDecisionEvidence
+	EvidenceRefs  []string
+	Reason        string
+	Warnings      []string
+	CreatedAt     time.Time
+}
+
+type scanDecisionAlternative struct {
+	Type       string
+	Role       string
+	TargetKind string
+	TargetKey  string
+	Confidence *float64
+	Reason     string
+}
+
+type scanDecisionEvidence struct {
+	Kind   string
+	Source string
+	Value  string
+	Weight *float64
 }
 
 const (
@@ -60,4 +81,53 @@ const (
 	scanDecisionMovieGroup  = "movie_group"
 	scanDecisionAssetLink   = "asset_link"
 	scanDecisionEpisodeSlot = "episode_slot"
+
+	scanDecisionRoleMain              = "main"
+	scanDecisionRoleTrailer           = "trailer"
+	scanDecisionRoleExtra             = "extra"
+	scanDecisionRoleSample            = "sample"
+	scanDecisionRoleUnknownAttachment = "unknown_attachment"
+
+	scanDecisionCandidateMovie            = "movie"
+	scanDecisionCandidateEpisode          = "episode"
+	scanDecisionCandidateAttachment       = "attachment"
+	scanDecisionCandidateMovieVersion     = "movie_version"
+	scanDecisionCandidateIndependentMovie = "independent_movie"
+
+	scanDecisionStatusConfirmedFast  = "confirmed_fast"
+	scanDecisionStatusProvisional    = "provisional"
+	scanDecisionStatusReviewRequired = "review_required"
 )
+
+var defaultFastClassificationThresholds = fastClassificationThresholds{
+	Confirmed: 0.80,
+	Review:    0.50,
+	Margin:    0.15,
+}
+
+type fastClassificationThresholds struct {
+	Confirmed float64
+	Review    float64
+	Margin    float64
+}
+
+func classifyFastDecisionStatus(confidence float64, alternatives []scanDecisionAlternative, thresholds fastClassificationThresholds) string {
+	if thresholds.Confirmed <= 0 {
+		thresholds = defaultFastClassificationThresholds
+	}
+	if confidence < thresholds.Review {
+		return scanDecisionStatusReviewRequired
+	}
+	for _, alternative := range alternatives {
+		if alternative.Confidence == nil {
+			continue
+		}
+		if confidence-*alternative.Confidence < thresholds.Margin {
+			return scanDecisionStatusReviewRequired
+		}
+	}
+	if confidence >= thresholds.Confirmed {
+		return scanDecisionStatusConfirmedFast
+	}
+	return scanDecisionStatusProvisional
+}

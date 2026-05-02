@@ -34,7 +34,6 @@ import { StrategyStageField } from "./library-settings-drawer"
 
 export type LibraryFormState = {
   name: string
-  type: string
   mediaSourceId: string
   rootPath: string
   scan: LibraryScanPolicy
@@ -45,33 +44,8 @@ export type LibraryFormState = {
   scanExclusionRules: LibraryScanExclusionRuleDraft[]
 }
 
-type LibraryTypeOption = {
-  value: string
-  label: string
-  description: string
-}
-
-const LIBRARY_TYPE_OPTIONS: readonly LibraryTypeOption[] = [
-  {
-    value: "movies",
-    label: "电影库",
-    description: "适合电影和独立视频内容。",
-  },
-  {
-    value: "shows",
-    label: "剧集库",
-    description: "适合剧集、综艺和分季内容。",
-  },
-  {
-    value: "mixed",
-    label: "混合内容",
-    description: "适合同一目录下同时包含电影和多集内容。",
-  },
-]
-
 export const EMPTY_LIBRARY_FORM: LibraryFormState = {
   name: "",
-  type: "movies",
   mediaSourceId: "",
   rootPath: "",
   scan: {
@@ -137,7 +111,12 @@ export function deriveLibraryNameFromPath(path: string): string {
   const trimmedPath = path.trim().replace(/[\\/]+$/, "")
   if (!trimmedPath) return ""
 
-  return trimmedPath.split(/[\\/]+/).filter(Boolean).at(-1) ?? ""
+  return (
+    trimmedPath
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .at(-1) ?? ""
+  )
 }
 
 function applyMetadataProfileToDraft(
@@ -198,9 +177,6 @@ export function LibraryForm({
   metadataProviderInstances: MetadataProviderInstance[]
   api: ReturnType<typeof createAuthedMiboApi> | null
 }) {
-  const selectedLibraryType =
-    LIBRARY_TYPE_OPTIONS.find((option) => option.value === draft.type) ??
-    LIBRARY_TYPE_OPTIONS[0]
   const selectedSource =
     mediaSources.find((source) => String(source.id) === draft.mediaSourceId) ??
     null
@@ -229,7 +205,7 @@ export function LibraryForm({
         <div className="space-y-1">
           <h3 className="text-base font-medium">存储位置</h3>
           <p className="text-sm text-muted-foreground">
-            选择已有媒体源，媒体库会挂载到它的某个目录下。
+            选择已有媒体源，Mibo 会从这个目录开始探测和扫描内容。
           </p>
         </div>
         <Field>
@@ -263,14 +239,15 @@ export function LibraryForm({
 
       <section className="grid gap-4">
         <div className="space-y-1">
-          <h3 className="text-base font-medium">媒体库信息</h3>
+          <h3 className="text-base font-medium">内容来源信息</h3>
           <p className="text-sm text-muted-foreground">
-            填写显示名称并选择内容类型。
+            填写显示名称即可。Mibo
+            会在后台自动识别视频、音乐、文本以及电影或剧集语义。
           </p>
         </div>
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4">
           <Field>
-            <FieldLabel>媒体库名称</FieldLabel>
+            <FieldLabel>来源名称</FieldLabel>
             <Input
               value={draft.name}
               onChange={(event) =>
@@ -293,27 +270,6 @@ export function LibraryForm({
               </div>
             ) : null}
           </Field>
-          <Field>
-            <FieldLabel>媒体库类型</FieldLabel>
-            <Select
-              value={draft.type}
-              onValueChange={(value) => onChange({ ...draft, type: value })}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择媒体库类型" />
-              </SelectTrigger>
-              <SelectContent>
-                {LIBRARY_TYPE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs leading-5 text-muted-foreground">
-              {selectedLibraryType.description}
-            </p>
-          </Field>
         </div>
       </section>
 
@@ -323,7 +279,7 @@ export function LibraryForm({
         <div className="space-y-1">
           <h3 className="text-base font-medium">挂载路径</h3>
           <p className="text-sm text-muted-foreground">
-            浏览媒体源目录，选择这个媒体库要管理的起始路径。
+            浏览媒体源目录，选择这个内容来源的起始路径。
           </p>
         </div>
         <PathPicker
@@ -335,7 +291,7 @@ export function LibraryForm({
           placeholder={selectedSource?.root_path || "/"}
           selectCurrentOnBrowse
           ready={!!selectedSource}
-          lockedMessage="先选择媒体源，再选择媒体库路径。"
+          lockedMessage="先选择媒体源，再选择来源路径。"
         />
       </section>
 
@@ -406,7 +362,7 @@ export function LibraryForm({
           <div>
             <h4 className="text-sm font-medium">排除规则</h4>
             <p className="text-xs leading-5 text-muted-foreground">
-              规则会随媒体库一起保存，并在扫描时跳过匹配的视频。
+              规则会随内容来源一起保存，并在扫描时跳过匹配的视频。
             </p>
           </div>
           <LibraryScanExclusionRulesEditor
@@ -453,7 +409,7 @@ export function LibraryForm({
             </SelectContent>
           </Select>
           <p className="text-xs leading-5 text-muted-foreground">
-            创建时会把下方阶段配置保存成媒体库自己的执行策略。
+            创建时会把下方阶段配置保存成内容来源自己的执行策略。
           </p>
           {selectedMetadataProfile?.locked ? (
             <p className="text-xs leading-5 text-muted-foreground">

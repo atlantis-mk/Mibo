@@ -358,12 +358,12 @@ function ProfileRow({
   const Icon = profile.kind === 'custom' ? TvIcon : MonitorIcon
 
   return (
-    <button
+    <Button
       type="button"
       onClick={() => onSelectProfile(profile.id)}
-      className="flex w-full items-center gap-3 rounded-[1.15rem] border border-border/60 bg-background/70 px-4 py-3 text-left transition hover:border-emerald-500/50 hover:bg-emerald-500/5"
+      variant="outline"
     >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/60 bg-muted/30">
+      <span className="flex size-10 shrink-0 items-center justify-center">
         <Icon className="size-4 text-muted-foreground" />
       </span>
       <span className="min-w-0 flex-1">
@@ -380,7 +380,7 @@ function ProfileRow({
         </span>
       </span>
       <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
-    </button>
+    </Button>
   )
 }
 
@@ -491,25 +491,24 @@ function DlnaProfileDetail({
 
         <div className="space-y-2">
           {profileGroups.map((group) => (
-            <button
+            <Button
               key={group}
               type="button"
-              className="flex w-full items-center gap-3 rounded-[1.15rem] border border-border/60 bg-muted/30 px-4 py-3 text-left transition hover:border-emerald-500/50 hover:bg-emerald-500/5"
+              variant="outline"
             >
-              <span className="flex size-9 items-center justify-center rounded-lg border border-border/60 bg-background/80">
+              <span className="flex size-9 items-center justify-center">
                 <ServerIcon className="size-4 text-muted-foreground" />
               </span>
               <span className="flex-1 text-sm font-medium text-foreground">
                 {group}
               </span>
               <ChevronRightIcon className="size-4 text-muted-foreground" />
-            </button>
+            </Button>
           ))}
         </div>
 
         <Button
           size="lg"
-          className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
           onClick={() => toast.success('Profile 配置已保存')}
         >
           保存

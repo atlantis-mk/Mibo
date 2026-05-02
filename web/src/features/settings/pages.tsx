@@ -136,7 +136,7 @@ export function SettingsDevicesPage() {
     <SettingsNamedPage
       sectionKey="devices"
       actions={
-        <Button variant="ghost" size="icon" className="rounded-full">
+        <Button variant="ghost" size="icon">
           <span className="sr-only">设备帮助</span>
           <HelpCircleIcon className="size-4" />
         </Button>
@@ -154,7 +154,7 @@ export function SettingsDlnaPage() {
     <SettingsNamedPage
       sectionKey="dlna"
       actions={
-        <Button variant="ghost" size="icon" className="rounded-full">
+        <Button variant="ghost" size="icon">
           <span className="sr-only">DLNA 帮助</span>
           <HelpCircleIcon className="size-4" />
         </Button>
@@ -411,18 +411,15 @@ function SegmentedControl<Value extends string>({
   return (
     <div className="inline-flex rounded-lg border border-border/60 bg-muted/30 p-1">
       {options.map((option) => (
-        <button
+        <Button
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
-          className={`rounded-md px-3 py-1.5 text-sm transition ${
-            value === option.value
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
+          variant={value === option.value ? "outline" : "ghost"}
+          size="sm"
         >
           {option.label}
-        </button>
+        </Button>
       ))}
     </div>
   )

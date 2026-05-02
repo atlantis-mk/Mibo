@@ -43,6 +43,7 @@ type InventoryFile struct {
 	SizeBytes         int64      `gorm:"not null;default:0" json:"size_bytes"`
 	ModifiedAt        *time.Time `gorm:"index" json:"modified_at,omitempty"`
 	Container         string     `gorm:"size:64;index" json:"container"`
+	ContentClass      string     `gorm:"size:64;not null;default:video;index" json:"content_class"`
 	Status            string     `gorm:"size:64;not null;default:available;index;index:idx_inventory_files_library_status_path,priority:2" json:"status"`
 	MissingSince      *time.Time `gorm:"index" json:"missing_since,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
@@ -124,6 +125,61 @@ type ScanExclusionRule struct {
 
 func (ScanExclusionRule) TableName() string {
 	return "scan_exclusion_rules"
+}
+
+type ClassificationDecision struct {
+	ID                uint       `gorm:"primaryKey" json:"id"`
+	LibraryID         uint       `gorm:"not null;index;index:idx_classification_decisions_library_status,priority:1" json:"library_id"`
+	InventoryFileID   *uint      `gorm:"index" json:"inventory_file_id,omitempty"`
+	AssetID           *uint      `gorm:"index" json:"asset_id,omitempty"`
+	ItemID            *uint      `gorm:"index" json:"item_id,omitempty"`
+	SourcePath        string     `gorm:"size:2048;not null;index" json:"source_path"`
+	DecisionType      string     `gorm:"size:64;not null;index" json:"decision_type"`
+	Role              string     `gorm:"size:64;index" json:"role"`
+	CandidateType     string     `gorm:"size:64;index" json:"candidate_type"`
+	TargetKind        string     `gorm:"size:64;index" json:"target_kind"`
+	TargetKey         string     `gorm:"size:1024;index" json:"target_key"`
+	Status            string     `gorm:"size:64;not null;index;index:idx_classification_decisions_library_status,priority:2" json:"status"`
+	Confidence        *float64   `json:"confidence,omitempty"`
+	AlternativesJSON  string     `gorm:"type:text" json:"alternatives_json"`
+	EvidenceJSON      string     `gorm:"type:text" json:"evidence_json"`
+	AffectedFilesJSON string     `gorm:"type:text" json:"affected_files_json"`
+	Reason            string     `gorm:"size:1024" json:"reason"`
+	WarningsJSON      string     `gorm:"type:text" json:"warnings_json"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ResolvedAt        *time.Time `gorm:"index" json:"resolved_at,omitempty"`
+}
+
+func (ClassificationDecision) TableName() string {
+	return "classification_decisions"
+}
+
+type ClassificationRule struct {
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	LibraryID       uint       `gorm:"not null;index;index:idx_classification_rules_library_enabled,priority:1" json:"library_id"`
+	Key             string     `gorm:"size:255;not null;uniqueIndex" json:"key"`
+	Name            string     `gorm:"size:255;not null" json:"name"`
+	Description     string     `gorm:"size:1024" json:"description"`
+	PathPattern     string     `gorm:"size:2048;not null;index" json:"path_pattern"`
+	RuleType        string     `gorm:"size:64;not null;index" json:"rule_type"`
+	Role            string     `gorm:"size:64;index" json:"role"`
+	CandidateType   string     `gorm:"size:64;index" json:"candidate_type"`
+	SeriesTitle     string     `gorm:"size:512" json:"series_title"`
+	SeasonNumber    *int       `gorm:"index" json:"season_number,omitempty"`
+	NumberingSource string     `gorm:"size:64" json:"numbering_source"`
+	PayloadJSON     string     `gorm:"type:text" json:"payload_json"`
+	Enabled         bool       `gorm:"not null;index;index:idx_classification_rules_library_enabled,priority:2" json:"enabled"`
+	System          bool       `gorm:"not null;index" json:"system"`
+	CreatedByUserID *uint      `gorm:"index" json:"created_by_user_id,omitempty"`
+	UpdatedByUserID *uint      `gorm:"index" json:"updated_by_user_id,omitempty"`
+	DisabledAt      *time.Time `json:"disabled_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+func (ClassificationRule) TableName() string {
+	return "classification_rules"
 }
 
 type AssetFile struct {

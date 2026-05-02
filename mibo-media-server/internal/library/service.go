@@ -44,7 +44,7 @@ type MediaSourceView struct {
 
 type CreateLibraryInput struct {
 	Name               string                                       `json:"name"`
-	Type               string                                       `json:"type"`
+	Type               string                                       `json:"type,omitempty"`
 	MediaSourceID      uint                                         `json:"media_source_id"`
 	RootPath           string                                       `json:"root_path"`
 	Scan               *LibraryScanPolicyView                       `json:"scan,omitempty"`

@@ -1,5 +1,8 @@
-## ADDED Requirements
+# filename-exclusion-groups Specification
 
+## Purpose
+TBD - created by syncing change add-filename-exclusion-groups. Update Purpose after archive.
+## Requirements
 ### Requirement: Filename Exclusion Impact Preview
 The system SHALL provide an authenticated preview for same-name exclusion impact before creating a filename exclusion rule. The preview SHALL include all sources and SHALL use the backend's normalized filename matching semantics.
 

@@ -41,6 +41,18 @@ type catalogGovernanceEpisodeNumberingInput struct {
 	EpisodeNumberEnd *int `json:"episode_number_end"`
 }
 
+type catalogGovernanceClassificationRuleInput struct {
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	PathPattern     string `json:"path_pattern"`
+	RuleType        string `json:"rule_type"`
+	Role            string `json:"role"`
+	CandidateType   string `json:"candidate_type"`
+	SeriesTitle     string `json:"series_title"`
+	SeasonNumber    *int   `json:"season_number"`
+	NumberingSource string `json:"numbering_source"`
+}
+
 type scanExclusionMarkInput struct {
 	Reason string `json:"reason"`
 }
@@ -453,6 +465,57 @@ func (r *Router) handleCorrectCatalogEpisodeNumbering(w http.ResponseWriter, req
 	}
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
+}
+
+func (r *Router) handleCreateCatalogGovernanceClassificationRule(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), itemID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input catalogGovernanceClassificationRuleInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	createdBy := user.ID
+	if _, err := r.catalog.CreateClassificationRule(req.Context(), catalog.ClassificationRuleInput{
+		LibraryID:       workspace.LibraryID,
+		Name:            input.Name,
+		Description:     input.Description,
+		PathPattern:     input.PathPattern,
+		RuleType:        input.RuleType,
+		Role:            input.Role,
+		CandidateType:   input.CandidateType,
+		SeriesTitle:     input.SeriesTitle,
+		SeasonNumber:    input.SeasonNumber,
+		NumberingSource: input.NumberingSource,
+		CreatedByUserID: &createdBy,
+	}); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	workspace, err = r.catalog.GetGovernanceWorkspace(req.Context(), itemID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
+	writeJSON(req.Context(), w, http.StatusCreated, workspace)
 }
 
 func (r *Router) handleLinkCatalogGovernanceAsset(w http.ResponseWriter, req *http.Request) {

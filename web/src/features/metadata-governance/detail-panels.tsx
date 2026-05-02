@@ -19,6 +19,7 @@ import { Separator } from '#/components/ui/separator'
 import { Textarea } from '#/components/ui/textarea'
 import type {
   CatalogAssetDetail,
+  CatalogClassificationDecision,
   CatalogFieldState,
   CatalogGovernanceWorkspace,
   CatalogListItem,
@@ -28,7 +29,11 @@ import type {
 } from '#/lib/mibo-api'
 
 import { ArtworkPreview, CandidateCard, SummaryRow } from './detail-sections'
-import { formatMediaType } from './formatters'
+import {
+  formatClassificationStatus,
+  formatClassificationType,
+  formatMediaType,
+} from './formatters'
 
 type MetadataDraft = {
   title: string
@@ -208,7 +213,7 @@ export function CandidateSearchCard({
             />
           </Field>
           <div className="flex items-end">
-            <Button className="w-full" onClick={onSearch} disabled={isPending}>
+            <Button onClick={onSearch} disabled={isPending}>
               {isPending ? (
                 <LoaderCircleIcon className="size-4 animate-spin" />
               ) : (
@@ -456,6 +461,86 @@ export function FieldLocksCard({
           ))
         ) : (
           <div className="text-sm text-muted-foreground">当前没有字段锁。</div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+export function ClassificationReviewCard({
+  decisions,
+}: {
+  decisions: CatalogClassificationDecision[]
+}) {
+  return (
+    <Card className="rounded-[1.5rem] border-border/60 bg-card/80 py-0 shadow-sm">
+      <CardHeader className="px-5 py-5">
+        <CardTitle>分类复核</CardTitle>
+        <CardDescription>
+          展示扫描器对电影、单集、版本和附属视频的候选判断。
+        </CardDescription>
+      </CardHeader>
+      <Separator className="bg-border" />
+      <CardContent className="space-y-3 px-5 py-5">
+        {decisions.length ? (
+          decisions.map((decision) => (
+            <div
+              key={decision.id}
+              className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3 text-sm"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium text-foreground">
+                    {formatClassificationType(decision.candidate_type ?? '')}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {decision.source_path}
+                  </div>
+                </div>
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                  {formatClassificationStatus(decision.status)}
+                </span>
+              </div>
+              <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
+                <div>
+                  置信度：
+                  {typeof decision.confidence === 'number'
+                    ? `${Math.round(decision.confidence * 100)}%`
+                    : '未记录'}
+                </div>
+                {decision.reason ? <div>原因：{decision.reason}</div> : null}
+                {decision.alternatives.length ? (
+                  <div>
+                    备选：
+                    {decision.alternatives
+                      .map((item) => formatClassificationType(item.type))
+                      .join('、')}
+                  </div>
+                ) : null}
+                {decision.evidence.length ? (
+                  <div>
+                    证据：
+                    {decision.evidence
+                      .slice(0, 3)
+                      .map((item) => item.value || item.kind)
+                      .join('、')}
+                  </div>
+                ) : null}
+                {decision.correction_actions.length ? (
+                  <div>
+                    可选操作：
+                    {decision.correction_actions
+                      .map((action) => action.label)
+                      .join('、')}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="text-sm text-muted-foreground">
+            当前没有需要展示的分类复核项。
+          </div>
         )}
       </CardContent>
     </Card>

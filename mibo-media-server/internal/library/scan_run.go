@@ -7,6 +7,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
@@ -226,7 +227,9 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 	if err != nil {
 		return err
 	}
-	directoryDecision := resolveDirectoryShape(library.Type, library.RootPath, decisionSnapshot)
+	classificationLibraryType := effectiveVideoLibraryType(library.Type)
+	directoryDecision := resolveDirectoryShape(classificationLibraryType, library.RootPath, decisionSnapshot)
+	directorySummary := mode.directorySummary(classificationLibraryType, library.RootPath, decisionSnapshot)
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Path < objects[j].Path })
 	for _, object := range objects {
 		if err := ctx.Err(); err != nil {
@@ -243,6 +246,12 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 			continue
 		}
 		if !isVideoFile(object.Path) {
+			if className := classifySourceObject(object.Path); className != SourceContentClassOther {
+				if err := s.upsertNonVideoInventoryFile(ctx, provider, library, object, className); err != nil {
+					return err
+				}
+				result.InventoryFilesSeen++
+			}
 			continue
 		}
 		exclusion, err := s.scanExclusionDecisionWithRules(ctx, library, provider.Name(), object, exclusionRules)
@@ -259,12 +268,15 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 		}
 		result.FilesSeen++
 		seenFiles[object.Path] = struct{}{}
-		if shouldSkipTVDirectoryExtra(library.Type, directoryDecision, object) {
+		if shouldSkipTVDirectoryExtra(classificationLibraryType, directoryDecision, object) {
 			continue
 		}
-		classified := classifyMediaFileWithDirectoryDecision(library.Type, library.RootPath, object, snapshot.Path, directoryDecision)
-		artifact, itemPaths := catalogScanArtifactFromObject(provider.Name(), library.Type, library.RootPath, object, classified)
+		classified := classifyMediaFileWithDirectorySummary(classificationLibraryType, library.RootPath, object, snapshot.Path, directoryDecision, decisionSnapshot, directorySummary)
+		artifact, itemPaths := catalogScanArtifactFromObject(provider.Name(), classificationLibraryType, library.RootPath, object, classified)
 		if decision := scanDecisionFromDirectoryShape(directoryDecision, artifact); strings.TrimSpace(decision.Type) != "" {
+			artifact.Decisions = append(artifact.Decisions, decision)
+		}
+		if decision := scanDecisionFromAttachmentRole(object.Path, artifact); strings.TrimSpace(decision.Type) != "" {
 			artifact.Decisions = append(artifact.Decisions, decision)
 		}
 		artifact = s.applyCatalogScanSidecars(ctx, provider, artifact, sidecars.matchesForVideoWithFolderMetadata(object.Path, artifactAllowsFolderMetadata(snapshot.Path, artifact)), subtitlePolicy)
@@ -294,9 +306,29 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 		}
 		if writeResult.File.ID != 0 {
 			mode.recordInventoryProbeCandidate(writeResult.File.ID)
+			if catalogScanArtifactNeedsClassificationValidation(artifact) {
+				mode.recordClassificationValidationCandidate(writeResult.File.ID)
+			}
 		}
 	}
 	return nil
+}
+
+func (s *Service) upsertNonVideoInventoryFile(ctx context.Context, provider storage.Provider, library database.Library, object storage.Object, className string) error {
+	container := strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), ".")
+	_, err := inventory.NewService(s.db).UpsertFile(ctx, inventory.UpsertFileInput{
+		LibraryID:         library.ID,
+		StorageProvider:   provider.Name(),
+		StoragePath:       object.Path,
+		StableIdentityKey: strings.TrimSpace(object.StableIdentity),
+		HashesJSON:        encodeHashInfo(object.HashInfo),
+		SizeBytes:         object.Size,
+		ModifiedAt:        object.Modified,
+		Container:         container,
+		ContentClass:      className,
+		Status:            inventory.FileStatusAvailable,
+	})
+	return err
 }
 
 func (s *Service) queuePostScanEnrichment(ctx context.Context, libraryID uint, rootPath string, mode scanMode) error {
@@ -306,7 +338,19 @@ func (s *Service) queuePostScanEnrichment(ctx context.Context, libraryID uint, r
 	if _, err := s.QueueInventoryProbeBatch(ctx, libraryID, rootPath, mode.inventoryProbeFileIDs); err != nil {
 		return err
 	}
+	if _, err := s.QueueInventoryProbeBatch(ctx, libraryID, rootPath, mode.classificationFileIDs); err != nil {
+		return err
+	}
 	return nil
+}
+
+func catalogScanArtifactNeedsClassificationValidation(artifact catalogScanArtifact) bool {
+	for _, decision := range artifact.Decisions {
+		if decision.Status == scanDecisionStatusProvisional || decision.Status == scanDecisionStatusReviewRequired {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) directoryShapeSnapshot(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy) (scanDirectorySnapshot, error) {
@@ -395,6 +439,37 @@ func (s *Service) collectDirectorySnapshot(ctx context.Context, provider storage
 	return scanDirectorySnapshot{Path: dirPath, Objects: objects, Sidecars: buildSidecarIndex(provider.Name(), objects)}, nil
 }
 
+func scanDecisionFromAttachmentRole(sourcePath string, artifact catalogScanArtifact) scanDecision {
+	extraType := videoFileRoleSignal(sourcePath)
+	if strings.TrimSpace(extraType) == "" {
+		return scanDecision{}
+	}
+	confidence := 0.9
+	role := scanDecisionRoleExtra
+	switch extraType {
+	case "trailer":
+		role = scanDecisionRoleTrailer
+	case "sample":
+		role = scanDecisionRoleSample
+	}
+	return scanDecision{
+		Type:          scanDecisionAssetLink,
+		TargetKind:    artifact.ItemType,
+		TargetKey:     artifact.ItemPath,
+		Role:          role,
+		CandidateType: scanDecisionCandidateAttachment,
+		Status:        scanDecisionStatusConfirmedFast,
+		Confidence:    &confidence,
+		Evidence: []scanDecisionEvidence{{
+			Kind:   "filename_role",
+			Source: "path",
+			Value:  extraType,
+		}},
+		Reason:    "video filename or path indicates an attachment role",
+		CreatedAt: time.Now().UTC(),
+	}
+}
+
 func catalogScanArtifactFromObject(storageProvider string, libraryType string, libraryRoot string, object storage.Object, classified classifiedMedia) (catalogScanArtifact, []string) {
 	artifact := catalogScanArtifact{
 		SourcePath:           object.Path,
@@ -415,9 +490,17 @@ func catalogScanArtifactFromObject(storageProvider string, libraryType string, l
 		Container:            strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), "."),
 		NormalizationVersion: classified.NormalizationVersion,
 		RemovedTokens:        append([]titleclean.RemovedToken(nil), classified.RemovedTokens...),
+		FilenameSignals:      classified.FilenameSignals,
 	}
 
 	if classified.Type == "episode" {
+		if assetType, assetRole := movieExtraAssetDisposition(classified.SourcePath); strings.TrimSpace(assetType) != "" || strings.TrimSpace(assetRole) != "" {
+			artifact.ItemType = catalog.ItemTypeMovie
+			artifact.ItemPath = movieCatalogItemPath(libraryType, libraryRoot, classified.SourcePath, classified.Title)
+			artifact.PreferredAssetType = assetType
+			artifact.PreferredAssetRole = assetRole
+			return artifact, catalogScanItemPaths(artifact)
+		}
 		artifact.ItemType = catalog.ItemTypeEpisode
 		artifact.SeriesPath = canonicalSeriesPath(classified.SeriesTitle)
 		if classified.SeasonNumber != nil {
@@ -459,7 +542,7 @@ func movieExtraAssetDisposition(sourcePath string) (string, string) {
 		return inventory.AssetTypeTrailer, inventory.AssetItemRoleTrailer
 	case "sample":
 		return inventory.AssetTypeSample, inventory.AssetItemRoleExtra
-	case "behind_the_scenes", "featurette", "interview", "deleted_scene":
+	case "behind_the_scenes", "featurette", "preview", "interview", "deleted_scene":
 		return inventory.AssetTypeExtra, inventory.AssetItemRoleExtra
 	default:
 		return "", ""

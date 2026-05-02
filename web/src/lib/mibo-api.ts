@@ -190,13 +190,16 @@ export type AdminLogContent = {
 export type Library = {
   id: number
   name: string
-  type: string
   media_source_id: number
   root_path: string
   status: string
   scanner_enabled: boolean
+  probe_status: string
+  probe_summary_json?: string
   paths?: LibraryPath[]
   policies?: LibraryPolicies
+  probe_summary?: SourceProbeSummary
+  collections?: SourceCollection[]
 }
 
 export type LibraryDetail = Library & {
@@ -211,6 +214,28 @@ export type LibraryPath = {
   root_path: string
   display_name: string
   enabled: boolean
+}
+
+export type SourceContentClass = "video" | "audio" | "text" | "image" | "other"
+
+export type SourceProbeSummary = {
+  status: string
+  dominant_class: SourceContentClass | ""
+  uncertain: boolean
+  budget_limited: boolean
+  sampled_objects: number
+  sampled_files: number
+  sampled_dirs: number
+  max_objects: number
+  max_depth: number
+  classes: Record<SourceContentClass, number>
+  error?: string
+}
+
+export type SourceCollection = {
+  content_class: SourceContentClass
+  label: string
+  count: number
 }
 
 export type LibraryScanPolicy = {
@@ -831,6 +856,64 @@ export type CatalogMetadataOperation = {
   warnings?: CatalogMetadataOperationWarning[]
 }
 
+export type CatalogClassificationEvidence = {
+  kind: string
+  source?: string
+  value?: string
+  weight?: number
+}
+
+export type CatalogClassificationAlternative = {
+  type: string
+  role?: string
+  target_kind?: string
+  target_key?: string
+  confidence?: number
+  reason?: string
+}
+
+export type CatalogClassificationCorrection = {
+  action: string
+  label: string
+  description?: string
+}
+
+export type CatalogClassificationDecision = {
+  id: number
+  source_path: string
+  decision_type: string
+  role?: string
+  candidate_type?: string
+  target_kind?: string
+  target_key?: string
+  status: string
+  confidence?: number
+  alternatives: CatalogClassificationAlternative[]
+  evidence: CatalogClassificationEvidence[]
+  affected_files: string[]
+  correction_actions: CatalogClassificationCorrection[]
+  reason?: string
+  warnings: string[]
+  created_at: string
+  updated_at: string
+  resolved_at?: string
+}
+
+export type CatalogClassificationRuleSummary = {
+  id: number
+  library_id: number
+  key: string
+  name: string
+  path_pattern: string
+  rule_type: string
+  role?: string
+  candidate_type?: string
+  series_title?: string
+  season_number?: number
+  numbering_source?: string
+  enabled: boolean
+}
+
 export type CatalogGovernanceWorkspace = {
   item_id: number
   library_id: number
@@ -844,6 +927,8 @@ export type CatalogGovernanceWorkspace = {
   source_evidence?: CatalogSourceEvidence[]
   field_states?: CatalogFieldState[]
   assets?: CatalogAssetDetail[]
+  classification_decisions?: CatalogClassificationDecision[]
+  classification_rules?: CatalogClassificationRuleSummary[]
   recommended_children?: CatalogListItem[]
   metadata_operation?: CatalogMetadataOperation
 }
@@ -1437,10 +1522,10 @@ export function createMiboApi(options: ApiOptions) {
       return request<MediaSource[]>("/api/v1/media-sources")
     },
     browseStorageProvider(provider: string, path?: string) {
-      const query = path ? `?path=${encodeURIComponent(path)}` : ""
-      return request<StorageBrowseResult>(
-        `/api/v1/storage/providers/${provider}/browse${query}`
-      )
+      return request<StorageBrowseResult>("/api/v1/storage/providers/browse", {
+        method: "POST",
+        body: JSON.stringify({ provider, path }),
+      })
     },
     browseOpenList(input: {
       path?: string
@@ -1492,10 +1577,10 @@ export function createMiboApi(options: ApiOptions) {
       )
     },
     browseMediaSource(mediaSourceId: number, path?: string) {
-      const query = path ? `?path=${encodeURIComponent(path)}` : ""
-      return request<StorageBrowseResult>(
-        `/api/v1/media-sources/${mediaSourceId}/browse${query}`
-      )
+      return request<StorageBrowseResult>("/api/v1/media-sources/browse", {
+        method: "POST",
+        body: JSON.stringify({ id: mediaSourceId, path }),
+      })
     },
     validateMediaSource(mediaSourceId: number) {
       return request<MediaSourceValidationResult>(
@@ -1627,7 +1712,6 @@ export function createMiboApi(options: ApiOptions) {
     },
     createLibrary(input: {
       name: string
-      type: string
       media_source_id: number
       root_path: string
       scan?: LibraryScanPolicy
@@ -1637,7 +1721,7 @@ export function createMiboApi(options: ApiOptions) {
       subtitle?: LibrarySubtitlePolicy
       scan_exclusion_rules?: ScanExclusionRuleInput[]
     }) {
-      return request<{ library: Library }>("/api/v1/libraries", {
+      return request<{ library: LibraryDetail }>("/api/v1/libraries", {
         method: "POST",
         body: JSON.stringify(input),
       })

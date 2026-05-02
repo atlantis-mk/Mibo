@@ -276,7 +276,7 @@ export function MetadataProviderSettingsPanel({
             当前页面需要管理员会话来读取和更新 provider instances 与 metadata
             profiles。
           </span>
-          <Button asChild variant="outline" className="w-fit">
+          <Button asChild variant="outline">
             <Link
               to="/login"
               search={{

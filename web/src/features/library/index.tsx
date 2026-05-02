@@ -263,12 +263,12 @@ export default function LibraryDetail({ libraryId }: { libraryId: number }) {
         contentClassName="max-w-none"
         leftSlot={
           <>
-            <SidebarTrigger className="rounded-full border border-border/50 bg-background/80 text-foreground hover:bg-accent hover:text-accent-foreground" />
+            <SidebarTrigger />
             <Button
               asChild
               size="icon-sm"
               variant="outline"
-              className="hidden rounded-full border-border/50 bg-background/80 sm:inline-flex"
+              className="hidden sm:inline-flex"
             >
               <Link to="/">
                 <HomeIcon className="size-4" />
@@ -555,12 +555,7 @@ function TopBarActions({
   return (
     <>
       <div className="flex items-center gap-2 sm:hidden">
-        <Button
-          asChild
-          size="icon-sm"
-          variant="outline"
-          className="rounded-full border-border/50 bg-background/80"
-        >
+        <Button asChild size="icon-sm" variant="outline">
           <Link to="/search" search={{ q: undefined }}>
             <SearchIcon className="size-4" />
             <span className="sr-only">搜索</span>
@@ -568,11 +563,7 @@ function TopBarActions({
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80"
-            >
+            <Button size="icon-sm" variant="outline">
               <MoreHorizontalIcon className="size-4" />
               <span className="sr-only">更多操作</span>
             </Button>
@@ -593,18 +584,9 @@ function TopBarActions({
         </DropdownMenu>
       </div>
       <div className="hidden items-center gap-2 sm:flex">
-        <Badge className="border-border/50 bg-background/80" variant="outline">
-          电影 {movieCount}
-        </Badge>
-        <Badge className="border-border/50 bg-background/80" variant="outline">
-          剧集 {showCount}
-        </Badge>
-        <Button
-          asChild
-          size="icon-sm"
-          variant="outline"
-          className="rounded-full border-border/50 bg-background/80"
-        >
+        <Badge variant="outline">电影 {movieCount}</Badge>
+        <Badge variant="outline">剧集 {showCount}</Badge>
+        <Button asChild size="icon-sm" variant="outline">
           <Link to="/search" search={{ q: undefined }}>
             <SearchIcon className="size-4" />
             <span className="sr-only">搜索</span>
@@ -612,11 +594,7 @@ function TopBarActions({
         </Button>
         <Dialog>
           <DialogTrigger asChild>
-            <Button
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80"
-            >
+            <Button size="icon-sm" variant="outline">
               <CastIcon className="size-4" />
               <span className="sr-only">投屏</span>
             </Button>
@@ -633,11 +611,7 @@ function TopBarActions({
         </Dialog>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              size="icon-sm"
-              variant="outline"
-              className="rounded-full border-border/50 bg-background/80"
-            >
+            <Button size="icon-sm" variant="outline">
               <UserCircleIcon className="size-4" />
               <span className="sr-only">用户菜单</span>
             </Button>
@@ -663,12 +637,7 @@ function TopBarActions({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button
-          asChild
-          size="icon-sm"
-          variant="outline"
-          className="rounded-full border-border/50 bg-background/80"
-        >
+        <Button asChild size="icon-sm" variant="outline">
           <Link to="/settings">
             <Settings2Icon className="size-4" />
             <span className="sr-only">进入设置</span>

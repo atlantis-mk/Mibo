@@ -209,6 +209,10 @@ func parseOptionalUintQuery(req *http.Request, key string) (uint, error) {
 	return uint(parsed), nil
 }
 
+func errMissingJSONField(key string) error {
+	return fmt.Errorf("missing JSON field %q", key)
+}
+
 func parseOptionalIntQuery(req *http.Request, key string) (int, bool, error) {
 	value := strings.TrimSpace(req.URL.Query().Get(key))
 	if value == "" {

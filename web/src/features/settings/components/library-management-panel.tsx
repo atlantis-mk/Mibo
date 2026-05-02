@@ -203,11 +203,10 @@ export function LibraryManagementPanel({
 
   const createLibraryMutation = useMutation({
     mutationFn: async () => {
-      if (!api) throw new Error("当前未登录，无法创建媒体库。")
+      if (!api) throw new Error("当前未登录，无法添加内容来源。")
 
       return api.createLibrary({
         name: libraryDraft.name,
-        type: libraryDraft.type,
         media_source_id: Number(libraryDraft.mediaSourceId),
         root_path: libraryDraft.rootPath,
         scan: libraryDraft.scan,
@@ -219,14 +218,14 @@ export function LibraryManagementPanel({
       })
     },
     onSuccess: async () => {
-      setActionMessage("媒体库已创建。")
+      setActionMessage("内容来源已添加，Mibo 正在后台扫描。")
       setIsCreateLibraryOpen(false)
       setLibraryDraft({ ...EMPTY_LIBRARY_FORM })
       await invalidateData()
     },
     onError: (error) => {
       setActionMessage(
-        error instanceof Error ? error.message : "创建媒体库失败。"
+        error instanceof Error ? error.message : "添加内容来源失败。"
       )
     },
   })

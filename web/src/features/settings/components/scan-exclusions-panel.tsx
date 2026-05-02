@@ -474,9 +474,11 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
       <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
         请检查当前登录状态或稍后重试。
       </p>
-      <Button className="mt-4" variant="outline" onClick={onRetry}>
-        重新加载
-      </Button>
+      <div className="mt-4">
+        <Button variant="outline" onClick={onRetry}>
+          重新加载
+        </Button>
+      </div>
     </div>
   )
 }

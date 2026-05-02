@@ -443,8 +443,8 @@ func TestRunSyncLibraryMixedClassifiesMultipleNonExtraVideosAsSeries(t *testing.
 	showDir := filepath.Join(mixedRoot, "Unsorted Show")
 	mustWriteFixtureFile(t, filepath.Join(showDir, "trailer.mp4"))
 	mustWriteFixtureFile(t, filepath.Join(showDir, "behind-the-scenes.mkv"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "alpha.mkv"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "episode.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "Unsorted.Show.S01E01.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "Unsorted.Show.S01E02.mkv"))
 
 	mixedLibrary := createDirectScanLibrary(t, ctx, svc, "Mixed", "mixed", mixedRoot)
 	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(mixedLibrary.ID, mixedLibrary.RootPath)); err != nil {
@@ -479,6 +479,59 @@ func TestRunSyncLibraryMixedClassifiesMultipleNonExtraVideosAsSeries(t *testing.
 	}
 	if movies != 0 {
 		t.Fatalf("expected no movies for mixed multi-video folder, got %d", movies)
+	}
+}
+
+func TestRunSyncLibraryAutoClassifiesMovieVersionsAsOneMovie(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	movieDir := filepath.Join(rootPath, "Blade Runner (1982)")
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Blade Runner 1080p.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(movieDir, "Blade Runner 2160p.mkv"))
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Auto", LibraryTypeAuto, rootPath)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run auto sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected one movie for auto movie versions, got %#v", movies)
+	}
+	var assets int64
+	if err := db.WithContext(ctx).Model(&database.MediaAsset{}).Where("library_id = ?", libraryRecord.ID).Count(&assets).Error; err != nil {
+		t.Fatalf("count assets: %v", err)
+	}
+	if assets != 2 {
+		t.Fatalf("expected two assets for movie versions, got %d", assets)
+	}
+}
+
+func TestRunSyncLibraryMarksLowConfidenceAutoClassificationForReview(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	ambiguousDir := filepath.Join(rootPath, "Ambiguous Pack")
+	mustWriteFixtureFile(t, filepath.Join(ambiguousDir, "alpha.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(ambiguousDir, "beta.mkv"))
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Auto", LibraryTypeAuto, rootPath)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run auto sync: %v", err)
+	}
+
+	var movie database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).First(&movie).Error; err != nil {
+		t.Fatalf("load auto movie: %v", err)
+	}
+	if movie.GovernanceStatus != catalog.GovernanceNeedsReview {
+		t.Fatalf("expected low-confidence auto decision to need review, got %#v", movie)
 	}
 }
 
