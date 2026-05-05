@@ -7,3 +7,12 @@ demo-media/
 .DS_Store
 __pycache__/
 *.pyc
+.claude/
+.opencode/skills/mibo-deploy-webui/
+mibo-media-server/.opencode/
+mibo-media-server/openspec/
+web/.agents/
+web/.claude/
+web/.opencode/
+web/openspec/
+web/skills-lock.json
