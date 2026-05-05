@@ -1,6 +1,28 @@
 OpenList/
 !mibo-media-server/internal/storage/openlist/
 !mibo-media-server/internal/storage/openlist/**
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime output
+*.log
+*.pid
+
+# Test, coverage, and compiler artifacts
+coverage/
+coverage.out
+*.prof
+*.test
+*.out
+*.tsbuildinfo
+.vite/
+.vitest/
+.cache/
+
+# Editor and OS files
 .idea/
 .vscode/
 demo-media/
