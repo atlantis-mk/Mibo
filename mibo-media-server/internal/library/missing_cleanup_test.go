@@ -10,8 +10,8 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -30,7 +30,7 @@ func TestCleanupMissingMediaHardDeletesRowsOlderThanRetention(t *testing.T) {
 	assertMissingCleanupRowGone(t, ctx, db, &database.InventoryFile{}, file.ID)
 	assertMissingCleanupRowGone(t, ctx, db, &database.MediaAsset{}, asset.ID)
 	assertMissingCleanupRowGone(t, ctx, db, &database.CatalogItem{}, item.ID)
-	assertRawTableCount(t, db, "jobs", "kind = ?", 1, JobKindCatalogRefreshLibraryProjection)
+	assertRawTableCount(t, db, "workflow_tasks", "task_type = ?", 1, workflow.TaskTypeRefreshProjection)
 }
 
 func TestCleanupMissingMediaPreservesRowsYoungerThanRetention(t *testing.T) {
@@ -168,7 +168,7 @@ func newMissingCleanupHarness(t *testing.T, retention time.Duration) (context.Co
 		t.Fatalf("open database: %v", err)
 	}
 	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: rootPath}, Cleanup: config.CleanupConfig{MissingCleanupEnabled: true, MissingRetention: retention, MissingCleanupBatchSize: 100}}
-	svc := NewService(cfg, db, providers.NewRegistry(cfg), jobs.NewService(db))
+	svc := NewService(cfg, db, providers.NewRegistry(cfg), nil)
 	source, err := svc.CreateMediaSource(ctx, CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: rootPath})
 	if err != nil {
 		t.Fatalf("create media source: %v", err)

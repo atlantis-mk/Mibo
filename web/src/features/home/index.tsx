@@ -37,6 +37,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "#/components/ui/tooltip"
+import { Tabs, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import { AppTopBar } from "#/components/app-top-bar"
 import { SidebarTrigger } from "#/components/ui/sidebar"
 import { createAuthedMiboApi, homeDataQueryOptions } from "#/lib/mibo-query"
@@ -105,6 +106,12 @@ export default function Home() {
     await navigate({ to: "/login", search: { redirect: "/" }, replace: true })
   }
 
+  const handlePrimaryTabChange = (value: string) => {
+    if (value === "favorites") {
+      void navigate({ to: "/favorites" })
+    }
+  }
+
   if (!hasHydrated || (token && homeQuery.isLoading)) {
     return (
       <div className="flex h-svh w-full items-center justify-center bg-background text-foreground">
@@ -160,14 +167,20 @@ export default function Home() {
       leftSlot={
         <>
           <SidebarTrigger />
-          <div className="hidden rounded-full border border-border/50 bg-background/80 p-1 sm:flex">
-            <Button asChild size="sm">
-              <Link to="/">首页</Link>
-            </Button>
-            <Button asChild size="sm" variant="ghost">
-              <Link to="/favorites">收藏</Link>
-            </Button>
-          </div>
+          <Tabs
+            value="home"
+            onValueChange={handlePrimaryTabChange}
+            className="flex"
+          >
+            <TabsList className="rounded-full border border-border/50 bg-background/80 p-1">
+              <TabsTrigger value="home" className="h-8 rounded-full px-3">
+                首页
+              </TabsTrigger>
+              <TabsTrigger value="favorites" className="h-8 rounded-full px-3">
+                收藏
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <div className="flex min-w-0 items-baseline gap-2">
             <div className="shrink-0 text-lg font-semibold">Mibo Home</div>
             <div className="truncate text-xs text-muted-foreground">
@@ -232,7 +245,7 @@ export default function Home() {
               </Tooltip>
             </TooltipProvider>
           ) : null}
-          <Button asChild size="icon-sm" variant="outline">
+          <Button asChild size="icon" variant="ghost">
             <Link to="/search" search={{ q: undefined }}>
               <SearchIcon className="size-4" />
               <span className="sr-only">搜索</span>
@@ -240,7 +253,7 @@ export default function Home() {
           </Button>
           <Dialog>
             <DialogTrigger asChild>
-              <Button size="icon-sm" variant="outline">
+              <Button size="icon" variant="ghost">
                 <CastIcon className="size-4" />
                 <span className="sr-only">投屏</span>
               </Button>
@@ -257,7 +270,7 @@ export default function Home() {
           </Dialog>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="icon-sm" variant="outline">
+              <Button size="icon" variant="ghost">
                 <UserCircleIcon className="size-4" />
                 <span className="sr-only">用户菜单</span>
               </Button>
@@ -289,7 +302,7 @@ export default function Home() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button asChild size="icon-sm" variant="outline">
+          <Button asChild size="icon" variant="ghost">
             <Link to="/settings">
               <Settings2Icon className="size-4" />
               <span className="sr-only">进入设置</span>
@@ -370,15 +383,6 @@ export default function Home() {
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
       {topBar}
       <div className="relative">
-        {homeState.isPartiallyDegraded ? (
-          <div className="absolute inset-x-4 top-24 z-20 rounded-[1.25rem] border border-amber-500/30 bg-background/85 px-4 py-3 text-sm text-amber-700 shadow-lg backdrop-blur-xl sm:inset-x-6 lg:inset-x-8 dark:text-amber-300">
-            部分媒体库存在健康问题，可用内容会继续展示。前往
-            <Link to="/settings/health" className="mx-1 font-medium underline">
-              健康中心
-            </Link>
-            查看影响范围。
-          </div>
-        ) : null}
         <HeroCarousel
           heroItems={heroItems}
           canLoopHeroItems={canLoopHeroItems}

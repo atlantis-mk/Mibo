@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
@@ -30,6 +32,7 @@ type Service struct {
 	storage *providers.Registry
 	cfg     config.FFprobeConfig
 	ffmpeg  config.FFmpegConfig
+	ingest  *ingest.Service
 }
 
 type ffprobeOutput struct {
@@ -79,10 +82,15 @@ type Track struct {
 	Channels int    `json:"channels,omitempty"`
 }
 
-func NewService(db *gorm.DB, registry *providers.Registry, cfg config.FFprobeConfig, args ...config.FFmpegConfig) *Service {
+func NewService(db *gorm.DB, registry *providers.Registry, cfg config.FFprobeConfig, args ...any) *Service {
 	service := &Service{db: db, storage: registry, cfg: cfg}
-	if len(args) > 0 {
-		service.ffmpeg = args[0]
+	for _, arg := range args {
+		if ffmpeg, ok := arg.(config.FFmpegConfig); ok {
+			service.ffmpeg = ffmpeg
+		}
+		if ingestSvc, ok := arg.(*ingest.Service); ok {
+			service.ingest = ingestSvc
+		}
 	}
 	return service
 }
@@ -178,7 +186,7 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 		}
 
 		if runtimeSeconds != nil {
-			if err := updateCatalogRuntimeForInventoryFile(tx, file.ID, *runtimeSeconds); err != nil {
+			if err := s.updateCatalogRuntimeForInventoryFile(ctx, tx, file.ID, *runtimeSeconds); err != nil {
 				return err
 			}
 		}
@@ -191,6 +199,7 @@ func (s *Service) ProbeInventoryFile(ctx context.Context, inventoryFileID uint) 
 		return s.markInventoryProbeError(ctx, file.ID, err)
 	}
 	s.tryGenerateCatalogFallbackArtwork(ctx, file, provider, target, runtimeSeconds)
+	s.markProbeDirty(ctx, file.ID, file.LibraryID, ingest.ConditionStatusTrue, "probe_completed", "Media probe completed")
 
 	return nil
 }
@@ -357,34 +366,50 @@ func assetIDsForInventoryFile(tx *gorm.DB, inventoryFileID uint) ([]uint, error)
 	return assetIDs, err
 }
 
-func updateCatalogRuntimeForInventoryFile(tx *gorm.DB, inventoryFileID uint, runtimeSeconds int) error {
+func (s *Service) updateCatalogRuntimeForInventoryFile(ctx context.Context, tx *gorm.DB, inventoryFileID uint, runtimeSeconds int) error {
 	subquery := tx.Table("asset_items").
 		Distinct("asset_items.item_id").
 		Joins("JOIN asset_files ON asset_files.asset_id = asset_items.asset_id").
 		Where("asset_files.file_id = ?", inventoryFileID).
 		Where("asset_items.role IN ?", []string{inventory.AssetItemRolePrimary, inventory.AssetItemRoleVersion})
 
-	return tx.Model(&database.CatalogItem{}).
+	var itemIDs []uint
+	if err := tx.Model(&database.CatalogItem{}).
 		Where("id IN (?)", subquery).
 		Where("type IN ?", []string{"movie", "episode"}).
-		Update("runtime_seconds", runtimeSeconds).Error
+		Pluck("id", &itemIDs).Error; err != nil {
+		return err
+	}
+	catalogSvc := catalog.NewService(tx, s.ingest)
+	for _, itemID := range itemIDs {
+		if _, _, err := catalogSvc.ApplyField(ctx, catalog.ApplyFieldInput{ItemID: itemID, FieldKey: "runtime_seconds", Value: runtimeSeconds}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) markInventoryUnavailable(ctx context.Context, inventoryFileID uint, message string) error {
+	libraryID := s.libraryIDForInventoryFile(ctx, inventoryFileID)
 	assetIDs, err := assetIDsForInventoryFile(s.db.WithContext(ctx), inventoryFileID)
 	if err != nil {
 		return err
 	}
 	if len(assetIDs) == 0 {
+		s.markProbeDirty(ctx, inventoryFileID, libraryID, ingest.ConditionStatusSkipped, "probe_unavailable", message)
 		return nil
 	}
-	return s.db.WithContext(ctx).
+	if err := s.db.WithContext(ctx).
 		Model(&database.MediaAsset{}).
 		Where("id IN ?", assetIDs).
 		Updates(map[string]any{
 			"probe_status":           StatusUnavailable,
 			"technical_summary_json": "",
-		}).Error
+		}).Error; err != nil {
+		return err
+	}
+	s.markProbeDirty(ctx, inventoryFileID, libraryID, ingest.ConditionStatusSkipped, "probe_unavailable", message)
+	return nil
 }
 
 func (s *Service) markInventoryProbeError(ctx context.Context, inventoryFileID uint, err error) error {
@@ -392,11 +417,13 @@ func (s *Service) markInventoryProbeError(ctx context.Context, inventoryFileID u
 	if err != nil {
 		message = err.Error()
 	}
+	libraryID := s.libraryIDForInventoryFile(ctx, inventoryFileID)
 	assetIDs, queryErr := assetIDsForInventoryFile(s.db.WithContext(ctx), inventoryFileID)
 	if queryErr != nil {
 		return queryErr
 	}
 	if len(assetIDs) == 0 {
+		s.markProbeDirty(ctx, inventoryFileID, libraryID, ingest.ConditionStatusFailed, "probe_failed", message)
 		return err
 	}
 	if updateErr := s.db.WithContext(ctx).
@@ -408,7 +435,50 @@ func (s *Service) markInventoryProbeError(ctx context.Context, inventoryFileID u
 		}).Error; updateErr != nil {
 		return updateErr
 	}
+	s.markProbeDirty(ctx, inventoryFileID, libraryID, ingest.ConditionStatusFailed, "probe_failed", message)
 	return err
+}
+
+func (s *Service) markProbeDirty(ctx context.Context, inventoryFileID uint, libraryID uint, status string, reason string, message string) {
+	if s.ingest == nil || inventoryFileID == 0 || libraryID == 0 {
+		return
+	}
+	if _, err := s.ingest.MarkInventoryFileDirty(ctx, inventoryFileID, reason); err != nil {
+		log.Printf("probe: mark inventory file %d ingest dirty: %v", inventoryFileID, err)
+	}
+	s.markLinkedProjectionItemsDirty(ctx, inventoryFileID, reason)
+	if _, err := s.ingest.AppendEvent(ctx, database.IngestEvent{UnitKey: "inventory_file:" + strconv.FormatUint(uint64(inventoryFileID), 10), LibraryID: libraryID, InventoryFileID: &inventoryFileID, ConditionType: ingest.ConditionProbed, EventType: ingest.EventConditionChanged, Status: status, Reason: reason, Message: message}); err != nil {
+		log.Printf("probe: append ingest probe event: %v", err)
+	}
+}
+
+func (s *Service) markLinkedProjectionItemsDirty(ctx context.Context, inventoryFileID uint, reason string) {
+	if s.ingest == nil {
+		return
+	}
+	var itemIDs []uint
+	if err := s.db.WithContext(ctx).
+		Model(&database.AssetItem{}).
+		Distinct("asset_items.item_id").
+		Joins("JOIN asset_files ON asset_files.asset_id = asset_items.asset_id").
+		Where("asset_files.file_id = ?", inventoryFileID).
+		Pluck("asset_items.item_id", &itemIDs).Error; err != nil {
+		log.Printf("probe: load linked projection items for inventory file %d: %v", inventoryFileID, err)
+		return
+	}
+	for _, itemID := range itemIDs {
+		if _, err := s.ingest.MarkProjectionItemDirty(ctx, itemID, reason); err != nil {
+			log.Printf("probe: mark item %d projection dirty: %v", itemID, err)
+		}
+	}
+}
+
+func (s *Service) libraryIDForInventoryFile(ctx context.Context, inventoryFileID uint) uint {
+	var file database.InventoryFile
+	if err := s.db.WithContext(ctx).Select("id", "library_id").First(&file, inventoryFileID).Error; err != nil {
+		return 0
+	}
+	return file.LibraryID
 }
 
 func (s *Service) resolveProbeTarget(ctx context.Context, provider storage.Provider, storagePath string) (string, error) {

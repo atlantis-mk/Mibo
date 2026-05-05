@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/ingest"
+	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 )
 
 var serverStartedAt = time.Now()
@@ -55,19 +57,28 @@ type adminConsoleAccessSummary struct {
 }
 
 type adminConsoleMediaSummary struct {
-	Libraries        int64 `json:"libraries"`
-	MediaSources     int64 `json:"media_sources"`
-	CatalogItems     int64 `json:"catalog_items"`
-	InventoryFiles   int64 `json:"inventory_files"`
-	Movies           int64 `json:"movies"`
-	Series           int64 `json:"series"`
-	Episodes         int64 `json:"episodes"`
-	People           int64 `json:"people"`
-	ActiveJobs       int64 `json:"active_jobs"`
-	FailedJobs       int64 `json:"failed_jobs"`
-	Schedules        int64 `json:"schedules"`
-	EnabledSchedules int64 `json:"enabled_schedules"`
-	Warnings         int64 `json:"warnings"`
+	Libraries        int64                     `json:"libraries"`
+	MediaSources     int64                     `json:"media_sources"`
+	CatalogItems     int64                     `json:"catalog_items"`
+	InventoryFiles   int64                     `json:"inventory_files"`
+	Movies           int64                     `json:"movies"`
+	Series           int64                     `json:"series"`
+	Episodes         int64                     `json:"episodes"`
+	People           int64                     `json:"people"`
+	ActiveJobs       int64                     `json:"active_jobs"`
+	FailedJobs       int64                     `json:"failed_jobs"`
+	Schedules        int64                     `json:"schedules"`
+	EnabledSchedules int64                     `json:"enabled_schedules"`
+	Warnings         int64                     `json:"warnings"`
+	Ingest           adminConsoleIngestSummary `json:"ingest"`
+}
+
+type adminConsoleIngestSummary struct {
+	Organizing     int `json:"organizing"`
+	Failed         int `json:"failed"`
+	Stale          int `json:"stale"`
+	ReviewRequired int `json:"review_required"`
+	RetryEligible  int `json:"retry_eligible"`
 }
 
 type adminConsoleHealthSummary struct {
@@ -144,8 +155,8 @@ func (r *Router) handleAdminConsoleSummary(w http.ResponseWriter, req *http.Requ
 			APIAddress:      r.cfg.HTTP.Addr,
 			Port:            configuredPort(r.cfg.HTTP.Addr),
 			UptimeSeconds:   int64(time.Since(serverStartedAt).Seconds()),
-			StorageProvider: configuredStorageProvider(r.cfg),
-			StorageRoot:     storageRootPath(r.cfg),
+			StorageProvider: "暂无",
+			StorageRoot:     "",
 			DatabaseDriver:  r.cfg.Database.Driver,
 		},
 		Access: adminConsoleAccessSummary{Addresses: buildAdminConsoleAccessAddresses(req)},
@@ -175,14 +186,15 @@ func (r *Router) handleAdminConsoleSummary(w http.ResponseWriter, req *http.Requ
 		summary.Warnings = append(summary.Warnings, adminConsoleSectionWarning{Section: "database", Message: err.Error()})
 	}
 
-	if provider, err := r.storage.Get(configuredStorageProvider(r.cfg)); err != nil {
+	if providers, err := configuredMediaSourceProviders(ctx, r); err != nil {
 		summary.Health.Storage = adminConsoleSectionStatus{Status: "warning", Message: err.Error()}
 		summary.Warnings = append(summary.Warnings, adminConsoleSectionWarning{Section: "storage", Message: err.Error()})
-	} else if _, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: storageRootPath(r.cfg)}); err != nil {
-		summary.Health.Storage = adminConsoleSectionStatus{Status: "warning", Message: err.Error()}
-		summary.Warnings = append(summary.Warnings, adminConsoleSectionWarning{Section: "storage", Message: err.Error()})
+	} else if len(providers) == 0 {
+		summary.Health.Storage = adminConsoleSectionStatus{Status: "not_configured", Message: "暂无"}
 	} else {
-		summary.Health.Storage = adminConsoleSectionStatus{Status: "ok", Message: provider.Name()}
+		providerSummary := strings.Join(providers, ", ")
+		summary.Server.StorageProvider = providerSummary
+		summary.Health.Storage = adminConsoleSectionStatus{Status: "ok", Message: providerSummary}
 	}
 
 	countModel(ctx, r, &database.Library{}, &summary.Media.Libraries, &summary.Warnings, "libraries")
@@ -193,10 +205,17 @@ func (r *Router) handleAdminConsoleSummary(w http.ResponseWriter, req *http.Requ
 	countWhere(ctx, r, &database.CatalogItem{}, "type = ?", []any{"movie"}, &summary.Media.Movies, &summary.Warnings, "movies")
 	countWhere(ctx, r, &database.CatalogItem{}, "type = ?", []any{"series"}, &summary.Media.Series, &summary.Warnings, "series")
 	countWhere(ctx, r, &database.CatalogItem{}, "type = ?", []any{"episode"}, &summary.Media.Episodes, &summary.Warnings, "episodes")
-	countWhere(ctx, r, &database.Job{}, "status IN ?", []any{[]string{"queued", "running"}}, &summary.Media.ActiveJobs, &summary.Warnings, "active_jobs")
-	countWhere(ctx, r, &database.Job{}, "status = ?", []any{"failed"}, &summary.Media.FailedJobs, &summary.Warnings, "failed_jobs")
+	countWhere(ctx, r, &database.WorkflowRun{}, "status IN ?", []any{[]string{workflow.RunStatusQueued, workflow.RunStatusRunning}}, &summary.Media.ActiveJobs, &summary.Warnings, "active_workflows")
+	countWhere(ctx, r, &database.WorkflowRun{}, "status = ?", []any{workflow.RunStatusFailed}, &summary.Media.FailedJobs, &summary.Warnings, "failed_workflows")
 	countModel(ctx, r, &database.Schedule{}, &summary.Media.Schedules, &summary.Warnings, "schedules")
 	countWhere(ctx, r, &database.Schedule{}, "enabled = ?", []any{true}, &summary.Media.EnabledSchedules, &summary.Warnings, "enabled_schedules")
+	if r.ingest != nil {
+		if diagnostics, err := r.ingest.Diagnostics(ctx, ingest.DiagnosticsInput{Status: "all", Limit: 500}); err == nil {
+			summary.Media.Ingest = adminConsoleIngestSummary{Organizing: diagnostics.Summary.Organizing, Failed: diagnostics.Summary.Failed, Stale: diagnostics.Summary.Stale, ReviewRequired: diagnostics.Summary.ReviewRequired, RetryEligible: diagnostics.Summary.RetryEligible}
+		} else {
+			summary.Warnings = append(summary.Warnings, adminConsoleSectionWarning{Section: "ingest", Message: err.Error()})
+		}
+	}
 	summary.Media.Warnings = int64(len(summary.Warnings)) + summary.Media.FailedJobs
 
 	summary.Activity = r.buildAdminConsoleActivity(ctx, &summary.Warnings)
@@ -215,16 +234,15 @@ func (r *Router) handleAdminConsoleScanLibraries(w http.ResponseWriter, req *htt
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	jobs := make([]database.Job, 0, len(libraries))
+	queued := 0
 	for _, libraryRecord := range libraries {
-		job, err := r.library.QueueLibraryScan(req.Context(), libraryRecord.ID)
-		if err != nil {
+		if _, err := r.library.QueueLibraryScanWithReason(req.Context(), libraryRecord.ID, library.WorkflowReasonManualScan); err != nil {
 			writeError(req.Context(), w, http.StatusBadRequest, err)
 			return
 		}
-		jobs = append(jobs, job)
+		queued++
 	}
-	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": len(jobs), "jobs": jobs})
+	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": queued})
 }
 
 func (r *Router) handleAdminConsoleCatalogConsistency(w http.ResponseWriter, req *http.Request) {
@@ -261,6 +279,14 @@ func (r *Router) handleAdminConsoleRebuildProjections(w http.ResponseWriter, req
 	writeJSON(req.Context(), w, http.StatusOK, result)
 }
 
+func configuredMediaSourceProviders(ctx context.Context, r *Router) ([]string, error) {
+	providers := []string{}
+	if err := r.db.WithContext(ctx).Model(&database.MediaSource{}).Distinct("provider").Order("provider asc").Pluck("provider", &providers).Error; err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
 func buildAdminConsoleAccessAddresses(req *http.Request) []adminConsoleAccessAddress {
 	baseURL := requestBaseURL(req)
 	addresses := []adminConsoleAccessAddress{
@@ -290,23 +316,23 @@ func buildAdminConsoleQuickActions() []adminConsoleQuickAction {
 
 func (r *Router) buildAdminConsoleActivity(ctx context.Context, warnings *[]adminConsoleSectionWarning) []adminConsoleActivityEvent {
 	events := []adminConsoleActivityEvent{}
-	var jobs []database.Job
-	if err := r.db.WithContext(ctx).Order("updated_at desc").Limit(6).Find(&jobs).Error; err != nil {
+	var runs []database.WorkflowRun
+	if err := r.db.WithContext(ctx).Order("updated_at desc").Limit(6).Find(&runs).Error; err != nil {
 		*warnings = append(*warnings, adminConsoleSectionWarning{Section: "activity", Message: err.Error()})
 		return events
 	}
-	for _, job := range jobs {
+	for _, run := range runs {
 		severity := "info"
-		if job.Status == "failed" {
+		if run.Status == workflow.RunStatusFailed {
 			severity = "error"
-		} else if job.Status == "running" || job.Status == "queued" {
+		} else if run.Status == workflow.RunStatusRunning || run.Status == workflow.RunStatusQueued {
 			severity = "warning"
 		}
-		message := fmt.Sprintf("%s 任务状态：%s", job.Kind, job.Status)
-		if strings.TrimSpace(job.ErrorMessage) != "" {
-			message = message + " - " + job.ErrorMessage
+		message := fmt.Sprintf("%s workflow 状态：%s", run.Reason, run.Status)
+		if strings.TrimSpace(run.ErrorMessage) != "" {
+			message = message + " - " + run.ErrorMessage
 		}
-		events = append(events, adminConsoleActivityEvent{ID: fmt.Sprintf("job-%d", job.ID), Type: "job", Severity: severity, Message: message, Timestamp: job.UpdatedAt.Format(time.RFC3339)})
+		events = append(events, adminConsoleActivityEvent{ID: fmt.Sprintf("workflow-%d", run.ID), Type: "workflow", Severity: severity, Message: message, Timestamp: run.UpdatedAt.Format(time.RFC3339)})
 	}
 	var progressRows []struct {
 		ID           uint

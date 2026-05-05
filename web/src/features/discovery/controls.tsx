@@ -1,15 +1,16 @@
-import { Input } from '#/components/ui/input'
+import { Input } from "#/components/ui/input"
 
 export type DiscoveryFilters = {
   q: string
-  type: 'all' | 'movie' | 'show'
+  type: "all" | "movie" | "show"
   genre: string
   region: string
   year: string
   minRating: string
-  watchedState: 'all' | 'unwatched' | 'in_progress' | 'watched'
-  sort: 'recent' | 'title' | 'year' | 'watch_status'
-  sortDirection: 'asc' | 'desc'
+  watchedState: "all" | "unwatched" | "in_progress" | "watched"
+  organizingState: "all" | "organized" | "unorganized"
+  sort: "recent" | "title" | "year" | "watch_status"
+  sortDirection: "asc" | "desc"
 }
 
 type Props = {
@@ -38,7 +39,7 @@ export function DiscoveryControls({
         onChange={(event) =>
           onChange({
             ...filters,
-            type: event.target.value as DiscoveryFilters['type'],
+            type: event.target.value as DiscoveryFilters["type"],
           })
         }
         className="h-10 rounded-xl border border-input bg-background px-3 text-sm"
@@ -53,7 +54,7 @@ export function DiscoveryControls({
           onChange({
             ...filters,
             watchedState: event.target
-              .value as DiscoveryFilters['watchedState'],
+              .value as DiscoveryFilters["watchedState"],
           })
         }
         className="h-10 rounded-xl border border-input bg-background px-3 text-sm"
@@ -64,11 +65,26 @@ export function DiscoveryControls({
         <option value="watched">已看</option>
       </select>
       <select
+        value={filters.organizingState}
+        onChange={(event) =>
+          onChange({
+            ...filters,
+            organizingState: event.target
+              .value as DiscoveryFilters["organizingState"],
+          })
+        }
+        className="h-10 rounded-xl border border-input bg-background px-3 text-sm"
+      >
+        <option value="all">全部整理状态</option>
+        <option value="organized">已整理</option>
+        <option value="unorganized">未整理</option>
+      </select>
+      <select
         value={filters.sort}
         onChange={(event) =>
           onChange({
             ...filters,
-            sort: event.target.value as DiscoveryFilters['sort'],
+            sort: event.target.value as DiscoveryFilters["sort"],
           })
         }
         className="h-10 rounded-xl border border-input bg-background px-3 text-sm"
@@ -84,7 +100,7 @@ export function DiscoveryControls({
           onChange({
             ...filters,
             sortDirection: event.target
-              .value as DiscoveryFilters['sortDirection'],
+              .value as DiscoveryFilters["sortDirection"],
           })
         }
         className="h-10 rounded-xl border border-input bg-background px-3 text-sm"
@@ -125,17 +141,18 @@ export function DiscoveryControls({
 }
 
 export function createDefaultDiscoveryFilters(
-  initial?: Partial<DiscoveryFilters>,
+  initial?: Partial<DiscoveryFilters>
 ): DiscoveryFilters {
   return {
-    q: initial?.q ?? '',
-    type: initial?.type ?? 'all',
-    genre: initial?.genre ?? '',
-    region: initial?.region ?? '',
-    year: initial?.year ?? '',
-    minRating: initial?.minRating ?? '',
-    watchedState: initial?.watchedState ?? 'all',
-    sort: initial?.sort ?? 'recent',
-    sortDirection: initial?.sortDirection ?? 'desc',
+    q: initial?.q ?? "",
+    type: initial?.type ?? "all",
+    genre: initial?.genre ?? "",
+    region: initial?.region ?? "",
+    year: initial?.year ?? "",
+    minRating: initial?.minRating ?? "",
+    watchedState: initial?.watchedState ?? "all",
+    organizingState: initial?.organizingState ?? "all",
+    sort: initial?.sort ?? "recent",
+    sortDirection: initial?.sortDirection ?? "desc",
   }
 }

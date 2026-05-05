@@ -29,31 +29,31 @@ type OpenListTestResult struct {
 	RootPath string `json:"root_path"`
 }
 
-func (s *Service) BrowseProviderPath(ctx context.Context, providerName, inputPath string) (BrowseResult, error) {
+func (s *Service) BrowseProviderPath(ctx context.Context, providerName, inputPath string, refresh bool) (BrowseResult, error) {
 	provider, err := s.storage.Get(providerName)
 	if err != nil {
 		return BrowseResult{}, err
 	}
 
 	rootPath := s.providerRootPath(provider.Name())
-	return s.browsePath(ctx, provider, rootPath, inputPath)
+	return s.browsePath(ctx, provider, rootPath, inputPath, refresh)
 }
 
-func (s *Service) BrowseMediaSourcePath(ctx context.Context, sourceID uint, inputPath string) (BrowseResult, error) {
+func (s *Service) BrowseMediaSourcePath(ctx context.Context, sourceID uint, inputPath string, refresh bool) (BrowseResult, error) {
 	source, provider, err := s.providerForSource(ctx, sourceID)
 	if err != nil {
 		return BrowseResult{}, err
 	}
 
-	return s.browsePath(ctx, provider, source.RootPath, inputPath)
+	return s.browsePath(ctx, provider, source.RootPath, inputPath, refresh)
 }
 
-func (s *Service) BrowseTemporaryOpenListPath(ctx context.Context, cfg providers.OpenListSourceConfig, inputPath string) (BrowseResult, error) {
+func (s *Service) BrowseTemporaryOpenListPath(ctx context.Context, cfg providers.OpenListSourceConfig, inputPath string, refresh bool) (BrowseResult, error) {
 	provider, err := s.storage.Build("openlist", &providers.SourceConfig{OpenList: &cfg}, "/")
 	if err != nil {
 		return BrowseResult{}, err
 	}
-	return s.browsePath(ctx, provider, "/", inputPath)
+	return s.browsePath(ctx, provider, "/", inputPath, refresh)
 }
 
 func (s *Service) TestTemporaryOpenListConnection(ctx context.Context, cfg providers.OpenListSourceConfig) (OpenListTestResult, error) {
@@ -75,7 +75,7 @@ func (s *Service) TestTemporaryOpenListConnection(ctx context.Context, cfg provi
 	}, nil
 }
 
-func (s *Service) browsePath(ctx context.Context, provider storage.Provider, rootPath, inputPath string) (BrowseResult, error) {
+func (s *Service) browsePath(ctx context.Context, provider storage.Provider, rootPath, inputPath string, refresh bool) (BrowseResult, error) {
 	providerName := provider.Name()
 	normalizedRootPath := normalizePathForProvider(providerName, rootPath)
 	targetPath := normalizePathForProvider(providerName, inputPath)
@@ -97,6 +97,7 @@ func (s *Service) browsePath(ctx context.Context, provider storage.Provider, roo
 
 	objects, err := provider.List(ctx, storage.ListRequest{
 		Path:    targetPath,
+		Refresh: refresh,
 		Page:    1,
 		PerPage: browsePerPage,
 	})

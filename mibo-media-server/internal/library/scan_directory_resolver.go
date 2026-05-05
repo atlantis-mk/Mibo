@@ -44,6 +44,96 @@ type scanDirectorySummary struct {
 	BuildCount             int
 }
 
+type inheritedTVDirectoryContext struct {
+	Active       bool
+	SeriesTitle  string
+	SeasonNumber *int
+	EpisodeOrder map[string]int
+}
+
+type classificationDirectoryCache struct {
+	decisions          map[string]directoryShapeDecision
+	summaries          map[string]scanDirectorySummary
+	inheritedContexts  map[string]inheritedTVDirectoryContext
+	inheritedOrders    map[string]map[string]int
+	filenameExtraFlags map[string]bool
+}
+
+func newClassificationDirectoryCache() *classificationDirectoryCache {
+	return &classificationDirectoryCache{
+		decisions:          make(map[string]directoryShapeDecision),
+		summaries:          make(map[string]scanDirectorySummary),
+		inheritedContexts:  make(map[string]inheritedTVDirectoryContext),
+		inheritedOrders:    make(map[string]map[string]int),
+		filenameExtraFlags: make(map[string]bool),
+	}
+}
+
+func (c *classificationDirectoryCache) decision(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot) directoryShapeDecision {
+	if c == nil {
+		return resolveDirectoryShape(libraryType, libraryRoot, snapshot)
+	}
+	key := strings.TrimSpace(snapshot.Path)
+	if decision, ok := c.decisions[key]; ok {
+		return decision
+	}
+	decision := resolveDirectoryShape(libraryType, libraryRoot, snapshot)
+	c.decisions[key] = decision
+	return decision
+}
+
+func (c *classificationDirectoryCache) summary(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot) scanDirectorySummary {
+	if c == nil {
+		return buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
+	}
+	key := strings.TrimSpace(snapshot.Path)
+	if summary, ok := c.summaries[key]; ok {
+		return summary
+	}
+	summary := buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
+	c.summaries[key] = summary
+	return summary
+}
+
+func (c *classificationDirectoryCache) inheritedContext(libraryType string, libraryRoot string, objectPath string, currentSnapshot scanDirectorySnapshot, currentDecision directoryShapeDecision, snapshots map[string]scanDirectorySnapshot) inheritedTVDirectoryContext {
+	if c == nil {
+		return inheritedTVContextForObject(libraryType, libraryRoot, objectPath, currentSnapshot, currentDecision, snapshots, nil)
+	}
+	key := strings.TrimSpace(objectPath) + "\x00" + strings.TrimSpace(currentSnapshot.Path)
+	if context, ok := c.inheritedContexts[key]; ok {
+		return context
+	}
+	context := inheritedTVContextForObject(libraryType, libraryRoot, objectPath, currentSnapshot, currentDecision, snapshots, c)
+	c.inheritedContexts[key] = context
+	return context
+}
+
+func (c *classificationDirectoryCache) inheritedOrder(libraryType string, libraryRoot string, rootDir string, snapshots map[string]scanDirectorySnapshot) map[string]int {
+	if c == nil {
+		return inheritedEpisodeOrder(libraryType, libraryRoot, rootDir, snapshots, nil)
+	}
+	key := strings.TrimSpace(rootDir)
+	if order, ok := c.inheritedOrders[key]; ok {
+		return order
+	}
+	order := inheritedEpisodeOrder(libraryType, libraryRoot, rootDir, snapshots, c)
+	c.inheritedOrders[key] = order
+	return order
+}
+
+func (c *classificationDirectoryCache) isFilenameExtra(objectPath string) bool {
+	key := strings.TrimSpace(objectPath)
+	if c == nil {
+		return videoFileRoleSignal(objectPath) != ""
+	}
+	if value, ok := c.filenameExtraFlags[key]; ok {
+		return value
+	}
+	value := videoFileRoleSignal(objectPath) != ""
+	c.filenameExtraFlags[key] = value
+	return value
+}
+
 func resolveDirectoryShape(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot) directoryShapeDecision {
 	decision := directoryShapeDecision{Shape: directoryShapeUnknown, Reason: "no media evidence"}
 	isTVLibrary := isTVLibraryType(libraryType)
@@ -294,12 +384,28 @@ func classifyMediaFileWithSiblingContext(libraryType string, libraryRoot string,
 }
 
 func classifyMediaFileWithDirectorySummary(libraryType string, libraryRoot string, object storage.Object, dirPath string, decision directoryShapeDecision, snapshot scanDirectorySnapshot, summary scanDirectorySummary) classifiedMedia {
+	return classifyMediaFileWithDirectorySummaryAndContext(libraryType, libraryRoot, object, dirPath, decision, snapshot, summary, inheritedTVDirectoryContext{})
+}
+
+func classifyMediaFileWithDirectorySummaryAndContext(libraryType string, libraryRoot string, object storage.Object, dirPath string, decision directoryShapeDecision, snapshot scanDirectorySnapshot, summary scanDirectorySummary, inherited inheritedTVDirectoryContext) classifiedMedia {
 	classified := classifyMediaFile(libraryType, libraryRoot, object)
 	if !isTVLibraryType(libraryType) && !isMixedLibraryType(libraryType) {
 		return classified
 	}
 	if signals := resolveFilenameSignals(libraryType, libraryRoot, object); signals.IsExtra {
 		return classified
+	}
+	if inherited.Active && strings.TrimSpace(inherited.SeriesTitle) != "" && inherited.SeasonNumber != nil {
+		if episodeNumber, ok := inherited.EpisodeOrder[object.Path]; ok && episodeNumber > 0 {
+			classified.Type = "episode"
+			classified.SeriesTitle = inherited.SeriesTitle
+			classified.SeasonNumber = inherited.SeasonNumber
+			classified.EpisodeNumber = &episodeNumber
+			classified.EpisodeNumbers = []int{episodeNumber}
+			classified.Title = fmt.Sprintf("%s S%02dE%02d", inherited.SeriesTitle, *inherited.SeasonNumber, episodeNumber)
+			classified.FilenameSignals.Evidence = append(classified.FilenameSignals.Evidence, directorySummaryEvidence(summary)...)
+			return classified
+		}
 	}
 	if decision.Shape != directoryShapeFlatEpisodeFolder && decision.Shape != directoryShapeSeasonFolder {
 		return classified
@@ -353,6 +459,152 @@ func classifyMediaFileWithDirectorySummary(libraryType string, libraryRoot strin
 	classified.EpisodeNumbers = episodeNumbers
 	classified.FilenameSignals.Evidence = append(classified.FilenameSignals.Evidence, directorySummaryEvidence(summary)...)
 	return classified
+}
+
+func inheritedTVContextForObject(libraryType string, libraryRoot string, objectPath string, currentSnapshot scanDirectorySnapshot, currentDecision directoryShapeDecision, snapshots map[string]scanDirectorySnapshot, cache *classificationDirectoryCache) inheritedTVDirectoryContext {
+	if !isTVLibraryType(libraryType) && !isMixedLibraryType(libraryType) {
+		return inheritedTVDirectoryContext{}
+	}
+	allSnapshots := make(map[string]scanDirectorySnapshot)
+	if strings.TrimSpace(currentSnapshot.Path) != "" {
+		allSnapshots[currentSnapshot.Path] = currentSnapshot
+	}
+	for snapshotPath, snapshot := range snapshots {
+		if strings.TrimSpace(snapshotPath) != "" {
+			allSnapshots[snapshotPath] = snapshot
+		}
+	}
+	if len(allSnapshots) == 0 {
+		return inheritedTVDirectoryContext{}
+	}
+
+	fileDir := path.Dir(objectPath)
+	var fallbackSnapshot scanDirectorySnapshot
+	var fallbackDecision directoryShapeDecision
+	fallbackFound := false
+	for dir := fileDir; strings.TrimSpace(dir) != "" && dir != "."; dir = path.Dir(dir) {
+		snapshot, ok := allSnapshots[dir]
+		if !ok {
+			if dir == "/" {
+				break
+			}
+			continue
+		}
+		decision := currentDecision
+		if dir != currentSnapshot.Path {
+			decision = cache.decision(libraryType, libraryRoot, snapshot)
+		}
+		if !isSeriesLikeDirectoryShape(decision.Shape) {
+			if dir == "/" {
+				break
+			}
+			continue
+		}
+		if decision.Shape == directoryShapeSeriesFolder {
+			return inheritedTVContextFromDirectory(libraryType, libraryRoot, objectPath, dir, decision, allSnapshots, cache)
+		}
+		if !fallbackFound {
+			fallbackSnapshot = snapshot
+			fallbackDecision = decision
+			fallbackFound = true
+		}
+	}
+	if fallbackFound {
+		return inheritedTVContextFromDirectory(libraryType, libraryRoot, objectPath, fallbackSnapshot.Path, fallbackDecision, allSnapshots, cache)
+	}
+	return inheritedTVDirectoryContext{}
+}
+
+func inheritedTVContextFromDirectory(libraryType string, libraryRoot string, objectPath string, dir string, decision directoryShapeDecision, snapshots map[string]scanDirectorySnapshot, cache *classificationDirectoryCache) inheritedTVDirectoryContext {
+	seriesTitle := inheritedSeriesTitle(libraryRoot, objectPath, dir, decision)
+	seasonNumber := tvSeasonFromPath(libraryRoot, objectPath)
+	if seasonNumber == nil {
+		seasonNumber = decision.SeasonNumber
+	}
+	if seasonNumber == nil {
+		defaultSeason := 1
+		seasonNumber = &defaultSeason
+	}
+	orderDir := dir
+	if decision.Shape == directoryShapeSeriesFolder {
+		if seasonDir := tvSeasonDirectoryPath(libraryRoot, objectPath); seasonDir != "" {
+			orderDir = seasonDir
+		}
+	}
+	order := cache.inheritedOrder(libraryType, libraryRoot, orderDir, snapshots)
+	if len(order) == 0 {
+		return inheritedTVDirectoryContext{}
+	}
+	return inheritedTVDirectoryContext{Active: true, SeriesTitle: seriesTitle, SeasonNumber: seasonNumber, EpisodeOrder: order}
+}
+
+func isSeriesLikeDirectoryShape(shape string) bool {
+	switch shape {
+	case directoryShapeSeriesFolder, directoryShapeSeasonFolder, directoryShapeFlatEpisodeFolder:
+		return true
+	default:
+		return false
+	}
+}
+
+func inheritedSeriesTitle(libraryRoot string, objectPath string, dirPath string, decision directoryShapeDecision) string {
+	if decision.Shape == directoryShapeSeriesFolder {
+		return normalizeSeriesGroupingTitle(path.Base(strings.TrimRight(dirPath, "/")))
+	}
+	if title := tvSeriesTitleFromPath(libraryRoot, objectPath); title != "" {
+		return title
+	}
+	if decision.Shape == directoryShapeSeasonFolder {
+		return cleanTitle(path.Base(path.Dir(strings.TrimRight(dirPath, "/"))))
+	}
+	return normalizeSeriesGroupingTitle(path.Base(strings.TrimRight(dirPath, "/")))
+}
+
+func tvSeasonDirectoryPath(libraryRoot string, objectPath string) string {
+	segments := relativePathSegments(libraryRoot, objectPath)
+	seasonIndex := tvSeasonDirectoryIndex(segments)
+	if seasonIndex < 0 {
+		return ""
+	}
+	parts := []string{strings.TrimRight(path.Clean(libraryRoot), "/")}
+	parts = append(parts, segments[:seasonIndex+1]...)
+	return path.Join(parts...)
+}
+
+func inheritedEpisodeOrder(libraryType string, libraryRoot string, rootDir string, snapshots map[string]scanDirectorySnapshot, cache *classificationDirectoryCache) map[string]int {
+	paths := make([]string, 0)
+	seen := make(map[string]struct{})
+	for snapshotPath, snapshot := range snapshots {
+		if snapshotPath != rootDir && !strings.HasPrefix(snapshotPath, strings.TrimRight(rootDir, "/")+"/") {
+			continue
+		}
+		for _, object := range snapshot.Objects {
+			if object.IsDir || !isVideoFile(object.Path) {
+				continue
+			}
+			if cache.isFilenameExtra(object.Path) {
+				continue
+			}
+			if _, ok := seen[object.Path]; ok {
+				continue
+			}
+			seen[object.Path] = struct{}{}
+			paths = append(paths, object.Path)
+		}
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		leftName := path.Base(paths[i])
+		rightName := path.Base(paths[j])
+		if leftName == rightName {
+			return paths[i] < paths[j]
+		}
+		return leftName < rightName
+	})
+	order := make(map[string]int, len(paths))
+	for idx, objectPath := range paths {
+		order[objectPath] = idx + 1
+	}
+	return order
 }
 
 func directorySummaryEvidence(summary scanDirectorySummary) []filenameEvidenceSummary {

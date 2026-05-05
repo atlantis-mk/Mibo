@@ -301,7 +301,7 @@ export function MetadataSummaryCard({
         <CardTitle>当前元数据摘要</CardTitle>
       </CardHeader>
       <Separator className="bg-border" />
-      <CardContent className="space-y-3 px-5 py-5 text-sm">
+      <CardContent className="grid gap-4 px-5 py-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <SummaryRow label="标题" value={item.title} />
         <SummaryRow label="原始标题" value={item.original_title || '未填写'} />
         <SummaryRow
@@ -483,11 +483,16 @@ export function ClassificationReviewCard({
       <Separator className="bg-border" />
       <CardContent className="space-y-3 px-5 py-5">
         {decisions.length ? (
-          decisions.map((decision) => (
-            <div
-              key={decision.id}
-              className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3 text-sm"
-            >
+          decisions.map((decision) => {
+            const alternatives = decision.alternatives ?? []
+            const evidence = decision.evidence ?? []
+            const correctionActions = decision.correction_actions ?? []
+
+            return (
+              <div
+                key={decision.id}
+                className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3 text-sm"
+              >
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-medium text-foreground">
@@ -509,34 +514,33 @@ export function ClassificationReviewCard({
                     : '未记录'}
                 </div>
                 {decision.reason ? <div>原因：{decision.reason}</div> : null}
-                {decision.alternatives.length ? (
+                {alternatives.length ? (
                   <div>
                     备选：
-                    {decision.alternatives
+                    {alternatives
                       .map((item) => formatClassificationType(item.type))
                       .join('、')}
                   </div>
                 ) : null}
-                {decision.evidence.length ? (
+                {evidence.length ? (
                   <div>
                     证据：
-                    {decision.evidence
+                    {evidence
                       .slice(0, 3)
                       .map((item) => item.value || item.kind)
                       .join('、')}
                   </div>
                 ) : null}
-                {decision.correction_actions.length ? (
+                {correctionActions.length ? (
                   <div>
                     可选操作：
-                    {decision.correction_actions
-                      .map((action) => action.label)
-                      .join('、')}
+                    {correctionActions.map((action) => action.label).join('、')}
                   </div>
                 ) : null}
               </div>
             </div>
-          ))
+            )
+          })
         ) : (
           <div className="text-sm text-muted-foreground">
             当前没有需要展示的分类复核项。
@@ -768,7 +772,7 @@ export function RelatedChildrenCard({
   const relatedChildren = workspace.recommended_children ?? []
   const linkedCounts = new Map<number, number>()
   for (const asset of assets) {
-    for (const link of asset.links) {
+    for (const link of asset.links ?? []) {
       linkedCounts.set(link.item_id, (linkedCounts.get(link.item_id) ?? 0) + 1)
     }
   }
@@ -841,8 +845,9 @@ function AssetLinkEditor({
   onLink: (assetId: number, targetItemId: number) => void
   onUnlink: (assetId: number, targetItemId: number) => void
 }) {
-  const linkedItemIds = new Set(asset.links.map((link) => link.item_id))
-  const linkedItems = asset.links.map((link) => ({
+  const assetLinks = asset.links ?? []
+  const linkedItemIds = new Set(assetLinks.map((link) => link.item_id))
+  const linkedItems = assetLinks.map((link) => ({
     ...link,
     item: candidateItems.find((candidate) => candidate.id === link.item_id),
   }))
@@ -868,7 +873,7 @@ function AssetLinkEditor({
         </div>
       </div>
       <div className="mt-2 text-xs text-muted-foreground">
-        当前治理条目：{workspaceItem.title} · 关联条目 {asset.links.length} 个 ·
+        当前治理条目：{workspaceItem.title} · 关联条目 {assetLinks.length} 个 ·
         文件 {(asset.file_ids ?? []).length} 个
       </div>
 

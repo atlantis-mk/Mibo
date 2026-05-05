@@ -6,7 +6,7 @@ import {
   DrawerTitle,
 } from "#/components/ui/drawer"
 import { Badge } from "#/components/ui/badge"
-import { type Job, type Schedule, type ScheduleRun } from "#/lib/mibo-api"
+import { type Schedule, type ScheduleRun } from "#/lib/mibo-api"
 
 import { formatDateTime, formatKind } from "./schedule-list"
 
@@ -63,11 +63,10 @@ export function ScheduleRunHistoryDrawer({
 }
 
 function RunDetailCard({ run }: { run: ScheduleRun }) {
-  const job = run.job
-  const payload = parsePayload(job?.payload_json)
-  const startedAt = job?.started_at ?? run.started_at
-  const finishedAt = job?.finished_at ?? run.finished_at
-  const message = job?.error_message || run.error_summary
+  const payload = parsePayload(undefined)
+  const startedAt = run.started_at
+  const finishedAt = run.finished_at
+  const message = run.error_summary
 
   return (
     <div className="rounded-[1.1rem] border border-border/60 bg-background/60 px-4 py-3">
@@ -77,11 +76,11 @@ function RunDetailCard({ run }: { run: ScheduleRun }) {
             {formatStatus(run.status)}
           </Badge>
           <span className="text-sm font-medium text-foreground">
-            {formatJobKind(job?.kind, payload.kind)}
+            {formatJobKind(payload.kind)}
           </span>
         </div>
         <div className="text-xs text-muted-foreground">
-          Job #{run.job_id ?? "—"}
+          运行 #{run.id}
         </div>
       </div>
 
@@ -89,7 +88,7 @@ function RunDetailCard({ run }: { run: ScheduleRun }) {
         <Detail label="执行范围" value={formatPayloadScope(payload)} />
         <Detail
           label="尝试次数"
-          value={job ? `${job.attempts} 次` : "未开始"}
+          value="由 workflow 调度"
         />
         <Detail label="开始时间" value={formatDateTime(startedAt)} />
         <Detail label="结束时间" value={formatDateTime(finishedAt)} />
@@ -99,7 +98,7 @@ function RunDetailCard({ run }: { run: ScheduleRun }) {
         />
         <Detail
           label="队列状态"
-          value={formatStatus(job?.status ?? run.status)}
+          value={formatStatus(run.status)}
         />
       </div>
 
@@ -137,7 +136,7 @@ function statusVariant(status: string) {
 
 function formatStatus(status: string) {
   const labels: Record<string, string> = {
-    queued: "排队中",
+    queued: "待执行",
     running: "运行中",
     completed: "成功",
     failed: "失败",
@@ -145,8 +144,8 @@ function formatStatus(status: string) {
   return labels[status] ?? status
 }
 
-function formatJobKind(jobKind?: Job["kind"], payloadKind?: unknown) {
-  const kind = typeof payloadKind === "string" ? payloadKind : jobKind
+function formatJobKind(payloadKind?: unknown) {
+  const kind = typeof payloadKind === "string" ? payloadKind : undefined
   if (kind?.startsWith("schedule_"))
     return formatKind(kind.slice("schedule_".length))
   return kind ? formatKind(kind) : "后台任务"

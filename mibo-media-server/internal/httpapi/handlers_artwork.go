@@ -28,6 +28,31 @@ func (r *Router) handleGetCatalogItemArtwork(w http.ResponseWriter, req *http.Re
 	r.serveGeneratedArtwork(w, req, artworkPath)
 }
 
+func (r *Router) handleGetProgressFrame(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	name := strings.TrimSpace(req.PathValue("name"))
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("invalid progress frame name"))
+		return
+	}
+	framePath, ok := r.generatedProgressFramePath(user.ID, itemID, name)
+	if !ok {
+		writeError(req.Context(), w, http.StatusNotFound, os.ErrNotExist)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeFile(w, req, framePath)
+}
+
 func (r *Router) serveGeneratedArtwork(w http.ResponseWriter, req *http.Request, artworkPath string) {
 	if _, err := os.Stat(artworkPath); err != nil {
 		writeError(req.Context(), w, http.StatusNotFound, err)
@@ -68,6 +93,17 @@ func (r *Router) generatedArtworkRootPath() string {
 
 func (r *Router) generatedArtworkPath(itemID uint, kind string) (string, bool) {
 	basePath := filepath.Join(r.generatedArtworkRootPath(), "catalog", strconvFormatUint(itemID), kind)
+	for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
+		candidate := basePath + ext
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func (r *Router) generatedProgressFramePath(userID uint, itemID uint, name string) (string, bool) {
+	basePath := filepath.Join(r.generatedArtworkRootPath(), "progress", strconvFormatUint(userID), strconvFormatUint(itemID), name)
 	for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
 		candidate := basePath + ext
 		if _, err := os.Stat(candidate); err == nil {

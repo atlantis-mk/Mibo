@@ -10,6 +10,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/settings"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -27,9 +28,6 @@ type MissingMediaCleanupPayload struct {
 }
 
 func (s *Service) QueueMissingMediaCleanup(ctx context.Context, payload MissingMediaCleanupPayload) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
-	}
 	scope := strings.TrimSpace(payload.ScopeKind)
 	if scope == "" {
 		scope = "global"
@@ -42,7 +40,43 @@ func (s *Service) QueueMissingMediaCleanup(ctx context.Context, payload MissingM
 	if rootPath != "" {
 		jobKey = fmt.Sprintf("%s:%s", jobKey, rootPath)
 	}
-	return s.jobs.EnqueueUnique(ctx, JobKindMissingMediaCleanup, jobKey, MissingMediaCleanupPayload{ScopeKind: scope, LibraryID: payload.LibraryID, RootPath: rootPath})
+	if s.workflow == nil {
+		return database.Job{}, fmt.Errorf("workflow service unavailable")
+	}
+	libraryID := uint(0)
+	if payload.LibraryID != nil {
+		libraryID = *payload.LibraryID
+	}
+	if libraryID == 0 {
+		var first database.Library
+		if err := s.db.WithContext(ctx).Where("deleted_at IS NULL").Order("id asc").First(&first).Error; err == nil {
+			libraryID = first.ID
+		}
+	}
+	if libraryID == 0 {
+		return database.Job{}, fmt.Errorf("no library available for missing cleanup workflow")
+	}
+	run, reused, err := s.workflow.CreateOrReuseRun(ctx, workflow.CreateRunInput{
+		RunKey:    jobKey,
+		LibraryID: libraryID,
+		Reason:    WorkflowReasonMissingCleanup,
+		Priority:  1,
+		ScopeKey:  fmt.Sprintf("cleanup:%s", scope),
+		Payload:   MissingMediaCleanupPayload{ScopeKind: scope, LibraryID: payload.LibraryID, RootPath: rootPath},
+	})
+	if err != nil || reused {
+		return workflowRunCompatibilityJob(run), err
+	}
+	_, err = s.workflow.CreateTask(ctx, run, workflow.CreateTaskInput{
+		TaskKey:   fmt.Sprintf("run:%d:cleanup-missing", run.ID),
+		TaskType:  workflow.TaskTypeCleanupMissing,
+		Stage:     workflow.StageCleanup,
+		Priority:  1,
+		ScopeKey:  run.ScopeKey,
+		Payload:   MissingMediaCleanupPayload{ScopeKind: scope, LibraryID: payload.LibraryID, RootPath: rootPath},
+		Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeCleanupMissing].Resources,
+	})
+	return workflowRunCompatibilityJob(run), err
 }
 
 func (s *Service) RunMissingMediaCleanupJob(ctx context.Context, payload MissingMediaCleanupPayload) (ScheduledJobResult, error) {

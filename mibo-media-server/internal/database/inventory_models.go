@@ -40,11 +40,13 @@ type InventoryFile struct {
 	StoragePath       string     `gorm:"size:2048;not null;uniqueIndex:idx_inventory_file_storage_path;index:idx_inventory_files_library_status_path,priority:3" json:"storage_path"`
 	StableIdentityKey string     `gorm:"size:512;index" json:"stable_identity_key"`
 	HashesJSON        string     `gorm:"type:text" json:"hashes_json"`
+	ThumbnailURL      string     `gorm:"size:2048" json:"thumbnail_url,omitempty"`
 	SizeBytes         int64      `gorm:"not null;default:0" json:"size_bytes"`
 	ModifiedAt        *time.Time `gorm:"index" json:"modified_at,omitempty"`
 	Container         string     `gorm:"size:64;index" json:"container"`
 	ContentClass      string     `gorm:"size:64;not null;default:video;index" json:"content_class"`
 	Status            string     `gorm:"size:64;not null;default:available;index;index:idx_inventory_files_library_status_path,priority:2" json:"status"`
+	ScanState         string     `gorm:"size:64;not null;default:discovered;index" json:"scan_state"`
 	MissingSince      *time.Time `gorm:"index" json:"missing_since,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`

@@ -27,19 +27,20 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	result, err := r.catalog.BrowseItems(req.Context(), catalog.BrowseItemsInput{
-		LibraryID:     input.LibraryID,
-		Query:         input.Query,
-		TypeFilter:    string(input.TypeFilter),
-		Genre:         input.Genre,
-		Region:        input.Region,
-		Year:          input.Year,
-		MinRating:     input.MinRating,
-		WatchedState:  string(input.Watched),
-		Sort:          string(input.Sort),
-		SortDirection: string(input.SortDirection),
-		Limit:         input.Limit,
-		Offset:        input.Offset,
-		UserID:        user.ID,
+		LibraryID:       input.LibraryID,
+		Query:           input.Query,
+		TypeFilter:      string(input.TypeFilter),
+		Genre:           input.Genre,
+		Region:          input.Region,
+		Year:            input.Year,
+		MinRating:       input.MinRating,
+		WatchedState:    string(input.Watched),
+		OrganizingState: string(input.Organizing),
+		Sort:            string(input.Sort),
+		SortDirection:   string(input.SortDirection),
+		Limit:           input.Limit,
+		Offset:          input.Offset,
+		UserID:          user.ID,
 	})
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
@@ -86,6 +87,7 @@ func discoveryInputFromRequest(req *http.Request) (library.BrowseItemsInput, err
 		Year:          library.ParseBrowseYear(query.Get("year")),
 		MinRating:     parseBrowseRating(query.Get("min_rating")),
 		Watched:       normalizeWatchedStateFilter(query.Get("watched_state")),
+		Organizing:    normalizeOrganizingStateFilter(query.Get("organizing_state")),
 		Sort:          normalizeBrowseSort(query.Get("sort")),
 		SortDirection: normalizeSortDirection(query.Get("sort_direction")),
 		Limit:         limit,
@@ -95,4 +97,15 @@ func discoveryInputFromRequest(req *http.Request) (library.BrowseItemsInput, err
 		input.Scope = library.BrowseScopeLibrary
 	}
 	return library.NormalizeBrowseItemsInput(input), nil
+}
+
+func normalizeOrganizingStateFilter(value string) library.OrganizingStateFilter {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(library.OrganizingStateFilterOrganized):
+		return library.OrganizingStateFilterOrganized
+	case string(library.OrganizingStateFilterUnorganized):
+		return library.OrganizingStateFilterUnorganized
+	default:
+		return library.OrganizingStateFilterAll
+	}
 }

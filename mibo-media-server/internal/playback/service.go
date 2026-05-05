@@ -91,6 +91,53 @@ func (s *Service) GetPlaybackSource(ctx context.Context, req PlaybackRequest) (P
 	return s.getCatalogPlaybackSource(ctx, req)
 }
 
+func (s *Service) GetInventoryFilePlaybackSource(ctx context.Context, fileID uint, clientProfile ClientProfile) (PlaybackSource, error) {
+	var file database.InventoryFile
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", fileID).First(&file).Error; err != nil {
+		return PlaybackSource{}, err
+	}
+	fileLink, err := s.GetInventoryFileLink(ctx, file.ID)
+	if err != nil {
+		return PlaybackSource{}, fmt.Errorf("load inventory file link: %w", err)
+	}
+	streams, err := s.loadMediaStreamsForFile(ctx, file.ID)
+	if err != nil {
+		return PlaybackSource{}, err
+	}
+	pseudoFile, audioTracks, subtitleTracks := inventoryFileMediaInfo(file, streams)
+	checks := append([]PlaybackCheck{}, fileLink.Checks...)
+	checks = append(checks, buildMediaInfoCheck(pseudoFile))
+	directDecision := assessDirectPlay(pseudoFile, clientProfile)
+	if !fileLink.Playable {
+		directDecision.direct = false
+		directDecision.reasons = append([]DecisionReason{{Code: "source_unavailable", Category: "availability", Message: "media source is unavailable"}}, directDecision.reasons...)
+	}
+	source := PlaybackSource{
+		FileID:         file.ID,
+		Title:          titleFromInventoryPath(file.StoragePath),
+		Type:           "inventory_file",
+		Container:      file.Container,
+		URL:            fileLink.URL,
+		Direct:         fileLink.Playable,
+		SizeBytes:      file.SizeBytes,
+		VideoCodec:     pseudoFile.VideoCodec,
+		Width:          pseudoFile.Width,
+		Height:         pseudoFile.Height,
+		AudioTracks:    audioTracks,
+		SubtitleTracks: subtitleTracks,
+		Checks:         checks,
+		Playable:       fileLink.Playable,
+	}
+	if source.Playable {
+		source.Decision = PlaybackDecision{Kind: "direct", ClientProfile: clientProfile, SelectedBy: "inventory_file", Reasons: directDecision.reasons}
+		return source, nil
+	}
+	source.URL = ""
+	source.Direct = false
+	source.Decision = PlaybackDecision{Kind: "unplayable", ClientProfile: clientProfile, SelectedBy: "inventory_file", Reasons: append(append([]DecisionReason{}, directDecision.reasons...), DecisionReason{Code: "no_supported_playback_path", Category: "fallback", Message: "no supported playback path is available for this inventory file"})}
+	return source, nil
+}
+
 type catalogPlaybackCandidate struct {
 	Asset   database.MediaAsset
 	File    database.InventoryFile
@@ -422,6 +469,35 @@ func inventoryCandidateMediaInfo(candidate catalogPlaybackCandidate) (mediaInfo,
 		}
 	}
 	return pseudo, audioTracks, subtitleTracks
+}
+
+func inventoryFileMediaInfo(file database.InventoryFile, streams []database.MediaStream) (mediaInfo, []Track, []Track) {
+	return inventoryCandidateMediaInfo(catalogPlaybackCandidate{Asset: database.MediaAsset{ProbeStatus: probe.StatusPending}, File: file, Streams: streams})
+}
+
+func (s *Service) loadMediaStreamsForFile(ctx context.Context, fileID uint) ([]database.MediaStream, error) {
+	var streams []database.MediaStream
+	if err := s.db.WithContext(ctx).Where("file_id = ?", fileID).Order("stream_index asc").Find(&streams).Error; err != nil {
+		return nil, err
+	}
+	return streams, nil
+}
+
+func titleFromInventoryPath(storagePath string) string {
+	trimmed := strings.TrimSpace(storagePath)
+	if trimmed == "" {
+		return "未整理媒体"
+	}
+	parts := strings.Split(trimmed, "/")
+	base := strings.TrimSpace(parts[len(parts)-1])
+	if base == "" {
+		return trimmed
+	}
+	if dot := strings.LastIndex(base, "."); dot > 0 {
+		base = base[:dot]
+	}
+	base = strings.NewReplacer(".", " ", "_", " ").Replace(base)
+	return strings.TrimSpace(base)
 }
 
 func buildSubtitleTrack(candidate catalogPlaybackCandidate, stream database.MediaStream) Track {

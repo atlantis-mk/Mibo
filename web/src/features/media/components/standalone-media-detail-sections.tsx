@@ -1,17 +1,27 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   ChevronLeft,
   ChevronRight,
   Disc3,
   FileX2Icon,
   Film,
+  Play,
 } from "lucide-react"
 import { FreeMode } from "swiper/modules"
 import { Swiper, SwiperSlide } from "swiper/react"
 import type { Swiper as SwiperType } from "swiper/types"
 
 import { Button } from "#/components/ui/button"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "#/components/ui/pagination"
 import {
   Dialog,
   DialogContent,
@@ -40,17 +50,22 @@ import {
   formatRuntime,
 } from "./standalone-media-detail-utils"
 
+const EPISODES_PER_PAGE = 60
+
 export function SeriesEpisodesSection({
   item,
   seasons,
+  episodePage,
   isLoading,
   errorMessage,
 }: {
   item: CatalogDetailPresentation
   seasons: CatalogSeasonRail[]
+  episodePage: number
   isLoading: boolean
   errorMessage: string | null
 }) {
+  const navigate = useNavigate()
   const numberedSeasons = useMemo(
     () => seasons.filter((season) => !isSpecialSeason(season)),
     [seasons]
@@ -95,7 +110,7 @@ export function SeriesEpisodesSection({
         </div>
         <p className="text-sm text-muted-foreground">
           {item.series_title_display || item.title}{" "}
-          的剧集按季展示，可左右滑动浏览。
+          的剧集按季展示，每页最多 60 集。
         </p>
       </div>
 
@@ -132,7 +147,15 @@ export function SeriesEpisodesSection({
                       : "outline"
                   }
                   className="rounded-full"
-                  onClick={() => setSelectedSeasonNumber(season.season_number)}
+                  onClick={() => {
+                    setSelectedSeasonNumber(season.season_number)
+                    void navigate({
+                      search: (previous) => ({
+                        ...previous,
+                        episodePage: 1,
+                      }),
+                    })
+                  }}
                 >
                   {season.name?.trim() || `第 ${season.season_number} 季`}
                 </Button>
@@ -140,13 +163,14 @@ export function SeriesEpisodesSection({
             </div>
           ) : null}
           {selectedSeason ? (
-            <SeasonEpisodesRail season={selectedSeason} />
+            <SeasonEpisodesRail season={selectedSeason} page={episodePage} />
           ) : null}
           {specialsSeasons.map((season) => (
             <SeasonEpisodesRail
               key={`special-${season.season_number}-${season.name}`}
               season={season}
               title="特别篇"
+              page={episodePage}
             />
           ))}
         </div>
@@ -158,18 +182,22 @@ export function SeriesEpisodesSection({
 function SeasonEpisodesRail({
   season,
   title,
+  page,
 }: {
   season: CatalogSeasonRail
   title?: string
+  page: number
 }) {
-  const [swiper, setSwiper] = useState<SwiperType | null>(null)
-  const [canScrollPrev, setCanScrollPrev] = useState(false)
-  const [canScrollNext, setCanScrollNext] = useState(false)
-
-  const updateNavigation = (instance: SwiperType) => {
-    setCanScrollPrev(!instance.isBeginning)
-    setCanScrollNext(!instance.isEnd)
-  }
+  const totalPages = Math.max(
+    1,
+    Math.ceil(season.episodes.length / EPISODES_PER_PAGE)
+  )
+  const currentPage = Math.min(Math.max(1, page), totalPages)
+  const pageStart = (currentPage - 1) * EPISODES_PER_PAGE
+  const visibleEpisodes = season.episodes.slice(
+    pageStart,
+    pageStart + EPISODES_PER_PAGE
+  )
 
   return (
     <div className="space-y-4">
@@ -183,65 +211,87 @@ function SeasonEpisodesRail({
             {season.runtime_seconds
               ? ` · ${formatRuntime(season.runtime_seconds)}`
               : ""}
+            {totalPages > 1
+              ? ` · 当前 ${pageStart + 1}-${pageStart + visibleEpisodes.length}`
+              : ""}
           </div>
         </div>
-        <div className="hidden items-center gap-2 sm:flex">
-          <RailArrowButton
-            direction="prev"
-            disabled={!canScrollPrev}
-            onClick={() => swiper?.slidePrev()}
-          />
-          <RailArrowButton
-            direction="next"
-            disabled={!canScrollNext}
-            onClick={() => swiper?.slideNext()}
-          />
-        </div>
       </div>
 
-      <div className="relative left-1/2 w-screen -translate-x-1/2">
-        <Swiper
-          modules={[FreeMode]}
-          freeMode
-          slidesPerView="auto"
-          spaceBetween={20}
-          slidesOffsetBefore={40}
-          onSwiper={(instance) => {
-            setSwiper(instance)
-            updateNavigation(instance)
-          }}
-          onSlideChange={updateNavigation}
-          onResize={updateNavigation}
-          className="!overflow-x-clip !overflow-y-visible pt-1 pb-3"
-        >
-          {season.episodes.map((episode) => (
-            <SwiperSlide
-              key={`${season.season_number}-${episode.episode_number}-${episode.item_id}`}
-              className="!h-auto !w-[290px] sm:!w-[360px] lg:!w-[392px]"
-            >
-              <EpisodeCard
-                episode={episode}
-                fallbackImage={season.poster_url}
-              />
-            </SwiperSlide>
-          ))}
-        </Swiper>
-
-        <div className="mt-4 flex items-center justify-end gap-2 px-6 sm:hidden">
-          <RailArrowButton
-            direction="prev"
-            disabled={!canScrollPrev}
-            onClick={() => swiper?.slidePrev()}
+      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {visibleEpisodes.map((episode) => (
+          <EpisodeCard
+            key={`${season.season_number}-${episode.episode_number}-${episode.item_id}`}
+            episode={episode}
+            fallbackImage={season.poster_url}
           />
-          <RailArrowButton
-            direction="next"
-            disabled={!canScrollNext}
-            onClick={() => swiper?.slideNext()}
-          />
-        </div>
+        ))}
       </div>
+      <EpisodePagination currentPage={currentPage} totalPages={totalPages} />
     </div>
   )
+}
+
+function EpisodePagination({
+  currentPage,
+  totalPages,
+}: {
+  currentPage: number
+  totalPages: number
+}) {
+  if (totalPages <= 1) return null
+
+  return (
+    <Pagination className="justify-end">
+      <PaginationContent>
+        <PaginationItem>
+          <PaginationPrevious
+            text="上一页"
+            href={buildEpisodePageHref(currentPage - 1)}
+            aria-disabled={currentPage === 1}
+            className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+          />
+        </PaginationItem>
+        {buildEpisodePageItems(currentPage, totalPages).map((page) => (
+          <PaginationItem key={page}>
+            <PaginationLink
+              href={buildEpisodePageHref(page)}
+              isActive={page === currentPage}
+            >
+              {page}
+            </PaginationLink>
+          </PaginationItem>
+        ))}
+        <PaginationItem>
+          <PaginationNext
+            text="下一页"
+            href={buildEpisodePageHref(currentPage + 1)}
+            aria-disabled={currentPage === totalPages}
+            className={
+              currentPage === totalPages ? "pointer-events-none opacity-50" : ""
+            }
+          />
+        </PaginationItem>
+      </PaginationContent>
+    </Pagination>
+  )
+}
+
+function buildEpisodePageItems(currentPage: number, totalPages: number) {
+  const start = Math.max(1, Math.min(currentPage - 2, totalPages - 4))
+  const end = Math.min(totalPages, start + 4)
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+}
+
+function buildEpisodePageHref(page: number) {
+  const search = new URLSearchParams(window.location.search)
+  if (page <= 1) {
+    search.delete("episodePage")
+  } else {
+    search.set("episodePage", String(page))
+  }
+  const query = search.toString()
+  return `${window.location.pathname}${query ? `?${query}` : ""}`
 }
 
 function EpisodeCard({
@@ -264,6 +314,11 @@ function EpisodeCard({
         episode.progress_percent > 0
       ? `已观看 ${Math.round(episode.progress_percent)}%`
       : formatAvailabilityStatus(episode.availability_status)
+  const hasProgress = Boolean(
+    !episode.watched &&
+      typeof episode.progress_percent === "number" &&
+      episode.progress_percent > 0
+  )
   const invalidateAfterIgnore = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["catalog"] }),
@@ -317,6 +372,44 @@ function EpisodeCard({
     previewIgnoreMutation.isPending ||
     filenameGroupMutation.isPending
 
+  const actionSlot =
+    episode.availability_status === "available" ? (
+      <div className="flex flex-wrap items-center gap-2">
+        <Button asChild size="sm" className="rounded-full">
+          <Link
+            to="/play/$id"
+            params={{ id: String(episode.item_id) }}
+            search={{
+              fromStart: !hasProgress,
+              assetId: undefined,
+              inventoryFileId: undefined,
+            }}
+            preload={false}
+            aria-label={`${hasProgress ? "继续播放" : "播放"} ${title}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Play className="size-4 fill-current" />
+            {hasProgress ? "继续" : "播放"}
+          </Link>
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          className="rounded-full"
+          disabled={!token || ignorePending}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            previewIgnoreMutation.mutate()
+          }}
+        >
+          <FileX2Icon className="size-4" />
+          忽略
+        </Button>
+      </div>
+    ) : null
+
   return (
     <div className="group relative">
       <MediaLandscapeCard
@@ -334,24 +427,8 @@ function EpisodeCard({
         status={statusLabel}
         description={episode.overview || "暂无剧情简介"}
         current={episode.current}
+        actionSlot={actionSlot}
       />
-      {episode.availability_status === "available" ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="destructive"
-          className="text-destructive-foreground absolute right-3 bottom-3 z-10 rounded-full border border-white/20 bg-destructive shadow-lg shadow-black/40 hover:bg-destructive/90"
-          disabled={!token || ignorePending}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            previewIgnoreMutation.mutate()
-          }}
-        >
-          <FileX2Icon className="size-4" />
-          忽略
-        </Button>
-      ) : null}
       <Dialog open={ignoreDialogOpen} onOpenChange={setIgnoreDialogOpen}>
         <DialogContent className="grid max-h-[85vh] w-[calc(100vw-2rem)] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden p-0">
           <DialogHeader>

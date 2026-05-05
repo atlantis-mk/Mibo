@@ -3,11 +3,8 @@ package listener
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
-	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/storageindex"
 )
@@ -15,7 +12,7 @@ import (
 func TestDiagnosticsReportsObserverStateAndFailures(t *testing.T) {
 	t.Parallel()
 
-	svc, db, record := newListenerIntegrationService(t)
+	svc, _, record := newListenerIntegrationService(t)
 	ctx := context.Background()
 	if _, err := svc.index.UpsertPresent(ctx, storageindex.ObservationInput{LibraryID: record.ID, StorageProvider: "local", StoragePath: record.RootPath}); err != nil {
 		t.Fatalf("upsert observation: %v", err)
@@ -23,8 +20,8 @@ func TestDiagnosticsReportsObserverStateAndFailures(t *testing.T) {
 	if _, err := svc.index.RecordFailure(ctx, storageindex.FailureInput{LibraryID: record.ID, StorageProvider: "local", StoragePath: record.RootPath, Reason: "list_failed", Error: errors.New("permission denied")}); err != nil {
 		t.Fatalf("record failure: %v", err)
 	}
-	if err := db.WithContext(ctx).Create(&database.Job{Kind: library.JobKindTargetedRefresh, Status: jobs.StatusQueued, PayloadJSON: fmt.Sprintf(`{"library_id":%d,"root_path":%q}`, record.ID, record.RootPath)}).Error; err != nil {
-		t.Fatalf("create pending job: %v", err)
+	if _, err := svc.library.QueueTargetedRefresh(ctx, record.ID, record.RootPath, library.WorkflowReasonTargetedRefresh); err != nil {
+		t.Fatalf("create pending workflow: %v", err)
 	}
 
 	diagnostics, err := svc.Diagnostics(ctx)

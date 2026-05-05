@@ -12,7 +12,14 @@ import { SidebarProvider } from "#/components/ui/sidebar"
 import FavoritesPage from "#/features/favorites"
 import Home from "#/features/home"
 import JobsPage from "#/features/jobs"
-import LibraryDetail from "#/features/library"
+import LibraryDetail, {
+  DEFAULT_LIBRARY_PAGE_SIZE,
+  isLibraryPageSize,
+} from "#/features/library"
+import {
+  createDefaultDiscoveryFilters,
+  type DiscoveryFilters,
+} from "#/features/discovery/controls"
 import MediaDetail from "#/features/media"
 import { parseMediaDetailView } from "#/lib/media-presentation"
 import LogsPage from "#/features/logs"
@@ -71,6 +78,11 @@ const indexRoute = createRoute({
 const libraryRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/library/$id",
+  validateSearch: (search: Record<string, unknown>) => ({
+    page: normalizeLibraryPageSearch(search.page),
+    pageSize: normalizeLibraryPageSizeSearch(search.pageSize),
+    ...libraryFiltersToSearch(parseLibraryFiltersSearch(search)),
+  }),
   component: LibraryRoute,
 })
 
@@ -79,6 +91,7 @@ const mediaRoute = createRoute({
   path: "/media/$id",
   validateSearch: (search: Record<string, unknown>) => ({
     view: search.view === "series" ? "series" : undefined,
+    episodePage: normalizeEpisodePageSearch(search.episodePage),
   }),
   component: MediaRoute,
 })
@@ -131,6 +144,12 @@ const playRoute = createRoute({
         ? search.assetId
         : typeof search.assetId === "string"
           ? Number.parseInt(search.assetId, 10) || undefined
+          : undefined,
+    inventoryFileId:
+      typeof search.inventoryFileId === "number"
+        ? search.inventoryFileId
+        : typeof search.inventoryFileId === "string"
+          ? Number.parseInt(search.inventoryFileId, 10) || undefined
           : undefined,
   }),
   component: PlayRoute,
@@ -394,17 +413,179 @@ function AppLayout() {
 
 function LibraryRoute() {
   const { id } = libraryRoute.useParams()
+  const search = libraryRoute.useSearch()
+  const navigate = libraryRoute.useNavigate()
+  const page = search.page ?? 1
+  const pageSize = search.pageSize ?? DEFAULT_LIBRARY_PAGE_SIZE
+  const filters = parseLibraryFiltersSearch(search)
 
-  return <LibraryDetail libraryId={Number(id)} />
+  return (
+    <LibraryDetail
+      libraryId={Number(id)}
+      page={page}
+      pageSize={pageSize}
+      filters={filters}
+      onPaginationChange={(next) => {
+        void navigate({
+          search: (previous) => {
+            const nextPage = next.page ?? previous.page ?? 1
+            const nextPageSize =
+              next.pageSize ?? previous.pageSize ?? DEFAULT_LIBRARY_PAGE_SIZE
+
+            return {
+              ...previous,
+              page: nextPage === 1 ? undefined : nextPage,
+              pageSize:
+                nextPageSize === DEFAULT_LIBRARY_PAGE_SIZE
+                  ? undefined
+                  : nextPageSize,
+            }
+          },
+          replace: true,
+        })
+      }}
+      onFiltersChange={(filters) => {
+        void navigate({
+          search: (previous) => {
+            return {
+              ...previous,
+              ...libraryFiltersToSearch(filters),
+              page: undefined,
+            }
+          },
+          replace: true,
+        })
+      }}
+    />
+  )
+}
+
+function parsePositiveIntSearch(value: unknown) {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : undefined
+
+  return parsed && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function normalizeLibraryPageSearch(value: unknown) {
+  const parsed = parsePositiveIntSearch(value)
+
+  return parsed && parsed !== 1 ? parsed : undefined
+}
+
+function normalizeLibraryPageSizeSearch(value: unknown) {
+  const parsed = parsePositiveIntSearch(value)
+
+  return parsed &&
+    isLibraryPageSize(parsed) &&
+    parsed !== DEFAULT_LIBRARY_PAGE_SIZE
+    ? parsed
+    : undefined
+}
+
+function parseLibraryFiltersSearch(
+  search: Record<string, unknown>
+): DiscoveryFilters {
+  return createDefaultDiscoveryFilters({
+    q: parseStringSearch(search.q),
+    type: parseLibraryTypeSearch(search.type),
+    genre: parseStringSearch(search.genre),
+    region: parseStringSearch(search.region),
+    year: parseStringSearch(search.year),
+    minRating: parseStringSearch(search.minRating),
+    watchedState: parseWatchedStateSearch(search.watchedState),
+    organizingState: parseOrganizingStateSearch(search.organizingState),
+    sort: parseLibrarySortSearch(search.sort) ?? "title",
+    sortDirection: parseSortDirectionSearch(search.sortDirection) ?? "asc",
+  })
+}
+
+function libraryFiltersToSearch(filters: DiscoveryFilters) {
+  return {
+    q: filters.q.trim() || undefined,
+    type: filters.type === "all" ? undefined : filters.type,
+    genre: filters.genre.trim() || undefined,
+    region: filters.region.trim() || undefined,
+    year: filters.year.trim() || undefined,
+    minRating: filters.minRating.trim() || undefined,
+    watchedState:
+      filters.watchedState === "all" ? undefined : filters.watchedState,
+    organizingState:
+      filters.organizingState === "all" ? undefined : filters.organizingState,
+    sort: filters.sort === "title" ? undefined : filters.sort,
+    sortDirection:
+      filters.sortDirection === "asc" ? undefined : filters.sortDirection,
+  }
+}
+
+function parseStringSearch(value: unknown) {
+  return typeof value === "string" ? value : undefined
+}
+
+function parseLibraryTypeSearch(
+  value: unknown
+): DiscoveryFilters["type"] | undefined {
+  return value === "movie" || value === "show" || value === "all"
+    ? value
+    : undefined
+}
+
+function parseWatchedStateSearch(
+  value: unknown
+): DiscoveryFilters["watchedState"] | undefined {
+  return value === "unwatched" ||
+    value === "in_progress" ||
+    value === "watched" ||
+    value === "all"
+    ? value
+    : undefined
+}
+
+function parseOrganizingStateSearch(
+  value: unknown
+): DiscoveryFilters["organizingState"] | undefined {
+  return value === "organized" || value === "unorganized" || value === "all"
+    ? value
+    : undefined
+}
+
+function parseLibrarySortSearch(
+  value: unknown
+): DiscoveryFilters["sort"] | undefined {
+  return value === "recent" ||
+    value === "title" ||
+    value === "year" ||
+    value === "watch_status"
+    ? value
+    : undefined
+}
+
+function parseSortDirectionSearch(
+  value: unknown
+): DiscoveryFilters["sortDirection"] | undefined {
+  return value === "asc" || value === "desc" ? value : undefined
 }
 
 function MediaRoute() {
   const { id } = mediaRoute.useParams()
-  const { view } = mediaRoute.useSearch()
+  const { view, episodePage } = mediaRoute.useSearch()
 
   return (
-    <MediaDetail itemId={Number(id)} detailView={parseMediaDetailView(view)} />
+    <MediaDetail
+      itemId={Number(id)}
+      detailView={parseMediaDetailView(view)}
+      episodePage={episodePage}
+    />
   )
+}
+
+function normalizeEpisodePageSearch(value: unknown): number {
+  const page = typeof value === "number" ? value : Number(value)
+  return Number.isInteger(page) && page > 0 ? page : 1
 }
 
 function PersonRoute() {
@@ -421,12 +602,13 @@ function SearchRoute() {
 
 function PlayRoute() {
   const { id } = playRoute.useParams()
-  const { fromStart, assetId } = playRoute.useSearch()
+  const { fromStart, assetId, inventoryFileId } = playRoute.useSearch()
 
   return (
     <PlayExperience
       itemId={Number(id)}
       assetId={assetId}
+      inventoryFileId={inventoryFileId}
       fromStart={fromStart}
     />
   )

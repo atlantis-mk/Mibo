@@ -2,12 +2,15 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/inventory"
 )
 
 func TestCreateItemBuildsSeriesHierarchy(t *testing.T) {
@@ -303,6 +306,235 @@ func TestCorrectEpisodeNumberingMovesEpisodeWithinSeriesAndDetectsConflict(t *te
 	}
 	if updated.GovernanceStatus != GovernanceLocked {
 		t.Fatalf("expected unrelated governance status to be preserved, got %#v", updated)
+	}
+}
+
+func TestManualSeriesRestructureAppliesFourLevelPath(t *testing.T) {
+	svc, ctx := newTestService(t)
+	rootPath := "/我的收藏/10-30(1)/MP4"
+	libraryID := uint(1)
+	movie := seedManualRestructureMovie(t, ctx, svc, libraryID, "/我的收藏/10-30(1)/MP4/201-216/201/201.mp4")
+
+	preview, err := svc.PreviewManualSeriesRestructure(ctx, ManualSeriesRestructureInput{LibraryID: libraryID, RootPath: rootPath, SeriesTitle: "MP4"})
+	if err != nil {
+		t.Fatalf("preview restructure: %v", err)
+	}
+	if len(preview.Mappings) != 1 || preview.Mappings[0].SeasonNumber != 201 || preview.Mappings[0].EpisodeNumber != 201 || preview.Mappings[0].EpisodeTitle != "201" {
+		t.Fatalf("unexpected preview mapping: %#v", preview.Mappings)
+	}
+
+	result, err := svc.ApplyManualSeriesRestructure(ctx, ManualSeriesRestructureInput{LibraryID: libraryID, RootPath: rootPath, SeriesTitle: "MP4"})
+	if err != nil {
+		t.Fatalf("apply restructure: %v", err)
+	}
+	if result.Series.Title != "MP4" || result.Series.Path != rootPath || result.Series.Type != ItemTypeSeries {
+		t.Fatalf("unexpected series: %#v", result.Series)
+	}
+	if len(result.Seasons) != 1 || result.Seasons[0].IndexNumber == nil || *result.Seasons[0].IndexNumber != 201 {
+		t.Fatalf("unexpected seasons: %#v", result.Seasons)
+	}
+	if len(result.Episodes) != 1 || result.Episodes[0].IndexNumber == nil || *result.Episodes[0].IndexNumber != 201 || result.Episodes[0].Title != "201" {
+		t.Fatalf("unexpected episodes: %#v", result.Episodes)
+	}
+
+	assertAssetPrimaryLink(t, ctx, svc, movie.asset.ID, result.Episodes[0].ID)
+	var reloadedMovie database.CatalogItem
+	if err := svc.db.WithContext(ctx).Unscoped().First(&reloadedMovie, movie.item.ID).Error; err != nil {
+		t.Fatalf("reload source movie: %v", err)
+	}
+	if reloadedMovie.DeletedAt == nil || reloadedMovie.GovernanceStatus != GovernanceManual {
+		t.Fatalf("expected source movie to be manually retired, got %#v", reloadedMovie)
+	}
+}
+
+func TestManualSeriesRestructureAppliesThreeLevelPathWithOverrides(t *testing.T) {
+	svc, ctx := newTestService(t)
+	rootPath := "/我的收藏/10-30(1)/MP4/201-216"
+	libraryID := uint(1)
+	movie := seedManualRestructureMovie(t, ctx, svc, libraryID, "/我的收藏/10-30(1)/MP4/201-216/201.mp4")
+	seasonNumber := 1
+	episodeNumber := 5
+
+	result, err := svc.ApplyManualSeriesRestructure(ctx, ManualSeriesRestructureInput{
+		LibraryID:    libraryID,
+		RootPath:     rootPath,
+		SeriesTitle:  "用户自定义剧名",
+		SeasonNumber: &seasonNumber,
+		EpisodeMappings: []ManualSeriesEpisodeMappingInput{{
+			AssetID:       movie.asset.ID,
+			EpisodeNumber: &episodeNumber,
+			EpisodeTitle:  "自定义集名",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("apply restructure: %v", err)
+	}
+	if result.Series.Title != "用户自定义剧名" || result.Series.Path != rootPath {
+		t.Fatalf("unexpected series: %#v", result.Series)
+	}
+	if len(result.Episodes) != 1 || result.Episodes[0].ParentIndexNumber == nil || *result.Episodes[0].ParentIndexNumber != 1 || result.Episodes[0].IndexNumber == nil || *result.Episodes[0].IndexNumber != 5 || result.Episodes[0].Title != "自定义集名" {
+		t.Fatalf("unexpected overridden episode: %#v", result.Episodes)
+	}
+	assertAssetPrimaryLink(t, ctx, svc, movie.asset.ID, result.Episodes[0].ID)
+}
+
+func TestManualSeriesRestructureMigratesMetadata(t *testing.T) {
+	svc, ctx := newTestService(t)
+	libraryID := uint(1)
+	movie := seedManualRestructureMovie(t, ctx, svc, libraryID, "/library/MP4/201-216/201.mp4")
+	seedManualRestructureMetadata(t, ctx, svc, movie.item.ID, movie.asset.ID)
+
+	result, err := svc.ApplyManualSeriesRestructure(ctx, ManualSeriesRestructureInput{LibraryID: libraryID, RootPath: "/library/MP4/201-216", SeriesTitle: "Migrated Show", MigrateMetadata: true})
+	if err != nil {
+		t.Fatalf("apply restructure: %v", err)
+	}
+	if len(result.Episodes) != 1 {
+		t.Fatalf("expected one episode, got %#v", result.Episodes)
+	}
+	episodeID := result.Episodes[0].ID
+
+	var seriesImage database.ItemImage
+	if err := svc.db.WithContext(ctx).Where("item_id = ? AND image_type = ?", result.Series.ID, "poster").First(&seriesImage).Error; err != nil {
+		t.Fatalf("load migrated series image: %v", err)
+	}
+	if seriesImage.URL != "https://example.test/poster.jpg" || !seriesImage.IsSelected {
+		t.Fatalf("unexpected migrated series image: %#v", seriesImage)
+	}
+	var episodeStill database.ItemImage
+	if err := svc.db.WithContext(ctx).Where("item_id = ? AND image_type = ?", episodeID, "still").First(&episodeStill).Error; err != nil {
+		t.Fatalf("load migrated episode still: %v", err)
+	}
+	if episodeStill.URL != "https://example.test/poster.jpg" || !episodeStill.IsSelected {
+		t.Fatalf("expected movie poster to migrate as episode still, got %#v", episodeStill)
+	}
+
+	var field database.MetadataFieldState
+	if err := svc.db.WithContext(ctx).Where("item_id = ? AND field_key = ?", episodeID, "overview").First(&field).Error; err != nil {
+		t.Fatalf("load migrated field: %v", err)
+	}
+	var overview string
+	if err := json.Unmarshal([]byte(field.ValueJSON), &overview); err != nil || overview != "Original overview" {
+		t.Fatalf("unexpected migrated overview %q err=%v", field.ValueJSON, err)
+	}
+
+	var tagCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.ItemTag{}).Where("item_id = ?", episodeID).Count(&tagCount).Error; err != nil {
+		t.Fatalf("count migrated tags: %v", err)
+	}
+	if tagCount != 1 {
+		t.Fatalf("expected migrated tag, got %d", tagCount)
+	}
+	var peopleCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.ItemPerson{}).Where("item_id = ?", episodeID).Count(&peopleCount).Error; err != nil {
+		t.Fatalf("count migrated people: %v", err)
+	}
+	if peopleCount != 1 {
+		t.Fatalf("expected migrated person, got %d", peopleCount)
+	}
+	var progress database.UserItemData
+	if err := svc.db.WithContext(ctx).Where("item_id = ?", episodeID).First(&progress).Error; err != nil {
+		t.Fatalf("load migrated progress: %v", err)
+	}
+	if progress.UserID != 7 || progress.PositionSeconds != 120 || progress.AssetID == nil || *progress.AssetID != movie.asset.ID {
+		t.Fatalf("unexpected migrated progress: %#v", progress)
+	}
+}
+
+func TestManualSeriesRestructureUsesFirstEpisodeImageForSeries(t *testing.T) {
+	svc, ctx := newTestService(t)
+	libraryID := uint(1)
+	first := seedManualRestructureMovie(t, ctx, svc, libraryID, "/library/MP4/201-216/201.mp4")
+	second := seedManualRestructureMovie(t, ctx, svc, libraryID, "/library/MP4/201-216/202.mp4")
+	if err := svc.db.WithContext(ctx).Create(&database.ItemImage{ItemID: first.item.ID, ImageType: "poster", URL: "https://example.test/first.jpg", IsSelected: false}).Error; err != nil {
+		t.Fatalf("create first image: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.ItemImage{ItemID: second.item.ID, ImageType: "poster", URL: "https://example.test/second.jpg", IsSelected: true}).Error; err != nil {
+		t.Fatalf("create second image: %v", err)
+	}
+
+	result, err := svc.ApplyManualSeriesRestructure(ctx, ManualSeriesRestructureInput{LibraryID: libraryID, RootPath: "/library/MP4/201-216", SeriesTitle: "Image Fallback", MigrateMetadata: true})
+	if err != nil {
+		t.Fatalf("apply restructure: %v", err)
+	}
+
+	var seriesImage database.ItemImage
+	if err := svc.db.WithContext(ctx).Where("item_id = ? AND image_type = ? AND is_selected = ?", result.Series.ID, "poster", true).First(&seriesImage).Error; err != nil {
+		t.Fatalf("load selected series image: %v", err)
+	}
+	if seriesImage.URL != "https://example.test/first.jpg" {
+		t.Fatalf("expected first episode still to become series poster, got %#v", seriesImage)
+	}
+}
+
+type manualRestructureMovieFixture struct {
+	item  database.CatalogItem
+	asset database.MediaAsset
+	file  database.InventoryFile
+}
+
+func seedManualRestructureMovie(t *testing.T, ctx context.Context, svc *Service, libraryID uint, storagePath string) manualRestructureMovieFixture {
+	t.Helper()
+	file := database.InventoryFile{LibraryID: libraryID, StorageProvider: "local", StoragePath: storagePath, ContentClass: "video", Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateClassified}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: libraryID, Type: ItemTypeMovie, Title: filepath.Base(storagePath), Path: storagePath, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create movie item: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: libraryID, AssetType: inventory.AssetTypeMain, Status: inventory.AssetStatusAvailable, ProbeStatus: "ready"}
+	if err := svc.db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: inventory.FileRoleSource}).Error; err != nil {
+		t.Fatalf("link asset file: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: item.ID, Role: inventory.AssetItemRolePrimary, Source: "scanner"}).Error; err != nil {
+		t.Fatalf("link asset item: %v", err)
+	}
+	return manualRestructureMovieFixture{item: item, asset: asset, file: file}
+}
+
+func assertAssetPrimaryLink(t *testing.T, ctx context.Context, svc *Service, assetID uint, itemID uint) {
+	t.Helper()
+	var links []database.AssetItem
+	if err := svc.db.WithContext(ctx).Where("asset_id = ?", assetID).Find(&links).Error; err != nil {
+		t.Fatalf("load asset links: %v", err)
+	}
+	if len(links) != 1 || links[0].ItemID != itemID || links[0].Role != inventory.AssetItemRolePrimary || links[0].Source != "manual_restructure" {
+		t.Fatalf("unexpected asset links: %#v", links)
+	}
+}
+
+func seedManualRestructureMetadata(t *testing.T, ctx context.Context, svc *Service, itemID uint, assetID uint) {
+	t.Helper()
+	if err := svc.db.WithContext(ctx).Create(&database.ItemImage{ItemID: itemID, ImageType: "poster", URL: "https://example.test/poster.jpg", IsSelected: true}).Error; err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	valueJSON, err := json.Marshal("Original overview")
+	if err != nil {
+		t.Fatalf("marshal overview: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.MetadataFieldState{ItemID: itemID, FieldKey: "overview", ValueJSON: string(valueJSON)}).Error; err != nil {
+		t.Fatalf("create field state: %v", err)
+	}
+	tag := database.Tag{Kind: "genre", Name: "Drama"}
+	if err := svc.db.WithContext(ctx).Create(&tag).Error; err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.ItemTag{ItemID: itemID, TagID: tag.ID}).Error; err != nil {
+		t.Fatalf("create item tag: %v", err)
+	}
+	person := database.Person{Name: "Actor One"}
+	if err := svc.db.WithContext(ctx).Create(&person).Error; err != nil {
+		t.Fatalf("create person: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.ItemPerson{ItemID: itemID, PersonID: person.ID, Role: "cast", Character: "Lead"}).Error; err != nil {
+		t.Fatalf("create item person: %v", err)
+	}
+	lastPlayed := time.Now().UTC()
+	if err := svc.db.WithContext(ctx).Create(&database.UserItemData{UserID: 7, ItemID: itemID, AssetID: &assetID, PositionSeconds: 120, LastPlayedAt: &lastPlayed, Favorite: true}).Error; err != nil {
+		t.Fatalf("create user item data: %v", err)
 	}
 }
 

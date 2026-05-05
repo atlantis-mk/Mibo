@@ -1,13 +1,18 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/auth"
+	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/progress"
 )
 
@@ -197,6 +202,14 @@ func (r *Router) handleUpdateProgress(w http.ResponseWriter, req *http.Request) 
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
+	frameURL, err := r.saveProgressFrame(user.ID, input)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	if frameURL != "" {
+		input.ProgressFrameURL = frameURL
+	}
 
 	state, err := r.progress.Update(req.Context(), user.ID, input)
 	if err != nil {
@@ -204,6 +217,63 @@ func (r *Router) handleUpdateProgress(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 	writeJSON(req.Context(), w, http.StatusOK, state)
+}
+
+func (r *Router) saveProgressFrame(userID uint, input progress.UpdateInput) (string, error) {
+	frame := strings.TrimSpace(input.ProgressFrameData)
+	if frame == "" {
+		return "", nil
+	}
+	if input.ItemID == 0 {
+		return "", fmt.Errorf("item_id is required for progress frame")
+	}
+
+	mediaType, payload, ok := strings.Cut(frame, ",")
+	if !ok || !strings.HasPrefix(mediaType, "data:image/") || !strings.Contains(mediaType, ";base64") {
+		return "", fmt.Errorf("progress_frame_data must be a base64 image data URL")
+	}
+	ext := progressFrameExtension(mediaType)
+	if ext == "" {
+		return "", fmt.Errorf("progress_frame_data must be jpeg, png, or webp")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", fmt.Errorf("decode progress frame: %w", err)
+	}
+	if len(decoded) == 0 || len(decoded) > 2*1024*1024 {
+		return "", fmt.Errorf("progress frame must be between 1 byte and 2 MiB")
+	}
+
+	dir := filepath.Join(r.generatedArtworkRootPath(), "progress", strconvFormatUint(userID), strconvFormatUint(input.ItemID))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	baseName := "default"
+	if input.AssetID != nil && *input.AssetID > 0 {
+		baseName = "asset-" + strconvFormatUint(*input.AssetID)
+	}
+	for _, staleExt := range []string{".jpg", ".jpeg", ".png", ".webp"} {
+		_ = os.Remove(filepath.Join(dir, baseName+staleExt))
+	}
+	path := filepath.Join(dir, baseName+ext)
+	if err := os.WriteFile(path, decoded, 0o644); err != nil {
+		return "", err
+	}
+
+	return "/api/v1/me/progress-frames/" + strconvFormatUint(input.ItemID) + "/" + baseName, nil
+}
+
+func progressFrameExtension(mediaType string) string {
+	switch {
+	case strings.HasPrefix(mediaType, "data:image/jpeg"):
+		return ".jpg"
+	case strings.HasPrefix(mediaType, "data:image/png"):
+		return ".png"
+	case strings.HasPrefix(mediaType, "data:image/webp"):
+		return ".webp"
+	default:
+		return ""
+	}
 }
 
 func (r *Router) handleContinueWatching(w http.ResponseWriter, req *http.Request) {
@@ -222,6 +292,7 @@ func (r *Router) handleContinueWatching(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeUserItemEntryURLs(req, entries)
 	writeJSON(req.Context(), w, http.StatusOK, entries)
 }
 
@@ -291,7 +362,21 @@ func (r *Router) handleRecentlyPlayed(w http.ResponseWriter, req *http.Request) 
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	normalizeUserItemEntryURLs(req, entries)
 	writeJSON(req.Context(), w, http.StatusOK, entries)
+}
+
+func normalizeUserItemEntryURLs(req *http.Request, entries []catalog.CatalogUserItemEntry) {
+	for idx := range entries {
+		entries[idx].ProgressFrameURL = buildAssetURL(req, entries[idx].ProgressFrameURL)
+		normalizeCatalogListItemArtworkURLs(req, &entries[idx].Item)
+		if entries[idx].DisplayItem != nil {
+			normalizeCatalogListItemArtworkURLs(req, entries[idx].DisplayItem)
+		}
+		if entries[idx].PlayItem != nil {
+			normalizeCatalogListItemArtworkURLs(req, entries[idx].PlayItem)
+		}
+	}
 }
 
 func (r *Router) handleRecentlyAdded(w http.ResponseWriter, req *http.Request) {

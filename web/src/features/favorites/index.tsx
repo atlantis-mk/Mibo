@@ -12,6 +12,7 @@ import { MediaPosterCard } from "#/components/media-poster-card"
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import { SidebarTrigger } from "#/components/ui/sidebar"
+import { Tabs, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import { favoritesQueryOptions } from "#/lib/mibo-query"
 import { useAuthStore } from "#/stores/auth-store"
 
@@ -45,37 +46,49 @@ export default function FavoritesPage() {
 
   const favorites = favoritesQuery.data ?? []
 
+  const handlePrimaryTabChange = (value: string) => {
+    if (value === "home") {
+      void navigate({ to: "/" })
+    }
+  }
+
   return (
     <div className="relative min-w-0 flex-1 bg-background text-foreground">
       <AppTopBar
         leftSlot={
           <>
             <SidebarTrigger />
-            <div className="hidden rounded-full border border-border/50 bg-background/80 p-1 sm:flex">
-              <Button asChild size="sm" variant="ghost">
-                <Link to="/">首页</Link>
-              </Button>
-              <Button asChild size="sm">
-                <Link to="/favorites">收藏</Link>
-              </Button>
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">收藏</div>
+            <Tabs
+              value="favorites"
+              onValueChange={handlePrimaryTabChange}
+              className="flex"
+            >
+              <TabsList className="rounded-full border border-border/50 bg-background/80 p-1">
+                <TabsTrigger value="home" className="h-8 rounded-full px-3">
+                  首页
+                </TabsTrigger>
+                <TabsTrigger value="favorites" className="h-8 rounded-full px-3">
+                  收藏
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="flex min-w-0 items-baseline gap-2">
+              <div className="shrink-0 text-lg font-semibold">Mibo Favorites</div>
               <div className="truncate text-xs text-muted-foreground">
-                {favorites.length} 个收藏项目
+                我的收藏 · {favorites.length} 个收藏项目
               </div>
             </div>
           </>
         }
         rightSlot={
           <div className="hidden items-center gap-2 sm:flex">
-            <Button asChild size="icon-sm" variant="outline">
+            <Button asChild size="icon" variant="ghost">
               <Link to="/search" search={{ q: undefined }}>
                 <SearchIcon className="size-4" />
                 <span className="sr-only">搜索</span>
               </Link>
             </Button>
-            <Button asChild size="icon-sm" variant="outline">
+            <Button asChild size="icon" variant="ghost">
               <Link to="/settings">
                 <Settings2Icon className="size-4" />
                 <span className="sr-only">设置</span>
@@ -86,7 +99,7 @@ export default function FavoritesPage() {
       />
 
       <section className="px-4 pt-24 pb-16 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-[1600px]">
+        <div className="mx-auto max-w-400">
           <div className="mb-8">
             <Badge
               className="border-border/60 bg-background/80"

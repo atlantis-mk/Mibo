@@ -33,6 +33,9 @@ var catalogScanArtworkExtensions = map[string]struct{}{
 func applyCatalogScanArtworkCandidates(provider storage.Provider, artifact catalogScanArtifact, object storage.Object, snapshot scanDirectorySnapshot) catalogScanArtifact {
 	artifact.ImageCandidates = appendCatalogScanImageCandidates(artifact.ImageCandidates, siblingCatalogScanArtworkCandidates(provider, object, snapshot)...)
 	if thumbnail := strings.TrimSpace(object.ThumbnailURL); thumbnail != "" {
+		if strings.TrimSpace(artifact.ThumbnailURL) == "" {
+			artifact.ThumbnailURL = thumbnail
+		}
 		imageType := "poster"
 		if artifact.ItemType == catalog.ItemTypeEpisode {
 			imageType = "still"

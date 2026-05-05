@@ -57,6 +57,7 @@ export const EMPTY_LIBRARY_FORM: LibraryFormState = {
     ignore_file_extensions: [],
     min_file_size_bytes: 0,
     sample_ignore_size_bytes: 0,
+    inventory_probe_batch_enabled: true,
     configurable_exclusion_rules: true,
   },
   metadata: {
@@ -190,13 +191,14 @@ export function LibraryForm({
   )
 
   async function browseExistingLibraryPath(
-    path?: string
+    path?: string,
+    options?: { refresh?: boolean }
   ): Promise<StorageBrowseResult> {
     if (!api || !selectedSource) {
       throw new Error("请先选择媒体源。")
     }
 
-    return api.browseMediaSource(selectedSource.id, path)
+    return api.browseMediaSource(selectedSource.id, path, options?.refresh)
   }
 
   return (
@@ -319,6 +321,17 @@ export function LibraryForm({
             onChange({
               ...draft,
               scan: { ...draft.scan, realtime_monitor_enabled: checked },
+            })
+          }
+        />
+        <ToggleRow
+          label="批量探测库存"
+          description="关闭后扫描不会创建 inventory_probe_batch 批量探测任务。"
+          checked={draft.scan.inventory_probe_batch_enabled}
+          onChange={(checked) =>
+            onChange({
+              ...draft,
+              scan: { ...draft.scan, inventory_probe_batch_enabled: checked },
             })
           }
         />
@@ -663,18 +676,27 @@ export function LibraryForm({
 
 function ToggleRow({
   label,
+  description,
   checked,
   onChange,
   disabled = false,
 }: {
   label: string
+  description?: string
   checked: boolean
   onChange: (checked: boolean) => void
   disabled?: boolean
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 px-3 py-2 text-sm">
-      <span>{label}</span>
+      <span className="grid gap-0.5">
+        <span>{label}</span>
+        {description ? (
+          <span className="text-xs leading-5 text-muted-foreground">
+            {description}
+          </span>
+        ) : null}
+      </span>
       <Switch
         checked={checked}
         onCheckedChange={onChange}

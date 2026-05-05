@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,7 +14,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/health"
 	"github.com/atlan/mibo-media-server/internal/httpapi"
-	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/listener"
 	"github.com/atlan/mibo-media-server/internal/metadata"
@@ -24,7 +25,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/schedule"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
-	"github.com/atlan/mibo-media-server/internal/worker"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -32,7 +33,7 @@ type App struct {
 	cfg      config.Config
 	db       *gorm.DB
 	server   *http.Server
-	worker   *worker.Runner
+	workflow *workflow.Runner
 	listener *listener.Service
 }
 
@@ -48,25 +49,84 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	registry := providers.NewRegistry(cfg)
 	authSvc := auth.NewService(db)
-	jobsSvc := jobs.NewService(db)
+	workflowSvc := workflow.NewService(db)
+	workflowBudgets := workflow.DefaultServerResourceBudgets()
+	if cfg.Database.Driver == "sqlite" {
+		workflowBudgets = workflow.DefaultSQLiteResourceBudgets()
+	}
+	if err := workflowSvc.EnsureResourceBudgets(ctx, workflowBudgets); err != nil {
+		return nil, fmt.Errorf("ensure workflow resource budgets: %w", err)
+	}
+	ingestSvc := ingest.NewService(db, workflowSvc)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
-	catalogSvc := catalog.NewService(db)
+	catalogSvc := catalog.NewService(db, ingestSvc)
 	if _, err := catalogSvc.BackfillScannerIdentities(ctx); err != nil {
 		return nil, fmt.Errorf("backfill scanner identities: %w", err)
 	}
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
-	listenerSvc := listener.NewService(db, jobsSvc, librarySvc, registry)
-	probeSvc := probe.NewService(db, registry, cfg.FFprobe, cfg.FFmpeg)
+	librarySvc := library.NewService(cfg, db, registry, nil, ingestSvc, workflowSvc)
+	listenerSvc := listener.NewService(db, nil, librarySvc, registry)
+	probeSvc := probe.NewService(db, registry, cfg.FFprobe, cfg.FFmpeg, ingestSvc)
 	playbackSvc := playback.NewService(db, registry)
 	searchSvc := search.NewService(db, librarySvc)
-	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc)
-	healthSvc := health.NewService(db, registry, librarySvc, jobsSvc, cfg.OpenList.BaseURL)
+	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc, ingestSvc)
+	healthSvc := health.NewService(db, registry, librarySvc, cfg.OpenList.BaseURL)
 	catalogSvc.SetPersonProfileRefresher(metadataSvc)
-	scheduleSvc := schedule.NewService(db, schedule.WithJobs(jobsSvc))
+	scheduleSvc := schedule.NewService(db, schedule.WithDispatcher(func(ctx context.Context, due schedule.DueSchedule) (database.Job, error) {
+		status := schedule.StatusQueued
+		var result library.ScheduledJobResult
+		var err error
+		switch due.Kind {
+		case schedule.KindScan:
+			result, err = librarySvc.RunScheduledScan(ctx, due)
+		case schedule.KindLibraryCleanup:
+			result, err = librarySvc.RunScheduledCleanup(ctx, due)
+		case schedule.KindInvalidLinkCheck:
+			result, err = librarySvc.RunScheduledInvalidLinkCheck(ctx, due)
+			status = schedule.StatusCompleted
+		default:
+			return database.Job{}, fmt.Errorf("unsupported schedule kind %q", due.Kind)
+		}
+		if err != nil {
+			return database.Job{}, err
+		}
+		now := time.Now().UTC()
+		return database.Job{ID: due.ID, Kind: schedule.JobKindForSchedule(due.Kind), Status: status, PayloadJSON: result.Summary, AvailableAt: now, CreatedAt: now, UpdatedAt: now}, nil
+	}))
 	progressSvc := progress.NewService(db, searchSvc)
-	workerRunner := worker.NewRunner(cfg.Worker, jobsSvc, librarySvc, metadataSvc, probeSvc, settingsSvc, catalogSvc, searchSvc, scheduleSvc, listenerSvc)
+	workflowRunner := workflow.NewRunner(workflowSvc, workflow.RunnerConfig{Enabled: true, PollInterval: cfg.Worker.WorkflowPollInterval, LeaseDuration: cfg.Worker.WorkflowLeaseDuration})
+	librarySvc.RegisterWorkflowHandlers(workflowRunner)
+	workflowRunner.Register(workflow.TaskTypeProbeInventory, func(ctx context.Context, task database.WorkflowTask) error {
+		var payload library.InventoryProbeBatchPayload
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		for _, fileID := range payload.FileIDs {
+			if fileID == 0 {
+				continue
+			}
+			if err := probeSvc.ProbeInventoryFile(ctx, fileID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	workflowRunner.Register(workflow.TaskTypeMatchMetadata, func(ctx context.Context, task database.WorkflowTask) error {
+		var payload library.CatalogMatchBatchPayload
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		for _, itemID := range payload.ItemIDs {
+			if itemID == 0 {
+				continue
+			}
+			if _, err := metadataSvc.MatchCatalogItemOperation(ctx, itemID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 
-	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, scheduleSvc, listenerSvc, healthSvc)
+	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, ingestSvc, scheduleSvc, listenerSvc, healthSvc, workflowSvc)
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,
@@ -78,7 +138,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		cfg:      cfg,
 		db:       db,
 		server:   server,
-		worker:   workerRunner,
+		workflow: workflowRunner,
 		listener: listenerSvc,
 	}, nil
 }
@@ -100,7 +160,7 @@ func (a *App) Run(ctx context.Context) error {
 	}()
 
 	if a.cfg.Worker.Enabled {
-		go a.worker.Run(ctx)
+		go a.workflow.Run(ctx)
 		go a.listener.StartLocalObserver(ctx)
 		go a.listener.StartOpenListObserver(ctx)
 	}

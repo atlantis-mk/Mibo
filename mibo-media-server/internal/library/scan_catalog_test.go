@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -48,10 +51,10 @@ func TestRunSyncLibraryWritesCatalogRows(t *testing.T) {
 
 	var projectionJobs int64
 	if err := db.WithContext(ctx).
-		Model(&database.Job{}).
-		Where("kind = ?", JobKindCatalogRefreshLibraryProjection).
+		Model(&database.WorkflowTask{}).
+		Where("task_type = ?", workflow.TaskTypeRefreshProjection).
 		Count(&projectionJobs).Error; err != nil {
-		t.Fatalf("count catalog projection refresh jobs: %v", err)
+		t.Fatalf("count catalog projection refresh tasks: %v", err)
 	}
 	if projectionJobs != 2 {
 		t.Fatalf("expected one catalog projection refresh per scan, got %d", projectionJobs)
@@ -67,15 +70,378 @@ func TestRunSyncLibraryWritesCatalogRows(t *testing.T) {
 	if len(matchJobs) != 0 {
 		t.Fatalf("expected scan to defer per-item catalog match jobs to batches, got %#v", matchJobs)
 	}
-	var batchJobs []database.Job
+	var batchJobs []database.WorkflowTask
 	if err := db.WithContext(ctx).
-		Where("kind = ?", JobKindCatalogMatchBatch).
+		Where("task_type = ?", workflow.TaskTypeMatchMetadata).
 		Order("id asc").
 		Find(&batchJobs).Error; err != nil {
-		t.Fatalf("list catalog match batch jobs: %v", err)
+		t.Fatalf("list catalog match batch tasks: %v", err)
 	}
 	if len(batchJobs) != 2 {
 		t.Fatalf("expected one catalog match batch per scan, got %#v", batchJobs)
+	}
+}
+
+func TestScanPublishesDiscoveredInventoryBeforeCatalogMaterialization(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	moviePath := filepath.Join(rootPath, "Fast.Movie.2024.mkv")
+	mustWriteFixtureFile(t, moviePath)
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: libraryRecord.MediaSourceID, RootPath: rootPath})
+	if err != nil {
+		t.Fatalf("provider for library path: %v", err)
+	}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath); err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	var file database.InventoryFile
+	if err := db.WithContext(ctx).Where("storage_path = ?", moviePath).First(&file).Error; err != nil {
+		t.Fatalf("load inventory file: %v", err)
+	}
+	if file.ScanState != inventory.FileScanStateReviewRequired {
+		t.Fatalf("expected scan to upgrade discovered file to review-required state, got %#v", file)
+	}
+
+	if err := db.WithContext(ctx).Where("file_id = ?", file.ID).Delete(&database.AssetFile{}).Error; err != nil {
+		t.Fatalf("simulate pre-materialization unlink: %v", err)
+	}
+	if err := db.WithContext(ctx).Model(&database.InventoryFile{}).Where("id = ?", file.ID).Update("scan_state", inventory.FileScanStateDiscovered).Error; err != nil {
+		t.Fatalf("simulate discovered state: %v", err)
+	}
+	result, err := catalog.NewService(db).BrowseItems(ctx, catalog.BrowseItemsInput{LibraryID: libraryRecord.ID, TypeFilter: "all", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	found := false
+	for _, item := range result.Items {
+		if item.InventoryFileID != nil && *item.InventoryFileID == file.ID && item.SourceKind == "inventory_file" && item.MaturityState == inventory.FileScanStateDiscovered {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected discovered inventory-backed browse entry, got %#v", result.Items)
+	}
+}
+
+func TestBulkDiscoveredInventoryPersistsProviderThumbnail(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	provider := &countingMaterializeProvider{}
+	libraryRecord := database.Library{ID: 1, Name: "Movies", Type: LibraryTypeMovies, RootPath: "/library", Status: "active", ScannerEnabled: true}
+	candidates := []discoveredInventoryCandidate{{
+		object: storage.Object{
+			Name:         "Movie.mkv",
+			Path:         "/library/Movie.mkv",
+			Size:         100,
+			ThumbnailURL: "https://cdn.example.test/movie-thumb.jpg",
+		},
+		container: "mkv",
+	}}
+
+	files, err := svc.bulkUpsertDiscoveredInventoryFiles(ctx, provider, libraryRecord, candidates)
+	if err != nil {
+		t.Fatalf("bulk upsert discovered inventory: %v", err)
+	}
+	file := files["local\x00/library/Movie.mkv"]
+	if file.ThumbnailURL != "https://cdn.example.test/movie-thumb.jpg" {
+		t.Fatalf("expected provider thumbnail to persist, got %#v", file)
+	}
+}
+
+func TestRunCatalogMaterializeBatchReusesDirectorySnapshotWithinBatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	provider := &countingMaterializeProvider{objectsByPath: map[string][]storage.Object{}}
+	registry := providers.NewRegistry(config.Config{})
+	registryTestSwapLocal(registry, provider)
+	svc := NewService(config.Config{}, db, registry, nil)
+
+	rootPath := "/library"
+	provider.objectsByPath[rootPath] = []storage.Object{{Name: filepath.Base(rootPath), Path: rootPath, IsDir: true}}
+	videoPaths := []string{
+		filepath.ToSlash(filepath.Join(rootPath, "folder", "one.mkv")),
+		filepath.ToSlash(filepath.Join(rootPath, "folder", "two.mkv")),
+		filepath.ToSlash(filepath.Join(rootPath, "folder", "three.mkv")),
+	}
+	dirPath := filepath.ToSlash(filepath.Join(rootPath, "folder"))
+	provider.objectsByPath[dirPath] = []storage.Object{
+		{Name: "one.mkv", Path: videoPaths[0], Size: 10, Provider: provider.Name()},
+		{Name: "two.mkv", Path: videoPaths[1], Size: 11, Provider: provider.Name()},
+		{Name: "three.mkv", Path: videoPaths[2], Size: 12, Provider: provider.Name()},
+	}
+
+	source := database.MediaSource{Name: "Test", Provider: "local", RootPath: rootPath}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create media source: %v", err)
+	}
+	libraryRecord := database.Library{Name: "Movies", Type: LibraryTypeMovies, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.LibraryPath{LibraryID: libraryRecord.ID, MediaSourceID: source.ID, RootPath: rootPath, DisplayName: libraryRecord.Name, Enabled: true}).Error; err != nil {
+		t.Fatalf("create library path: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db.WithContext(ctx), libraryRecord.ID); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+
+	fileIDs := make([]uint, 0, len(videoPaths))
+	for _, videoPath := range videoPaths {
+		file, err := inventory.NewService(db).UpsertFile(ctx, inventory.UpsertFileInput{
+			LibraryID:       libraryRecord.ID,
+			StorageProvider: provider.Name(),
+			StoragePath:     videoPath,
+			Container:       "mkv",
+			ContentClass:    SourceContentClassVideo,
+			Status:          inventory.FileStatusAvailable,
+			ScanState:       inventory.FileScanStateDiscovered,
+		})
+		if err != nil {
+			t.Fatalf("upsert inventory file %s: %v", videoPath, err)
+		}
+		fileIDs = append(fileIDs, file.ID)
+	}
+
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: libraryRecord.ID, RootPath: rootPath, FileIDs: fileIDs}); err != nil {
+		t.Fatalf("run catalog materialize batch: %v", err)
+	}
+	if got := provider.listCount(dirPath); got != 1 {
+		t.Fatalf("expected one directory list for %s, got %d", dirPath, got)
+	}
+	if got := provider.refreshFlags(dirPath); len(got) != 1 || got[0] {
+		t.Fatalf("expected materialize relist for %s to avoid refresh, got %#v", dirPath, got)
+	}
+	if got := provider.listCount(rootPath); got != 0 {
+		t.Fatalf("expected no materialize relist for root %s, got %d", rootPath, got)
+	}
+}
+
+func TestListAllDirectoryObjectsRefreshesOnlyFirstPage(t *testing.T) {
+	t.Parallel()
+
+	provider := &countingMaterializeProvider{objectsByPath: map[string][]storage.Object{}}
+	svc := NewService(config.Config{}, nil, nil, nil)
+	dirPath := "/library"
+	provider.objectsByPath[dirPath] = make([]storage.Object, 1001)
+	for i := range provider.objectsByPath[dirPath] {
+		provider.objectsByPath[dirPath][i] = storage.Object{Name: fmt.Sprintf("file-%04d.mkv", i), Path: fmt.Sprintf("%s/file-%04d.mkv", dirPath, i), Provider: provider.Name()}
+	}
+
+	objects, err := svc.listAllDirectoryObjects(context.Background(), provider, dirPath, true)
+	if err != nil {
+		t.Fatalf("list all directory objects: %v", err)
+	}
+	if len(objects) != 1001 {
+		t.Fatalf("expected 1001 objects, got %d", len(objects))
+	}
+	if got := provider.refreshFlags(dirPath); len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("expected first page refresh only for %s, got %#v", dirPath, got)
+	}
+}
+
+func TestScanUpgradesDiscoveredFileIntoEpisodeHierarchyWithFileAnchor(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	episodePath := filepath.Join(rootPath, "Show One", "Season 1", "Show.One.S01E02.mkv")
+	mustWriteFixtureFile(t, episodePath)
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Shows", LibraryTypeShows, rootPath)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: libraryRecord.MediaSourceID, RootPath: rootPath})
+	if err != nil {
+		t.Fatalf("provider for library path: %v", err)
+	}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath); err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	var file database.InventoryFile
+	if err := db.WithContext(ctx).Where("storage_path = ?", episodePath).First(&file).Error; err != nil {
+		t.Fatalf("load inventory file: %v", err)
+	}
+	if file.ScanState != inventory.FileScanStateClassified {
+		t.Fatalf("expected classified file state, got %#v", file)
+	}
+	var episode database.CatalogItem
+	if err := db.WithContext(ctx).Where("library_id = ? AND type = ?", libraryRecord.ID, catalog.ItemTypeEpisode).First(&episode).Error; err != nil {
+		t.Fatalf("load episode: %v", err)
+	}
+	var count int64
+	if err := db.WithContext(ctx).
+		Table("asset_files").
+		Joins("JOIN asset_items ON asset_items.asset_id = asset_files.asset_id").
+		Where("asset_files.file_id = ? AND asset_items.item_id = ?", file.ID, episode.ID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count file anchor links: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected episode graph to preserve inventory file anchor, got %d links", count)
+	}
+}
+
+type countingMaterializeProvider struct {
+	mu            sync.Mutex
+	objectsByPath map[string][]storage.Object
+	listCalls     map[string]int
+	refreshByPath map[string][]bool
+}
+
+func (p *countingMaterializeProvider) Name() string { return "local" }
+
+func (p *countingMaterializeProvider) List(_ context.Context, req storage.ListRequest) ([]storage.Object, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.listCalls == nil {
+		p.listCalls = make(map[string]int)
+	}
+	if p.refreshByPath == nil {
+		p.refreshByPath = make(map[string][]bool)
+	}
+	p.listCalls[req.Path]++
+	p.refreshByPath[req.Path] = append(p.refreshByPath[req.Path], req.Refresh)
+	objects := p.objectsByPath[req.Path]
+	cloned := make([]storage.Object, len(objects))
+	copy(cloned, objects)
+	page := req.Page
+	if page <= 0 {
+		page = 1
+	}
+	perPage := req.PerPage
+	if perPage <= 0 {
+		return cloned, nil
+	}
+	start := (page - 1) * perPage
+	if start >= len(cloned) {
+		return []storage.Object{}, nil
+	}
+	end := start + perPage
+	if end > len(cloned) {
+		end = len(cloned)
+	}
+	return cloned[start:end], nil
+}
+
+func (p *countingMaterializeProvider) Get(_ context.Context, req storage.GetRequest) (storage.Object, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, object := range p.objectsByPath[req.Path] {
+		if object.Path == req.Path {
+			return object, nil
+		}
+	}
+	if objects := p.objectsByPath[req.Path]; len(objects) > 0 {
+		return objects[0], nil
+	}
+	return storage.Object{Name: filepath.Base(req.Path), Path: req.Path, IsDir: true, Provider: p.Name()}, nil
+}
+
+func (p *countingMaterializeProvider) Link(context.Context, storage.LinkRequest) (storage.LinkResult, error) {
+	return storage.LinkResult{}, storage.ErrNotImplemented
+}
+
+func (p *countingMaterializeProvider) ResolveStorage(ctx context.Context, req storage.ResolveStorageRequest) (storage.ResolvedStorage, error) {
+	object, err := p.Get(ctx, storage.GetRequest{Path: req.Path})
+	if err != nil {
+		return storage.ResolvedStorage{}, err
+	}
+	if object.Path == "" {
+		object.Path = req.Path
+	}
+	if object.Name == "" {
+		object.Name = filepath.Base(req.Path)
+	}
+	object.IsDir = true
+	object.Provider = p.Name()
+	return storage.ResolvedStorage{Provider: p.Name(), Path: req.Path, Object: object, Caps: storage.Capabilities{CanList: true, CanGet: true}}, nil
+}
+
+func (p *countingMaterializeProvider) Capabilities(context.Context) (storage.Capabilities, error) {
+	return storage.Capabilities{CanList: true, CanGet: true}, nil
+}
+
+func (p *countingMaterializeProvider) listCount(path string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.listCalls[path]
+}
+
+func (p *countingMaterializeProvider) refreshFlags(path string) []bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	flags := p.refreshByPath[path]
+	cloned := make([]bool, len(flags))
+	copy(cloned, flags)
+	return cloned
+}
+
+func registryTestSwapLocal(registry *providers.Registry, provider storage.Provider) {
+	if registry == nil {
+		return
+	}
+	registryValue := reflect.ValueOf(registry).Elem()
+	localField := registryValue.FieldByName("local")
+	reflect.NewAt(localField.Type(), unsafe.Pointer(localField.UnsafeAddr())).Elem().Set(reflect.ValueOf(provider))
+}
+
+func TestScanGroupsDiscoveredMovieVersionsByFileAnchors(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	movieDir := filepath.Join(rootPath, "Inception")
+	firstPath := filepath.Join(movieDir, "Inception.1080p.mkv")
+	secondPath := filepath.Join(movieDir, "Inception.2160p.mkv")
+	mustWriteFixtureFile(t, firstPath)
+	mustWriteFixtureFile(t, secondPath)
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: libraryRecord.MediaSourceID, RootPath: rootPath})
+	if err != nil {
+		t.Fatalf("provider for library path: %v", err)
+	}
+
+	if _, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath); err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	var movieCount int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id = ? AND type = ?", libraryRecord.ID, catalog.ItemTypeMovie).Count(&movieCount).Error; err != nil {
+		t.Fatalf("count movies: %v", err)
+	}
+	if movieCount != 1 {
+		t.Fatalf("expected one movie for discovered versions, got %d", movieCount)
+	}
+	var files []database.InventoryFile
+	if err := db.WithContext(ctx).Where("storage_path IN ?", []string{firstPath, secondPath}).Order("storage_path asc").Find(&files).Error; err != nil {
+		t.Fatalf("load files: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected two inventory files, got %#v", files)
+	}
+	for _, file := range files {
+		if file.ScanState != inventory.FileScanStateReviewRequired && file.ScanState != inventory.FileScanStateClassified {
+			t.Fatalf("unexpected file scan state: %#v", file)
+		}
+		var count int64
+		if err := db.WithContext(ctx).Model(&database.AssetFile{}).Where("file_id = ?", file.ID).Count(&count).Error; err != nil {
+			t.Fatalf("count asset file links: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("expected file %d to keep one asset anchor link, got %d", file.ID, count)
+		}
 	}
 }
 
@@ -177,6 +543,45 @@ func TestRunSyncLibraryGroupsFlatTVFolderIntoSingleSeries(t *testing.T) {
 	}
 }
 
+func TestRunSyncLibraryInheritsSeriesDirectoryForNestedVideos(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	showDir := filepath.Join(showsRoot, "灵笼")
+	mustWriteFixtureFile(t, filepath.Join(showDir, "Season 1", "01.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "OVA", "alpha.mp4"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "OVA", "beta.mp4"))
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
+	}
+
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 || series[0].Title != "灵笼" {
+		t.Fatalf("expected nested videos to stay under one inherited series, got %#v", series)
+	}
+
+	var episodes []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("index_number asc").Find(&episodes).Error; err != nil {
+		t.Fatalf("load episodes: %v", err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("expected two inherited episodes, got %#v", episodes)
+	}
+	for idx, episode := range episodes {
+		expectedEpisode := idx + 1
+		if episode.RootID == nil || *episode.RootID != series[0].ID || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 || episode.IndexNumber == nil || *episode.IndexNumber != expectedEpisode {
+			t.Fatalf("unexpected inherited episode at %d: %#v series=%#v", idx, episode, series[0])
+		}
+	}
+}
+
 func TestRunSyncLibraryGroupsNoisySeasonDirectoriesUnderSeries(t *testing.T) {
 	t.Parallel()
 
@@ -274,6 +679,150 @@ func TestRunSyncLibraryInfersUnnamedTVEpisodesAfterSkippingExtras(t *testing.T) 
 	}
 	if movies != 0 {
 		t.Fatalf("expected skipped TV extras not to create movie items, got %d", movies)
+	}
+}
+
+func TestRunCatalogMaterializeBatchSkipsTVExtrasWithoutFailing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	provider := &countingMaterializeProvider{objectsByPath: map[string][]storage.Object{}}
+	registry := providers.NewRegistry(config.Config{})
+	registryTestSwapLocal(registry, provider)
+	svc := NewService(config.Config{}, db, registry, nil)
+
+	rootPath := "/shows"
+	showPath := "/shows/Unsorted Show"
+	trailerPath := "/shows/Unsorted Show/trailer.mp4"
+	provider.objectsByPath[showPath] = []storage.Object{
+		{Name: "alpha.mkv", Path: "/shows/Unsorted Show/alpha.mkv", Size: 100, Provider: provider.Name()},
+		{Name: "episode.mkv", Path: "/shows/Unsorted Show/episode.mkv", Size: 100, Provider: provider.Name()},
+		{Name: "trailer.mp4", Path: trailerPath, Size: 100, Provider: provider.Name()},
+	}
+
+	source := database.MediaSource{Name: "Test", Provider: "local", RootPath: rootPath}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create media source: %v", err)
+	}
+	libraryRecord := database.Library{Name: "Shows", Type: LibraryTypeShows, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.LibraryPath{LibraryID: libraryRecord.ID, MediaSourceID: source.ID, RootPath: rootPath, DisplayName: libraryRecord.Name, Enabled: true}).Error; err != nil {
+		t.Fatalf("create library path: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db.WithContext(ctx), libraryRecord.ID); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+
+	file, err := inventory.NewService(db).UpsertFile(ctx, inventory.UpsertFileInput{
+		LibraryID:       libraryRecord.ID,
+		StorageProvider: provider.Name(),
+		StoragePath:     trailerPath,
+		Container:       "mp4",
+		ContentClass:    SourceContentClassVideo,
+		Status:          inventory.FileStatusAvailable,
+		ScanState:       inventory.FileScanStateDiscovered,
+	})
+	if err != nil {
+		t.Fatalf("upsert trailer file: %v", err)
+	}
+
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: libraryRecord.ID, RootPath: rootPath, FileIDs: []uint{file.ID}}); err != nil {
+		t.Fatalf("run catalog materialize batch: %v", err)
+	}
+
+	var movies int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&movies).Error; err != nil {
+		t.Fatalf("count movie pollution: %v", err)
+	}
+	if movies != 0 {
+		t.Fatalf("expected skipped TV extra not to create movie items, got %d", movies)
+	}
+}
+
+func TestRunSyncLibraryMaterializesNumericEpisodeWithQualityToken(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	packRoot := filepath.Join(rootPath, "My Pack")
+	showDir := filepath.Join(packRoot, "电视剧", "我的山与海.2160p")
+	for episode := 1; episode <= 30; episode++ {
+		mustWriteFixtureFile(t, filepath.Join(showDir, fmt.Sprintf("%02d.2160p.HD国语中字无水印[最新电影www.5266ys.com].mkv", episode)))
+	}
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "My Pack", LibraryTypeAuto, packRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+
+	var file database.InventoryFile
+	path25 := filepath.ToSlash(filepath.Join(packRoot, "电视剧", "我的山与海.2160p", "25.2160p.HD国语中字无水印[最新电影www.5266ys.com].mkv"))
+	if err := db.WithContext(ctx).Where("storage_path = ?", path25).First(&file).Error; err != nil {
+		t.Fatalf("load episode 25 inventory file: %v", err)
+	}
+	if file.ScanState != inventory.FileScanStateReviewRequired {
+		t.Fatalf("expected episode 25 to be classified/reviewable, got %#v", file)
+	}
+
+	var linkCount int64
+	if err := db.WithContext(ctx).Model(&database.AssetFile{}).Where("file_id = ?", file.ID).Count(&linkCount).Error; err != nil {
+		t.Fatalf("count episode 25 asset links: %v", err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("expected episode 25 asset link, got %d", linkCount)
+	}
+
+	var episodeItem database.CatalogItem
+	if err := db.WithContext(ctx).
+		Joins("JOIN asset_items ON asset_items.item_id = catalog_items.id").
+		Joins("JOIN asset_files ON asset_files.asset_id = asset_items.asset_id").
+		Where("asset_files.file_id = ? AND catalog_items.type = ?", file.ID, catalog.ItemTypeEpisode).
+		First(&episodeItem).Error; err != nil {
+		t.Fatalf("load episode 25 catalog item: %v", err)
+	}
+	if episodeItem.ParentIndexNumber == nil || *episodeItem.ParentIndexNumber != 1 || episodeItem.IndexNumber == nil || *episodeItem.IndexNumber != 25 {
+		t.Fatalf("expected S01E25 catalog item, got %#v", episodeItem)
+	}
+}
+
+func TestRunWorkflowCatalogMaterializeDistinguishesMaterializePayload(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	packRoot := filepath.Join(rootPath, "My Pack")
+	showDir := filepath.Join(packRoot, "电视剧", "我的山与海.2160p")
+	for episode := 1; episode <= 30; episode++ {
+		mustWriteFixtureFile(t, filepath.Join(showDir, fmt.Sprintf("%02d.2160p.HD国语中字无水印[最新电影www.5266ys.com].mkv", episode)))
+	}
+
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "My Pack", LibraryTypeAuto, packRoot)
+	path25 := filepath.ToSlash(filepath.Join(packRoot, "电视剧", "我的山与海.2160p", "25.2160p.HD国语中字无水印[最新电影www.5266ys.com].mkv"))
+	file, err := inventory.NewService(db).UpsertFile(ctx, inventory.UpsertFileInput{LibraryID: libraryRecord.ID, StorageProvider: "local", StoragePath: path25, Container: "mkv", ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered})
+	if err != nil {
+		t.Fatalf("upsert inventory file: %v", err)
+	}
+	payloadJSON, err := json.Marshal(CatalogMaterializeBatchPayload{LibraryID: libraryRecord.ID, RootPath: libraryRecord.RootPath, FileIDs: []uint{file.ID}})
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+
+	if err := svc.RunWorkflowCatalogMaterialize(ctx, database.WorkflowTask{LibraryID: libraryRecord.ID, PayloadJSON: string(payloadJSON)}); err != nil {
+		t.Fatalf("run workflow materialize: %v", err)
+	}
+
+	var linkCount int64
+	if err := db.WithContext(ctx).Model(&database.AssetFile{}).Where("file_id = ?", file.ID).Count(&linkCount).Error; err != nil {
+		t.Fatalf("count asset links: %v", err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("expected workflow materialize to create asset link, got %d", linkCount)
 	}
 }
 
@@ -638,26 +1187,26 @@ func TestQueueCatalogItemMatchDeduplicatesEpisodeHierarchyToSeriesRoot(t *testin
 		t.Fatalf("expected season and episode queue to dedupe to the same job, got season=%#v episode=%#v", jobFromSeason, jobFromEpisode)
 	}
 
-	var queued []database.Job
-	if err := db.WithContext(ctx).Where("kind = ?", JobKindMatchCatalogItem).Find(&queued).Error; err != nil {
-		t.Fatalf("list catalog match jobs: %v", err)
+	var queued []database.WorkflowTask
+	if err := db.WithContext(ctx).Where("task_type = ?", workflow.TaskTypeMatchMetadata).Find(&queued).Error; err != nil {
+		t.Fatalf("list catalog match tasks: %v", err)
 	}
 	if len(queued) != 1 {
 		t.Fatalf("expected one queued catalog match job, got %#v", queued)
 	}
 
 	var payload struct {
-		ItemID uint `json:"item_id"`
+		ItemIDs []uint `json:"item_ids"`
 	}
 	if err := json.Unmarshal([]byte(queued[0].PayloadJSON), &payload); err != nil {
-		t.Fatalf("decode job payload: %v", err)
+		t.Fatalf("decode task payload: %v", err)
 	}
-	if payload.ItemID != series.ID {
-		t.Fatalf("expected queued catalog match to target series root %d, got %d", series.ID, payload.ItemID)
+	if len(payload.ItemIDs) != 1 || payload.ItemIDs[0] != series.ID {
+		t.Fatalf("expected queued catalog match to target series root %d, got %#v", series.ID, payload.ItemIDs)
 	}
 }
 
-func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) {
+func TestRunSyncLibraryOrdersExplicitDuplicateEpisodeNamesAsSeparateEpisodes(t *testing.T) {
 	t.Parallel()
 
 	rootPath := t.TempDir()
@@ -678,8 +1227,8 @@ func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) 
 		Count(&episodeCount).Error; err != nil {
 		t.Fatalf("count episode catalog items: %v", err)
 	}
-	if episodeCount != 1 {
-		t.Fatalf("expected one canonical episode item for duplicate slot, got %d", episodeCount)
+	if episodeCount != 2 {
+		t.Fatalf("expected explicit duplicate episode names to follow sorted directory order, got %d", episodeCount)
 	}
 
 	assertTableCount(t, ctx, db, &database.InventoryFile{}, 2)
@@ -700,8 +1249,8 @@ func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) 
 	if assets[0].AssetType != "main" {
 		t.Fatalf("expected first asset to remain main, got %#v", assets[0])
 	}
-	if assets[1].AssetType != "version" {
-		t.Fatalf("expected duplicate slot to create version asset, got %#v", assets[1])
+	if assets[1].AssetType != "main" {
+		t.Fatalf("expected sorted duplicate episode names to create a second main asset, got %#v", assets[1])
 	}
 
 	var assetItems []database.AssetItem
@@ -716,8 +1265,8 @@ func TestRunSyncLibraryCreatesVersionAssetForDuplicateEpisodeSlot(t *testing.T) 
 	if assetItems[0].Role != "primary" {
 		t.Fatalf("expected first asset-item link to stay primary, got %#v", assetItems[0])
 	}
-	if assetItems[1].Role != "version" {
-		t.Fatalf("expected duplicate slot link to use version role, got %#v", assetItems[1])
+	if assetItems[1].Role != "primary" {
+		t.Fatalf("expected second sorted episode link to use primary role, got %#v", assetItems[1])
 	}
 }
 
@@ -1060,6 +1609,22 @@ func TestScanPolicyCanDisableConfigurableExclusionRules(t *testing.T) {
 	}
 }
 
+func TestScanPolicyCanDisableInventoryProbeBatchJobs(t *testing.T) {
+	rootPath := t.TempDir()
+	mustWriteFixtureFile(t, filepath.Join(rootPath, "Movie A (2024).mkv"))
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Update("inventory_probe_batch_enabled", false).Error; err != nil {
+		t.Fatalf("disable inventory probe batch: %v", err)
+	}
+
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(libraryRecord.ID, libraryRecord.RootPath)); err != nil {
+		t.Fatalf("run sync library: %v", err)
+	}
+
+	assertJobCount(t, ctx, db, JobKindInventoryProbeBatch, 0)
+}
+
 func TestScanPolicySkipsFilesBelowMinimumSize(t *testing.T) {
 	rootPath := t.TempDir()
 	mustWriteFixtureFile(t, filepath.Join(rootPath, "Tiny Movie (2020).mkv"))
@@ -1246,7 +1811,7 @@ func TestRunSyncLibraryBindsEpisodeSubtitleSidecar(t *testing.T) {
 	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).First(&episode).Error; err != nil {
 		t.Fatalf("load episode: %v", err)
 	}
-	if episode.IndexNumber == nil || *episode.IndexNumber != 2 {
+	if episode.IndexNumber == nil || *episode.IndexNumber != 1 {
 		t.Fatalf("subtitle content must not change episode classification, got %#v", episode)
 	}
 	var stream database.MediaStream
@@ -1379,6 +1944,9 @@ func TestCatalogScanUsesProviderThumbnailAsProvisionalArtwork(t *testing.T) {
 	selected := selectedImagesByType(t, ctx, db, result.Item.ID)
 	if selected["poster"].URL != "https://cdn.example.test/movie-thumb.jpg" || !selected["poster"].IsSelected {
 		t.Fatalf("expected provider thumbnail poster, got %#v", selected["poster"])
+	}
+	if result.File.ThumbnailURL != "https://cdn.example.test/movie-thumb.jpg" {
+		t.Fatalf("expected inventory thumbnail to be persisted, got %#v", result.File)
 	}
 
 	seasonNumber := 1
@@ -1958,7 +2526,7 @@ func newScanCatalogWriterHarness(t *testing.T) (context.Context, *gorm.DB, *Serv
 
 	rootPath := "/library"
 	registry := providers.NewRegistry(config.Config{Local: config.LocalStorageConfig{RootPath: rootPath}})
-	svc := NewService(config.Config{Local: config.LocalStorageConfig{RootPath: rootPath}}, db, registry, jobs.NewService(db))
+	svc := NewService(config.Config{Local: config.LocalStorageConfig{RootPath: rootPath}}, db, registry, nil)
 	libraryRecord := database.Library{Name: "Library", Type: "shows", RootPath: rootPath, Status: "active"}
 	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
 		t.Fatalf("create library: %v", err)
@@ -1993,7 +2561,7 @@ func newDirectScanHarness(t *testing.T, rootPath string) (context.Context, *gorm
 
 	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: rootPath}}
 	registry := providers.NewRegistry(cfg)
-	svc := NewService(cfg, db, registry, jobs.NewService(db))
+	svc := NewService(cfg, db, registry, nil)
 
 	return ctx, db, svc
 }

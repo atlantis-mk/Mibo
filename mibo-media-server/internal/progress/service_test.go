@@ -56,6 +56,33 @@ func TestCatalogProgressUsesItemAndAssetIdentity(t *testing.T) {
 	}
 }
 
+func TestCatalogProgressStoresProgressFrameURL(t *testing.T) {
+	ctx := context.Background()
+	service, db := newProgressTestService(t)
+
+	runtimeSeconds := 1800
+	item := database.CatalogItem{LibraryID: 1, Type: "movie", Title: "Catalog Movie", RuntimeSeconds: &runtimeSeconds, AvailabilityStatus: "available", GovernanceStatus: "matched"}
+	if err := db.WithContext(ctx).Create(&item).Error; err != nil {
+		t.Fatalf("create catalog item: %v", err)
+	}
+
+	state, err := service.Update(ctx, 7, UpdateInput{ItemID: item.ID, PositionSeconds: 300, DurationSeconds: &runtimeSeconds, ProgressFrameURL: "/api/v1/me/progress-frames/1/default"})
+	if err != nil {
+		t.Fatalf("update catalog progress: %v", err)
+	}
+	if state.ProgressFrameURL != "/api/v1/me/progress-frames/1/default" {
+		t.Fatalf("expected progress frame url, got %#v", state)
+	}
+
+	reloaded, err := service.GetCatalogState(ctx, 7, item.ID)
+	if err != nil {
+		t.Fatalf("get catalog state: %v", err)
+	}
+	if reloaded.ProgressFrameURL != state.ProgressFrameURL {
+		t.Fatalf("expected reloaded progress frame url, got %#v", reloaded)
+	}
+}
+
 func TestCatalogProgressCompletion(t *testing.T) {
 	ctx := context.Background()
 	service, db := newProgressTestService(t)

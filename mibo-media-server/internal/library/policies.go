@@ -38,6 +38,7 @@ type LibraryScanPolicyView struct {
 	IgnoreFileExtensions       []string `json:"ignore_file_extensions"`
 	MinFileSizeBytes           int64    `json:"min_file_size_bytes"`
 	SampleIgnoreSizeBytes      int64    `json:"sample_ignore_size_bytes"`
+	InventoryProbeBatchEnabled bool     `json:"inventory_probe_batch_enabled"`
 	ConfigurableExclusionRules bool     `json:"configurable_exclusion_rules"`
 }
 
@@ -102,7 +103,7 @@ func (c EffectiveLibraryConfig) PathsView() []LibraryPathView {
 
 func (c EffectiveLibraryConfig) PoliciesView() LibraryPoliciesView {
 	return LibraryPoliciesView{
-		Scan:     LibraryScanPolicyView{ScannerEnabled: c.ScanPolicy.ScannerEnabled, RealtimeMonitorEnabled: c.ScanPolicy.RealtimeMonitorEnabled, ScheduledRefreshEnabled: c.ScanPolicy.ScheduledRefreshEnabled, RefreshIntervalHours: c.ScanPolicy.RefreshIntervalHours, IgnoreHiddenFiles: c.ScanPolicy.IgnoreHiddenFiles, IgnoreFileExtensions: stringListFromJSON(c.ScanPolicy.IgnoreFileExtensionsJSON), MinFileSizeBytes: c.ScanPolicy.MinFileSizeBytes, SampleIgnoreSizeBytes: c.ScanPolicy.SampleIgnoreSizeBytes, ConfigurableExclusionRules: c.ScanPolicy.ConfigurableExclusionRules},
+		Scan:     LibraryScanPolicyView{ScannerEnabled: c.ScanPolicy.ScannerEnabled, RealtimeMonitorEnabled: c.ScanPolicy.RealtimeMonitorEnabled, ScheduledRefreshEnabled: c.ScanPolicy.ScheduledRefreshEnabled, RefreshIntervalHours: c.ScanPolicy.RefreshIntervalHours, IgnoreHiddenFiles: c.ScanPolicy.IgnoreHiddenFiles, IgnoreFileExtensions: stringListFromJSON(c.ScanPolicy.IgnoreFileExtensionsJSON), MinFileSizeBytes: c.ScanPolicy.MinFileSizeBytes, SampleIgnoreSizeBytes: c.ScanPolicy.SampleIgnoreSizeBytes, InventoryProbeBatchEnabled: c.ScanPolicy.InventoryProbeBatchEnabled, ConfigurableExclusionRules: c.ScanPolicy.ConfigurableExclusionRules},
 		Metadata: LibraryMetadataPolicyView{PreferredMetadataLanguage: c.MetadataPolicy.PreferredMetadataLanguage, PreferredImageLanguage: c.MetadataPolicy.PreferredImageLanguage, MetadataCountryCode: c.MetadataPolicy.MetadataCountryCode, MetadataProfileID: c.ProfileBinding.MetadataProfileID, MetadataProfileName: c.Profile.Name},
 		Playback: LibraryPlaybackPolicyView{ResumeEnabled: c.PlaybackPolicy.ResumeEnabled, MinResumePct: c.PlaybackPolicy.MinResumePct, MaxResumePct: c.PlaybackPolicy.MaxResumePct, MinResumeDurationSeconds: c.PlaybackPolicy.MinResumeDurationSeconds},
 		Subtitle: LibrarySubtitlePolicyView{ExternalSidecarsEnabled: c.SubtitlePolicy.ExternalSidecarsEnabled, PreferredLanguages: stringListFromJSON(c.SubtitlePolicy.PreferredLanguagesJSON), RequirePerfectMatch: c.SubtitlePolicy.RequirePerfectMatch, SaveWithMedia: c.SubtitlePolicy.SaveWithMedia, TolerateUnavailableSubtitles: c.SubtitlePolicy.TolerateUnavailableSubtitles, SkipIfEmbeddedSubtitlesPresent: c.SubtitlePolicy.SkipIfEmbeddedSubtitlesPresent, SkipIfAudioTrackMatches: c.SubtitlePolicy.SkipIfAudioTrackMatches},
@@ -199,7 +200,7 @@ func loadSubtitlePolicy(ctx context.Context, db *gorm.DB, libraryID uint) (datab
 }
 
 func defaultScanPolicy(libraryID uint) database.LibraryScanPolicy {
-	return database.LibraryScanPolicy{LibraryID: libraryID, ScannerEnabled: true, RealtimeMonitorEnabled: true, ScheduledRefreshEnabled: true, RefreshIntervalHours: 24, IgnoreHiddenFiles: true, IgnoreFileExtensionsJSON: "[]", ConfigurableExclusionRules: true}
+	return database.LibraryScanPolicy{LibraryID: libraryID, ScannerEnabled: true, RealtimeMonitorEnabled: true, ScheduledRefreshEnabled: true, RefreshIntervalHours: 24, IgnoreHiddenFiles: true, IgnoreFileExtensionsJSON: "[]", InventoryProbeBatchEnabled: true, ConfigurableExclusionRules: true}
 }
 
 func defaultMetadataPolicy(libraryID uint) database.LibraryMetadataPolicy {
@@ -261,7 +262,7 @@ func (s *Service) UpdateLibraryScanPolicy(ctx context.Context, libraryID uint, i
 	if _, err := s.EffectiveLibraryConfig(ctx, libraryID); err != nil {
 		return LibraryScanPolicyView{}, err
 	}
-	updates := database.LibraryScanPolicy{LibraryID: libraryID, ScannerEnabled: input.ScannerEnabled, RealtimeMonitorEnabled: input.RealtimeMonitorEnabled, ScheduledRefreshEnabled: input.ScheduledRefreshEnabled, RefreshIntervalHours: input.RefreshIntervalHours, IgnoreHiddenFiles: input.IgnoreHiddenFiles, IgnoreFileExtensionsJSON: jsonStringList(input.IgnoreFileExtensions), MinFileSizeBytes: input.MinFileSizeBytes, SampleIgnoreSizeBytes: input.SampleIgnoreSizeBytes, ConfigurableExclusionRules: input.ConfigurableExclusionRules}
+	updates := database.LibraryScanPolicy{LibraryID: libraryID, ScannerEnabled: input.ScannerEnabled, RealtimeMonitorEnabled: input.RealtimeMonitorEnabled, ScheduledRefreshEnabled: input.ScheduledRefreshEnabled, RefreshIntervalHours: input.RefreshIntervalHours, IgnoreHiddenFiles: input.IgnoreHiddenFiles, IgnoreFileExtensionsJSON: jsonStringList(input.IgnoreFileExtensions), MinFileSizeBytes: input.MinFileSizeBytes, SampleIgnoreSizeBytes: input.SampleIgnoreSizeBytes, InventoryProbeBatchEnabled: input.InventoryProbeBatchEnabled, ConfigurableExclusionRules: input.ConfigurableExclusionRules}
 	if updates.RefreshIntervalHours <= 0 {
 		updates.RefreshIntervalHours = 24
 	}
@@ -271,10 +272,10 @@ func (s *Service) UpdateLibraryScanPolicy(ctx context.Context, libraryID uint, i
 	if err := database.EnsureLibraryPolicyDefaults(s.db.WithContext(ctx), libraryID); err != nil {
 		return LibraryScanPolicyView{}, err
 	}
-	if err := s.db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryID).Updates(map[string]any{"scanner_enabled": updates.ScannerEnabled, "realtime_monitor_enabled": updates.RealtimeMonitorEnabled, "scheduled_refresh_enabled": updates.ScheduledRefreshEnabled, "refresh_interval_hours": updates.RefreshIntervalHours, "ignore_hidden_files": updates.IgnoreHiddenFiles, "ignore_file_extensions_json": updates.IgnoreFileExtensionsJSON, "min_file_size_bytes": updates.MinFileSizeBytes, "sample_ignore_size_bytes": updates.SampleIgnoreSizeBytes, "configurable_exclusion_rules": updates.ConfigurableExclusionRules}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryID).Updates(map[string]any{"scanner_enabled": updates.ScannerEnabled, "realtime_monitor_enabled": updates.RealtimeMonitorEnabled, "scheduled_refresh_enabled": updates.ScheduledRefreshEnabled, "refresh_interval_hours": updates.RefreshIntervalHours, "ignore_hidden_files": updates.IgnoreHiddenFiles, "ignore_file_extensions_json": updates.IgnoreFileExtensionsJSON, "min_file_size_bytes": updates.MinFileSizeBytes, "sample_ignore_size_bytes": updates.SampleIgnoreSizeBytes, "inventory_probe_batch_enabled": updates.InventoryProbeBatchEnabled, "configurable_exclusion_rules": updates.ConfigurableExclusionRules}).Error; err != nil {
 		return LibraryScanPolicyView{}, err
 	}
-	return LibraryScanPolicyView{ScannerEnabled: updates.ScannerEnabled, RealtimeMonitorEnabled: updates.RealtimeMonitorEnabled, ScheduledRefreshEnabled: updates.ScheduledRefreshEnabled, RefreshIntervalHours: updates.RefreshIntervalHours, IgnoreHiddenFiles: updates.IgnoreHiddenFiles, IgnoreFileExtensions: input.IgnoreFileExtensions, MinFileSizeBytes: updates.MinFileSizeBytes, SampleIgnoreSizeBytes: updates.SampleIgnoreSizeBytes, ConfigurableExclusionRules: updates.ConfigurableExclusionRules}, nil
+	return LibraryScanPolicyView{ScannerEnabled: updates.ScannerEnabled, RealtimeMonitorEnabled: updates.RealtimeMonitorEnabled, ScheduledRefreshEnabled: updates.ScheduledRefreshEnabled, RefreshIntervalHours: updates.RefreshIntervalHours, IgnoreHiddenFiles: updates.IgnoreHiddenFiles, IgnoreFileExtensions: input.IgnoreFileExtensions, MinFileSizeBytes: updates.MinFileSizeBytes, SampleIgnoreSizeBytes: updates.SampleIgnoreSizeBytes, InventoryProbeBatchEnabled: updates.InventoryProbeBatchEnabled, ConfigurableExclusionRules: updates.ConfigurableExclusionRules}, nil
 }
 
 func (s *Service) UpdateLibraryMetadataPolicy(ctx context.Context, libraryID uint, input LibraryMetadataPolicyView) (LibraryMetadataPolicyView, error) {

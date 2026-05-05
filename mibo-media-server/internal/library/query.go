@@ -47,6 +47,14 @@ const (
 	WatchedStateFilterWatched    WatchedStateFilter = "watched"
 )
 
+type OrganizingStateFilter string
+
+const (
+	OrganizingStateFilterAll         OrganizingStateFilter = "all"
+	OrganizingStateFilterOrganized   OrganizingStateFilter = "organized"
+	OrganizingStateFilterUnorganized OrganizingStateFilter = "unorganized"
+)
+
 type BrowseItemsInput struct {
 	LibraryID     uint
 	Scope         BrowseScope
@@ -57,6 +65,7 @@ type BrowseItemsInput struct {
 	Year          *int
 	MinRating     *float64
 	Watched       WatchedStateFilter
+	Organizing    OrganizingStateFilter
 	Sort          BrowseSort
 	SortDirection SortDirection
 	Limit         int
@@ -124,6 +133,11 @@ func NormalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
 	case WatchedStateFilterUnwatched, WatchedStateFilterInProgress, WatchedStateFilterWatched:
 	default:
 		input.Watched = WatchedStateFilterAll
+	}
+	switch input.Organizing {
+	case OrganizingStateFilterOrganized, OrganizingStateFilterUnorganized:
+	default:
+		input.Organizing = OrganizingStateFilterAll
 	}
 	if input.Year != nil && *input.Year <= 0 {
 		input.Year = nil

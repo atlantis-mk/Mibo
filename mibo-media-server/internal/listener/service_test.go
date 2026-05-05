@@ -11,16 +11,16 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
 func TestMergeWindowUsesOneQueuedIntentPerEvent(t *testing.T) {
 	t.Parallel()
 
-	svc, db, record := newListenerTestService(t)
+	svc, _, record := newListenerTestService(t)
 	fixedNow := time.Date(2026, time.April, 24, 10, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return fixedNow }
 
@@ -34,30 +34,16 @@ func TestMergeWindowUsesOneQueuedIntentPerEvent(t *testing.T) {
 		t.Fatalf("record second event: %v", err)
 	}
 
-	if first.Kind != JobKindApplyStorageEventRefresh || second.Kind != JobKindApplyStorageEventRefresh {
-		t.Fatalf("expected %q job kind, got %q and %q", JobKindApplyStorageEventRefresh, first.Kind, second.Kind)
+	if first.Kind != library.JobKindSyncLibrary || second.Kind != library.JobKindSyncLibrary {
+		t.Fatalf("expected workflow compatibility job kind, got %q and %q", first.Kind, second.Kind)
 	}
 	if first.ID != second.ID {
-		t.Fatalf("expected repeated events to reuse one queued listener job, got %d and %d", first.ID, second.ID)
+		t.Fatalf("expected repeated events to reuse one queued workflow run, got %d and %d", first.ID, second.ID)
 	}
 
-	var jobs []database.Job
-	if err := db.WithContext(ctx).Where("kind = ?", JobKindApplyStorageEventRefresh).Order("id asc").Find(&jobs).Error; err != nil {
-		t.Fatalf("list listener jobs: %v", err)
-	}
-	if len(jobs) != 1 {
-		t.Fatalf("expected one debounced listener job, got %d", len(jobs))
-	}
-
-	payload := mustDecodeRefreshPayload(t, jobs[0].PayloadJSON)
+	payload := mustDecodeWorkflowPayload(t, first.PayloadJSON)
 	if payload.RootPath != filepath.Join(record.RootPath, "Movies") {
 		t.Fatalf("expected merged root %q, got %q", filepath.Join(record.RootPath, "Movies"), payload.RootPath)
-	}
-	if payload.WindowEndsAt.Sub(payload.WindowStartedAt) != 15*time.Second {
-		t.Fatalf("expected 15s merge window, got %s", payload.WindowEndsAt.Sub(payload.WindowStartedAt))
-	}
-	if !jobs[0].AvailableAt.Equal(payload.WindowEndsAt) {
-		t.Fatalf("expected available_at to match window end")
 	}
 }
 
@@ -90,13 +76,13 @@ func TestRecordStorageEventConcurrentDuplicatesKeepOneActiveIntent(t *testing.T)
 	}
 
 	var active int64
-	if err := db.WithContext(ctx).Model(&database.Job{}).
-		Where("kind = ? AND status IN ?", JobKindApplyStorageEventRefresh, []string{jobs.StatusQueued, jobs.StatusRunning}).
+	if err := db.WithContext(ctx).Model(&database.WorkflowRun{}).
+		Where("reason = ? AND status IN ?", library.WorkflowReasonTargetedRefresh, []string{workflow.RunStatusQueued, workflow.RunStatusRunning}).
 		Count(&active).Error; err != nil {
-		t.Fatalf("count active listener refresh jobs: %v", err)
+		t.Fatalf("count active listener refresh workflows: %v", err)
 	}
 	if active != 1 {
-		t.Fatalf("expected one active listener refresh job, got %d", active)
+		t.Fatalf("expected one active listener refresh workflow, got %d", active)
 	}
 }
 
@@ -154,43 +140,29 @@ func TestEnsureReconcileCoverageConcurrentCallsKeepOneActiveIntent(t *testing.T)
 		}
 	}
 
-	var active int64
-	if err := db.WithContext(ctx).Model(&database.Job{}).
-		Where("kind = ? AND status IN ?", JobKindListenerReconcile, []string{jobs.StatusQueued, jobs.StatusRunning}).
-		Count(&active).Error; err != nil {
-		t.Fatalf("count active listener reconcile jobs: %v", err)
-	}
-	if active != 1 {
-		t.Fatalf("expected one active listener reconcile job, got %d", active)
-	}
+	assertNoListenerJobs(t, ctx, db)
 }
 
 func TestAncestorPromotionStaysInsideLibraryRoot(t *testing.T) {
 	t.Parallel()
 
-	svc, db, record := newListenerTestService(t)
+	svc, _, record := newListenerTestService(t)
 	svc.now = func() time.Time { return time.Date(2026, time.April, 24, 10, 5, 0, 0, time.UTC) }
 
 	ctx := context.Background()
 	firstPath := filepath.Join(record.RootPath, "Movies", "Action", "MovieA.2024.mkv")
 	secondPath := filepath.Join(record.RootPath, "Movies", "Drama", "MovieB.2024.mkv")
-	if _, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "update", Path: firstPath}); err != nil {
+	first, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "update", Path: firstPath})
+	if err != nil {
 		t.Fatalf("record first event: %v", err)
 	}
 	if _, err := svc.RecordStorageEvent(ctx, EventIngestInput{LibraryID: record.ID, Kind: "create", Path: secondPath}); err != nil {
 		t.Fatalf("record second event: %v", err)
 	}
 
-	var jobs []database.Job
-	if err := db.WithContext(ctx).Where("kind = ?", JobKindApplyStorageEventRefresh).Find(&jobs).Error; err != nil {
-		t.Fatalf("list listener jobs: %v", err)
-	}
-	if len(jobs) != 1 {
-		t.Fatalf("expected one promoted listener job, got %d", len(jobs))
-	}
-	payload := mustDecodeRefreshPayload(t, jobs[0].PayloadJSON)
-	if payload.RootPath != filepath.Join(record.RootPath, "Movies") {
-		t.Fatalf("expected common ancestor %q, got %q", filepath.Join(record.RootPath, "Movies"), payload.RootPath)
+	payload := mustDecodeWorkflowPayload(t, first.PayloadJSON)
+	if payload.RootPath != filepath.Join(record.RootPath, "Movies", "Action") {
+		t.Fatalf("expected immediate targeted root %q, got %q", filepath.Join(record.RootPath, "Movies", "Action"), payload.RootPath)
 	}
 }
 
@@ -214,22 +186,7 @@ func TestReconcileCoverageSchedulesOneFutureJobPerLibrary(t *testing.T) {
 		t.Fatalf("ensure coverage idempotent: %v", err)
 	}
 
-	var queued []database.Job
-	if err := db.WithContext(ctx).Where("kind = ?", JobKindListenerReconcile).Order("job_key asc").Find(&queued).Error; err != nil {
-		t.Fatalf("list reconcile jobs: %v", err)
-	}
-	if len(queued) != 2 {
-		t.Fatalf("expected exactly one future-dated reconcile job per library, got %d", len(queued))
-	}
-	for _, job := range queued {
-		payload := mustDecodeReconcilePayload(t, job.PayloadJSON)
-		if job.AvailableAt.Sub(fixedNow) != 6*time.Hour {
-			t.Fatalf("expected available_at 6h in the future, got %s", job.AvailableAt.Sub(fixedNow))
-		}
-		if !job.AvailableAt.Equal(payload.ScheduledFor) {
-			t.Fatalf("expected scheduled_for to match available_at")
-		}
-	}
+	assertNoListenerJobs(t, ctx, db)
 }
 
 func TestRecordStorageEventFallsBackToFullSyncWhenNormalizationIsUnsafe(t *testing.T) {
@@ -241,15 +198,12 @@ func TestRecordStorageEventFallsBackToFullSyncWhenNormalizationIsUnsafe(t *testi
 	if err != nil {
 		t.Fatalf("record rename event: %v", err)
 	}
-	if job.Kind != JobKindApplyStorageEventRefresh {
-		t.Fatalf("expected listener job kind, got %q", job.Kind)
+	if job.Kind != library.JobKindSyncLibrary {
+		t.Fatalf("expected workflow compatibility job kind, got %q", job.Kind)
 	}
-	payload := mustDecodeRefreshPayload(t, job.PayloadJSON)
-	if !payload.FallbackFullSync {
-		t.Fatal("expected unsafe normalization to request full sync fallback")
-	}
-	if payload.RootPath != record.RootPath {
-		t.Fatalf("expected fallback root %q, got %q", record.RootPath, payload.RootPath)
+	payload := mustDecodeWorkflowPayload(t, job.PayloadJSON)
+	if payload.LibraryID != record.ID || payload.Reason != library.WorkflowReasonStorageRefresh {
+		t.Fatalf("expected fallback storage refresh payload, got %#v", payload)
 	}
 }
 
@@ -267,13 +221,7 @@ func TestApplyStorageEventRefreshQueuesExistingTargetedRefreshWork(t *testing.T)
 		t.Fatalf("apply storage event refresh: %v", err)
 	}
 
-	var queued []database.Job
-	if err := db.WithContext(ctx).Where("kind IN ?", []string{library.JobKindTargetedRefresh, library.JobKindSyncLibrary}).Order("id asc").Find(&queued).Error; err != nil {
-		t.Fatalf("list queued work: %v", err)
-	}
-	if len(queued) != 1 || queued[0].Kind != library.JobKindTargetedRefresh {
-		t.Fatalf("expected one targeted_refresh job, got %#v", queued)
-	}
+	assertWorkflowRefresh(t, ctx, db, library.WorkflowReasonTargetedRefresh)
 }
 
 func TestApplyStorageEventRefreshQueuesFullSyncForFallbackIntent(t *testing.T) {
@@ -290,13 +238,7 @@ func TestApplyStorageEventRefreshQueuesFullSyncForFallbackIntent(t *testing.T) {
 		t.Fatalf("apply fallback refresh: %v", err)
 	}
 
-	var queued database.Job
-	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindSyncLibrary).Order("id desc").First(&queued).Error; err != nil {
-		t.Fatalf("load sync job: %v", err)
-	}
-	if queued.Kind != library.JobKindSyncLibrary {
-		t.Fatalf("expected sync_library job, got %q", queued.Kind)
-	}
+	assertWorkflowRefresh(t, ctx, db, library.WorkflowReasonStorageRefresh)
 }
 
 func TestRunReconcileQueuesLibrarySyncAndReseedsNextWindow(t *testing.T) {
@@ -310,7 +252,7 @@ func TestRunReconcileQueuesLibrarySyncAndReseedsNextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build reconcile job: %v", err)
 	}
-	reconcileJob.Status = jobs.StatusRunning
+	reconcileJob.Status = "running"
 	if err := db.WithContext(ctx).Create(&reconcileJob).Error; err != nil {
 		t.Fatalf("store reconcile job: %v", err)
 	}
@@ -319,23 +261,8 @@ func TestRunReconcileQueuesLibrarySyncAndReseedsNextWindow(t *testing.T) {
 		t.Fatalf("run reconcile: %v", err)
 	}
 
-	var syncJobs []database.Job
-	if err := db.WithContext(ctx).Where("kind = ?", library.JobKindSyncLibrary).Find(&syncJobs).Error; err != nil {
-		t.Fatalf("list sync jobs: %v", err)
-	}
-	if len(syncJobs) != 1 {
-		t.Fatalf("expected one sync_library job from reconcile, got %d", len(syncJobs))
-	}
-	var reconcileJobs []database.Job
-	if err := db.WithContext(ctx).Where("kind = ? AND status = ?", JobKindListenerReconcile, jobs.StatusQueued).Order("id asc").Find(&reconcileJobs).Error; err != nil {
-		t.Fatalf("list reseeded reconcile jobs: %v", err)
-	}
-	if len(reconcileJobs) != 1 {
-		t.Fatalf("expected one future queued reconcile job, got %d", len(reconcileJobs))
-	}
-	if reconcileJobs[0].AvailableAt.Sub(baseNow) != 6*time.Hour {
-		t.Fatalf("expected next reconcile 6h later, got %s", reconcileJobs[0].AvailableAt.Sub(baseNow))
-	}
+	assertWorkflowRefresh(t, ctx, db, library.WorkflowReasonStorageRefresh)
+	assertNoListenerJobs(t, ctx, db)
 }
 
 func TestRecordStorageEventSkipsRefreshWhenRealtimePolicyDisabled(t *testing.T) {
@@ -377,7 +304,12 @@ func newListenerTestService(t *testing.T) (*Service, *gorm.DB, database.Library)
 	if err := db.WithContext(ctx).Create(&record).Error; err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	return NewService(db, jobs.NewService(db), nil), db, record
+	if err := database.EnsureLibraryPolicyDefaults(db, record.ID); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: source.RootPath}}
+	librarySvc := library.NewService(cfg, db, providers.NewRegistry(cfg), nil)
+	return NewService(db, nil, librarySvc), db, record
 }
 
 func newListenerIntegrationService(t *testing.T) (*Service, *gorm.DB, database.Library) {
@@ -396,8 +328,7 @@ func newListenerIntegrationService(t *testing.T) (*Service, *gorm.DB, database.L
 	ctx := context.Background()
 	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: storageRoot}}
 	registry := providers.NewRegistry(cfg)
-	jobsSvc := jobs.NewService(db)
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	librarySvc := library.NewService(cfg, db, registry, nil)
 	source, err := librarySvc.CreateMediaSource(ctx, library.CreateMediaSourceInput{Provider: "local", Name: "Local", RootPath: storageRoot})
 	if err != nil {
 		t.Fatalf("create media source: %v", err)
@@ -413,7 +344,48 @@ func newListenerIntegrationService(t *testing.T) (*Service, *gorm.DB, database.L
 		t.Fatalf("clear setup jobs: %v", err)
 	}
 	record.Status = "active"
-	return NewService(db, jobsSvc, librarySvc), db, record
+	return NewService(db, nil, librarySvc), db, record
+}
+
+func mustDecodeWorkflowPayload(t *testing.T, raw string) struct {
+	LibraryID uint   `json:"library_id"`
+	RootPath  string `json:"root_path"`
+	Reason    string `json:"reason"`
+} {
+	t.Helper()
+	var payload struct {
+		LibraryID uint   `json:"library_id"`
+		RootPath  string `json:"root_path"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode workflow payload: %v", err)
+	}
+	return payload
+}
+
+func assertWorkflowRefresh(t *testing.T, ctx context.Context, db *gorm.DB, reason string) {
+	t.Helper()
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.WorkflowRun{}).Where("reason = ?", reason).Count(&count).Error; err != nil {
+		t.Fatalf("count workflow refresh runs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one %s workflow run, got %d", reason, count)
+	}
+}
+
+func assertNoListenerJobs(t *testing.T, ctx context.Context, db *gorm.DB) {
+	t.Helper()
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.Job{}).
+		Where("kind IN ? AND status != ?", []string{JobKindApplyStorageEventRefresh, JobKindListenerReconcile}, "running").
+		Count(&count).Error; err != nil {
+		t.Fatalf("count listener jobs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no legacy listener jobs, got %d", count)
+	}
 }
 
 func mustDecodeRefreshPayload(t *testing.T, raw string) storageEventRefreshPayload {

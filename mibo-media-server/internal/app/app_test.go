@@ -17,8 +17,7 @@ func TestNewDoesNotSeedUsers(t *testing.T) {
 			Driver: "sqlite",
 			DSN:    filepath.Join(t.TempDir(), "mibo.db"),
 		},
-		Storage: config.StorageConfig{Provider: "local"},
-		Local:   config.LocalStorageConfig{RootPath: t.TempDir()},
+		Local: config.LocalStorageConfig{RootPath: t.TempDir()},
 	}
 
 	app, err := New(context.Background(), cfg)

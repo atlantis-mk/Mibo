@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/atlan/mibo-media-server/internal/config"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
 	"gorm.io/gorm"
@@ -22,6 +23,7 @@ type Service struct {
 	fallback config.MetadataConfig
 	settings *settings.Service
 	search   *search.Service
+	ingest   *ingest.Service
 }
 
 type ManualSearchInput struct {
@@ -264,6 +266,9 @@ func NewService(db *gorm.DB, cfg config.MetadataConfig, settingsSvc *settings.Se
 	for _, arg := range args {
 		if searchSvc, ok := arg.(*search.Service); ok {
 			service.search = searchSvc
+		}
+		if ingestSvc, ok := arg.(*ingest.Service); ok {
+			service.ingest = ingestSvc
 		}
 	}
 	return service

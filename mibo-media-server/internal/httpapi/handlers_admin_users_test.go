@@ -12,7 +12,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/progress"
@@ -133,7 +132,6 @@ func newAdminUsersTestServer(t *testing.T) (http.Handler, string, string) {
 	t.Helper()
 	cfg := config.Config{
 		HTTP:     config.HTTPConfig{Addr: ":8080"},
-		Storage:  config.StorageConfig{Provider: "local"},
 		Local:    config.LocalStorageConfig{RootPath: t.TempDir()},
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")},
 		Worker:   config.WorkerConfig{Enabled: true},
@@ -144,8 +142,7 @@ func newAdminUsersTestServer(t *testing.T) (http.Handler, string, string) {
 	}
 	registry := providers.NewRegistry(cfg)
 	authSvc := auth.NewService(db)
-	jobsSvc := jobs.NewService(db)
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	librarySvc := library.NewService(cfg, db, registry, nil)
 	searchSvc := search.NewService(db, librarySvc)
 	progressSvc := progress.NewService(db, searchSvc)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
@@ -154,7 +151,7 @@ func newAdminUsersTestServer(t *testing.T) (http.Handler, string, string) {
 
 	adminHeader := loginTestUser(t, authSvc, "admin-user", "password123")
 	userHeader := loginTestUser(t, authSvc, "regular-user", "password123")
-	handler := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc)
+	handler := New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc)
 	return handler, adminHeader, userHeader
 }
 

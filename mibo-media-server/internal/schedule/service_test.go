@@ -8,7 +8,6 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 )
 
 func newTestService(t *testing.T, now time.Time) (*Service, context.Context, *database.Schedule) {
@@ -247,7 +246,11 @@ func TestRunNowCreatesQueuedRunAndJob(t *testing.T) {
 		t.Fatalf("open database: %v", err)
 	}
 	ctx := context.Background()
-	svc := NewService(db, WithNow(func() time.Time { return now }), WithJobs(jobs.NewService(db)))
+	dispatched := false
+	svc := NewService(db, WithNow(func() time.Time { return now }), WithDispatcher(func(context.Context, DueSchedule) (database.Job, error) {
+		dispatched = true
+		return database.Job{ID: 42, Kind: JobKindForSchedule(KindScan), Status: StatusQueued}, nil
+	}))
 
 	schedule, err := svc.Create(ctx, CreateScheduleInput{
 		Name:      "Run scan now",
@@ -266,6 +269,9 @@ func TestRunNowCreatesQueuedRunAndJob(t *testing.T) {
 	}
 	if result.Job.Kind != JobKindForSchedule(KindScan) {
 		t.Fatalf("expected job kind %q, got %q", JobKindForSchedule(KindScan), result.Job.Kind)
+	}
+	if !dispatched {
+		t.Fatalf("expected schedule dispatcher to be called")
 	}
 	if result.Run.Status != StatusQueued {
 		t.Fatalf("expected queued run, got %q", result.Run.Status)

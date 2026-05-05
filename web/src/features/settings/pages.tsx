@@ -171,7 +171,7 @@ export function SettingsLibraryPage() {
   const token = useAuthStore((state) => state.token)
   const [activeLibraryTab, setActiveLibraryTab] = useState<
     "sources" | "libraries"
-  >("sources")
+  >("libraries")
 
   return (
     <SettingsNamedPage
@@ -180,8 +180,8 @@ export function SettingsLibraryPage() {
         <SegmentedControl
           value={activeLibraryTab}
           options={[
-            { value: "sources", label: "媒体源" },
             { value: "libraries", label: "媒体库" },
+            { value: "sources", label: "媒体源" },
           ]}
           onChange={setActiveLibraryTab}
         />

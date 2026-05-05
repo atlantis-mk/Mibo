@@ -12,7 +12,6 @@ import (
 type Config struct {
 	HTTP     HTTPConfig
 	Web      WebConfig
-	Storage  StorageConfig
 	Local    LocalStorageConfig
 	Database DatabaseConfig
 	OpenList OpenListConfig
@@ -40,10 +39,6 @@ type CORSConfig struct {
 type DatabaseConfig struct {
 	Driver string
 	DSN    string
-}
-
-type StorageConfig struct {
-	Provider string
 }
 
 type LocalStorageConfig struct {
@@ -107,6 +102,8 @@ type WorkerConfig struct {
 	PollInterval         time.Duration
 	RefreshIntervalHours int
 	ProbeWorkers         int
+	WorkflowPollInterval time.Duration
+	WorkflowLeaseDuration time.Duration
 }
 
 type CleanupConfig struct {
@@ -127,9 +124,6 @@ func Load() (Config, error) {
 		CORS: CORSConfig{
 			AllowedOrigins: parseCSVEnv("MIBO_CORS_ALLOWED_ORIGINS", []string{"*"}),
 		},
-		Storage: StorageConfig{
-			Provider: strings.ToLower(getEnv("MIBO_STORAGE_PROVIDER", "openlist")),
-		},
 		Database: DatabaseConfig{
 			Driver: strings.ToLower(getEnv("MIBO_DATABASE_DRIVER", "sqlite")),
 			DSN:    getEnv("MIBO_DATABASE_DSN", filepath.Join("data", "mibo.db")),
@@ -143,7 +137,7 @@ func Load() (Config, error) {
 			Password:     os.Getenv("MIBO_OPENLIST_PASSWORD"),
 			Token:        os.Getenv("MIBO_OPENLIST_TOKEN"),
 			RootPath:     normalizeRootPath(getEnv("MIBO_OPENLIST_ROOT_PATH", "/")),
-			Timeout:      getDurationEnv("MIBO_OPENLIST_TIMEOUT", 15*time.Second),
+			Timeout:      getDurationEnv("MIBO_OPENLIST_TIMEOUT", 60*time.Second),
 			InsecureSkip: getBoolEnv("MIBO_OPENLIST_INSECURE_SKIP_VERIFY", false),
 		},
 		Metadata: MetadataConfig{
@@ -184,6 +178,8 @@ func Load() (Config, error) {
 			PollInterval:         getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
 			RefreshIntervalHours: getIntEnv("MIBO_WORKER_REFRESH_INTERVAL_HOURS", 0),
 			ProbeWorkers:         getBoundedIntEnv("MIBO_PROBE_WORKERS", 2, 1, 8),
+			WorkflowPollInterval: getDurationEnv("MIBO_WORKFLOW_POLL_INTERVAL", 2*time.Second),
+			WorkflowLeaseDuration: getDurationEnv("MIBO_WORKFLOW_LEASE_DURATION", time.Minute),
 		},
 		Cleanup: CleanupConfig{
 			MissingCleanupEnabled:   getBoolEnv("MIBO_MISSING_CLEANUP_ENABLED", false),
@@ -192,12 +188,6 @@ func Load() (Config, error) {
 		},
 	}
 
-	if cfg.Storage.Provider != "openlist" && cfg.Storage.Provider != "local" {
-		return Config{}, fmt.Errorf("unsupported storage provider %q", cfg.Storage.Provider)
-	}
-	if cfg.Storage.Provider == "openlist" && cfg.OpenList.BaseURL == "" {
-		return Config{}, fmt.Errorf("MIBO_OPENLIST_BASE_URL is required")
-	}
 	if cfg.Database.Driver != "sqlite" && cfg.Database.Driver != "postgres" {
 		return Config{}, fmt.Errorf("unsupported database driver %q", cfg.Database.Driver)
 	}

@@ -22,7 +22,7 @@ func (r *Router) handleCreateLibrary(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	libraryRecord, job, err := r.library.CreateLibrary(req.Context(), input)
+	libraryRecord, _, err := r.library.CreateLibrary(req.Context(), input)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -35,7 +35,6 @@ func (r *Router) handleCreateLibrary(w http.ResponseWriter, req *http.Request) {
 
 	writeJSON(req.Context(), w, http.StatusCreated, map[string]any{
 		"library": libraryDetail,
-		"job":     job,
 	})
 }
 
@@ -293,13 +292,37 @@ func (r *Router) handleQueueLibraryScan(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	job, err := r.library.QueueLibraryScan(req.Context(), libraryID)
+	var input struct {
+		Mode string `json:"mode"`
+	}
+	if req.Body != nil && req.ContentLength != 0 {
+		if err := decodeJSON(req, &input); err != nil {
+			writeError(req.Context(), w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	mode := strings.ToLower(strings.TrimSpace(input.Mode))
+	if mode == "" {
+		mode = "full"
+	}
+	switch mode {
+	case "full":
+		_, err = r.library.QueueLibraryScanWithReason(req.Context(), libraryID, library.WorkflowReasonManualScan)
+	case "changed":
+		if r.listener == nil {
+			err = errors.New("listener service unavailable")
+		} else {
+			err = r.listener.RefreshLibraryChanges(req.Context(), libraryID, true)
+		}
+	default:
+		err = errors.New("scan mode must be full or changed")
+	}
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
 
-	writeJSON(req.Context(), w, http.StatusAccepted, job)
+	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": true, "mode": mode})
 }
 
 func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request) {

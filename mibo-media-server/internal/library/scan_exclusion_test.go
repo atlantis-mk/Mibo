@@ -6,7 +6,6 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
@@ -422,7 +421,7 @@ func TestScanExclusionDecisionPathFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	svc := NewService(config.Config{}, db, nil, jobs.NewService(db))
+	svc := NewService(config.Config{}, db, nil, nil)
 	ctx := context.Background()
 	libraryRecord := database.Library{Name: "Movies", Type: "movies", RootPath: "/library", Status: "active"}
 	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {

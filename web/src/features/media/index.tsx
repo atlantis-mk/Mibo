@@ -27,9 +27,11 @@ import { useAuthStore } from "#/stores/auth-store"
 export default function MediaDetail({
   itemId,
   detailView,
+  episodePage,
 }: {
   itemId: number
   detailView: MediaDetailView
+  episodePage: number
 }) {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
@@ -269,6 +271,7 @@ export default function MediaDetail({
         itemProgressPercent={itemProgressPercent}
         progress={progress}
         seriesSeasons={displayedSeasonRails}
+        episodePage={episodePage}
         isSeriesEpisodesLoading={seriesEpisodesQuery.isLoading}
         seriesEpisodesErrorMessage={seriesEpisodesQuery.error?.message ?? null}
         onGoBack={() => {

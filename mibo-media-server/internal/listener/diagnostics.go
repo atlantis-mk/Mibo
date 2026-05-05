@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
-	"github.com/atlan/mibo-media-server/internal/library"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -90,9 +89,9 @@ func (s *Service) pendingRefreshCount(ctx context.Context, libraryID uint) (int6
 		fmt.Sprintf(`%%"library_id":%d,%%`, libraryID),
 		fmt.Sprintf(`%%"library_id":%d}%%`, libraryID),
 	}
-	err := s.db.WithContext(ctx).Model(&database.Job{}).
-		Where("status IN ?", []string{jobs.StatusQueued, jobs.StatusRunning}).
-		Where("kind IN ?", []string{library.JobKindTargetedRefresh, library.JobKindSyncLibrary, JobKindApplyStorageEventRefresh, JobKindListenerReconcile}).
+	err := s.db.WithContext(ctx).Model(&database.WorkflowRun{}).
+		Where("status IN ?", []string{workflow.RunStatusQueued, workflow.RunStatusRunning}).
+		Where("reason IN ?", []string{"storage_refresh", "targeted_refresh"}).
 		Where("payload_json LIKE ? OR payload_json LIKE ?", patterns[0], patterns[1]).
 		Count(&count).Error
 	return count, err

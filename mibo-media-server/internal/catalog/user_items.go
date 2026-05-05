@@ -16,6 +16,7 @@ type CatalogUserProgressState struct {
 	PositionSeconds  int        `json:"position_seconds"`
 	DurationSeconds  *int       `json:"duration_seconds,omitempty"`
 	PlayedPercentage *float64   `json:"played_percentage,omitempty"`
+	ProgressFrameURL string     `json:"progress_frame_url,omitempty"`
 	PlayCount        int        `json:"play_count,omitempty"`
 	Watched          bool       `json:"watched"`
 	Favorite         bool       `json:"favorite"`
@@ -226,6 +227,7 @@ func catalogUserProgressState(row database.UserItemData, duration *int) CatalogU
 		PositionSeconds:  row.PositionSeconds,
 		DurationSeconds:  duration,
 		PlayedPercentage: row.PlayedPercentage,
+		ProgressFrameURL: row.ProgressFrameURL,
 		PlayCount:        row.PlayCount,
 		Watched:          row.CompletedAt != nil,
 		Favorite:         row.Favorite,

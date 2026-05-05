@@ -60,6 +60,29 @@ func TestCatalogPlaybackDirectFromAssetAndInventoryFile(t *testing.T) {
 	}
 }
 
+func TestInventoryFilePlaybackDirectBeforeCatalogMaterialization(t *testing.T) {
+	fixture := newPlaybackDecisionFixture(t)
+	filePath := filepath.Join(fixture.rootPath, "organizing.mp4")
+	if err := os.WriteFile(filePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write inventory file: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: fixture.library.ID, StorageProvider: "local", StoragePath: filePath, Container: "mp4", ContentClass: "video", Status: "available", ScanState: "discovered"}
+	if err := fixture.db.WithContext(context.Background()).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+
+	source, err := fixture.service.GetInventoryFilePlaybackSource(context.Background(), file.ID, ClientProfileWeb)
+	if err != nil {
+		t.Fatalf("get inventory playback source: %v", err)
+	}
+	if source.ItemID != 0 || source.AssetID != 0 || source.FileID != file.ID || !source.Playable {
+		t.Fatalf("unexpected inventory playback source: %#v", source)
+	}
+	if source.URL != fmt.Sprintf("/api/v1/inventory-files/%d/stream", file.ID) || source.Type != "inventory_file" || source.Title != "organizing" {
+		t.Fatalf("unexpected inventory playback metadata: %#v", source)
+	}
+}
+
 func TestCatalogPlaybackDirectStreamsUnsupportedWebContainer(t *testing.T) {
 	fixture := newPlaybackDecisionFixture(t)
 	item := database.CatalogItem{LibraryID: fixture.library.ID, Type: "movie", Title: "Catalog Movie", AvailabilityStatus: "available", GovernanceStatus: "matched"}
@@ -467,7 +490,6 @@ func newPlaybackDecisionFixture(t *testing.T) *playbackDecisionFixture {
 
 	cfg := config.Config{
 		Database: config.DatabaseConfig{Driver: "sqlite"},
-		Storage:  config.StorageConfig{Provider: "local"},
 		Local:    config.LocalStorageConfig{RootPath: rootPath},
 	}
 	registry := providers.NewRegistry(cfg)

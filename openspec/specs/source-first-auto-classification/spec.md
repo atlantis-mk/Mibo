@@ -64,7 +64,7 @@ The system SHALL return source acceptance and probe feedback before full recursi
 - **THEN** the UI SHALL be able to show progress or partial catalog results without waiting for all jobs to complete
 
 ### Requirement: Low-confidence classifications are reviewable after scanning
-The system SHALL surface low-confidence or conflicting classifier decisions for review after scanning rather than requiring users to make semantic choices before scanning, and SHALL base video classification on staged file-role detection, candidate generation, bounded sibling grouping, confidence thresholds, and reviewable evidence.
+The system SHALL surface low-confidence or conflicting classifier decisions for review after scanning rather than requiring users to make semantic choices before scanning, and SHALL base video classification on staged filename signal extraction, file-role detection, candidate generation, cached directory summary evidence, confidence thresholds, and reviewable evidence.
 
 #### Scenario: Classifier cannot confidently choose movie or series
 - **WHEN** video classification evidence is ambiguous or below the configured confidence threshold
@@ -76,8 +76,12 @@ The system SHALL surface low-confidence or conflicting classifier decisions for 
 
 #### Scenario: Fast classification avoids heavy work
 - **WHEN** automatic video classification runs during source-first scanning
-- **THEN** the system SHALL use path, filename, extension, sidecar-name, already-listed object metadata, and bounded current-directory sibling evidence without running ffprobe, content hashing, external metadata searches, or artwork downloads in the fast path
+- **THEN** the system SHALL use path, filename, extension, sidecar-name, already-listed object metadata, structured filename signals, and cached directory summary evidence without running ffprobe, content hashing, external metadata searches, artwork downloads, or additional recursive source analysis in the fast path
 
 #### Scenario: Attachment evidence avoids false semantic choices
 - **WHEN** a supported video looks like a trailer, sample, PV, preview, featurette, or other non-main attachment
 - **THEN** the system SHALL classify it as an attachment candidate and SHALL NOT require the user to choose movie, show, mixed, or directory semantics before scanning continues
+
+#### Scenario: Directory context is needed for numeric filenames
+- **WHEN** numeric filenames cannot be confidently classified from filename signals alone
+- **THEN** the system SHALL use cached directory summary evidence when available and SHALL mark the result provisional or review-required if the cheap context remains inconclusive

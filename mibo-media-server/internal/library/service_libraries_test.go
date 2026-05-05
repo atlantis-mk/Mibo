@@ -9,6 +9,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -96,6 +97,12 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 		&database.ItemTag{ItemID: otherItem.ID, TagID: otherTag.ID},
 		&database.ItemRollup{ItemID: item.ID, UpdatedAt: time.Now()},
 		&database.CatalogSearchDocument{ItemID: item.ID, LibraryID: library.ID, ItemType: "movie", Title: "Gone", AvailabilityStatus: "available"},
+		&database.IngestDirtyUnit{DirtyKey: "inventory_file:delete", ScopeKind: "inventory_file", LibraryID: library.ID, InventoryFileID: &inventoryFile.ID, Reason: "test", Status: "dirty", AvailableAt: time.Now()},
+		&database.IngestCondition{UnitKey: "inventory_file:delete", LibraryID: library.ID, InventoryFileID: &inventoryFile.ID, ConditionType: "probed", Status: "failed", Reason: "test", Severity: "error"},
+		&database.IngestEvent{UnitKey: "inventory_file:delete", LibraryID: library.ID, InventoryFileID: &inventoryFile.ID, EventType: "condition_changed", Status: "failed", Reason: "test"},
+		&database.IngestDirtyUnit{DirtyKey: "inventory_file:keep", ScopeKind: "inventory_file", LibraryID: otherLibrary.ID, InventoryFileID: &otherInventoryFile.ID, Reason: "test", Status: "dirty", AvailableAt: time.Now()},
+		&database.IngestCondition{UnitKey: "inventory_file:keep", LibraryID: otherLibrary.ID, InventoryFileID: &otherInventoryFile.ID, ConditionType: "probed", Status: "failed", Reason: "test", Severity: "error"},
+		&database.IngestEvent{UnitKey: "inventory_file:keep", LibraryID: otherLibrary.ID, InventoryFileID: &otherInventoryFile.ID, EventType: "condition_changed", Status: "failed", Reason: "test"},
 		&database.LibraryMetadataStrategy{LibraryID: library.ID},
 		&database.ScanExclusion{LibraryID: library.ID, StorageProvider: "local", StoragePath: "/media/delete/ad.mkv", Reason: "advertisement", Enabled: true},
 		&database.User{Username: "user", PasswordHash: "hash", Role: "admin"},
@@ -117,6 +124,7 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	}
 	job := database.Job{Kind: JobKindSyncLibrary, Status: "queued", PayloadJSON: fmt.Sprintf(`{"library_id":%d,"root_path":"/media/delete"}`, library.ID), AvailableAt: time.Now()}
 	probeJob := database.Job{Kind: JobKindProbeInventoryFile, Status: "queued", PayloadJSON: fmt.Sprintf(`{"inventory_file_id":%d}`, inventoryFile.ID), AvailableAt: time.Now()}
+	runningJob := database.Job{Kind: JobKindSyncLibrary, Status: "running", PayloadJSON: fmt.Sprintf(`{"library_id":%d,"root_path":"/media/delete"}`, library.ID), AvailableAt: time.Now(), StartedAt: timePtr(time.Now())}
 	otherJob := database.Job{Kind: JobKindSyncLibrary, Status: "queued", PayloadJSON: fmt.Sprintf(`{"library_id":%d,"root_path":"/media/keep"}`, otherLibrary.ID), AvailableAt: time.Now()}
 	if err := db.Create(&job).Error; err != nil {
 		t.Fatalf("create job: %v", err)
@@ -124,11 +132,43 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	if err := db.Create(&probeJob).Error; err != nil {
 		t.Fatalf("create probe job: %v", err)
 	}
+	if err := db.Create(&runningJob).Error; err != nil {
+		t.Fatalf("create running job: %v", err)
+	}
 	if err := db.Create(&otherJob).Error; err != nil {
 		t.Fatalf("create other job: %v", err)
 	}
 	if err := db.Create(&database.JobActiveIntent{IntentKey: "sync", Kind: job.Kind, JobID: job.ID}).Error; err != nil {
 		t.Fatalf("create active intent: %v", err)
+	}
+	workflowRun := database.WorkflowRun{RunKey: fmt.Sprintf("library:%d:manual_scan", library.ID), LibraryID: library.ID, Reason: "manual_scan", Status: workflow.RunStatusQueued, ScopeKey: fmt.Sprintf("library:%d", library.ID)}
+	otherWorkflowRun := database.WorkflowRun{RunKey: fmt.Sprintf("library:%d:manual_scan", otherLibrary.ID), LibraryID: otherLibrary.ID, Reason: "manual_scan", Status: workflow.RunStatusQueued, ScopeKey: fmt.Sprintf("library:%d", otherLibrary.ID)}
+	if err := db.Create(&workflowRun).Error; err != nil {
+		t.Fatalf("create workflow run: %v", err)
+	}
+	if err := db.Create(&otherWorkflowRun).Error; err != nil {
+		t.Fatalf("create other workflow run: %v", err)
+	}
+	workflowTask := database.WorkflowTask{RunID: workflowRun.ID, LibraryID: library.ID, TaskKey: fmt.Sprintf("run:%d:scan", workflowRun.ID), TaskType: workflow.TaskTypeScanLibraryPath, Stage: workflow.StageScan, Status: workflow.TaskStatusRunning, ScopeKey: workflowRun.ScopeKey, AvailableAt: time.Now()}
+	dependentWorkflowTask := database.WorkflowTask{RunID: workflowRun.ID, LibraryID: library.ID, TaskKey: fmt.Sprintf("run:%d:projection", workflowRun.ID), TaskType: workflow.TaskTypeRefreshProjection, Stage: workflow.StageProjection, Status: workflow.TaskStatusBlocked, ScopeKey: workflowRun.ScopeKey, BlockedBy: 1, AvailableAt: time.Now()}
+	otherWorkflowTask := database.WorkflowTask{RunID: otherWorkflowRun.ID, LibraryID: otherLibrary.ID, TaskKey: fmt.Sprintf("run:%d:scan", otherWorkflowRun.ID), TaskType: workflow.TaskTypeScanLibraryPath, Stage: workflow.StageScan, Status: workflow.TaskStatusQueued, ScopeKey: otherWorkflowRun.ScopeKey, AvailableAt: time.Now()}
+	if err := db.Create(&workflowTask).Error; err != nil {
+		t.Fatalf("create workflow task: %v", err)
+	}
+	if err := db.Create(&dependentWorkflowTask).Error; err != nil {
+		t.Fatalf("create dependent workflow task: %v", err)
+	}
+	if err := db.Create(&otherWorkflowTask).Error; err != nil {
+		t.Fatalf("create other workflow task: %v", err)
+	}
+	if err := db.Create(&database.WorkflowTaskDependency{TaskID: dependentWorkflowTask.ID, DependsOnTaskID: workflowTask.ID}).Error; err != nil {
+		t.Fatalf("create workflow dependency: %v", err)
+	}
+	if err := db.Create(&database.WorkflowTaskLease{TaskID: workflowTask.ID, Owner: "test", LeaseUntil: time.Now().Add(time.Minute)}).Error; err != nil {
+		t.Fatalf("create workflow lease: %v", err)
+	}
+	if err := db.Create(&database.WorkflowResourceUsage{ResourceKey: "library_scan", TaskID: workflowTask.ID, RunID: workflowRun.ID, LibraryID: library.ID, Units: 1, LeaseUntil: time.Now().Add(time.Minute)}).Error; err != nil {
+		t.Fatalf("create workflow resource usage: %v", err)
 	}
 	if err := db.Exec(`CREATE TABLE media_items (id integer PRIMARY KEY AUTOINCREMENT, library_id integer NOT NULL, type text NOT NULL, title text NOT NULL, source_path text NOT NULL, status text NOT NULL, created_at datetime, updated_at datetime)`).Error; err != nil {
 		t.Fatalf("create legacy media_items table: %v", err)
@@ -172,13 +212,22 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	assertRawTableCount(t, db, "item_tags", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "item_rollups", "item_id = ?", 0, item.ID)
 	assertRawTableCount(t, db, "catalog_search_documents", "item_id = ? OR library_id = ?", 0, item.ID, library.ID)
+	assertRawTableCount(t, db, "ingest_dirty_units", "library_id = ?", 0, library.ID)
+	assertRawTableCount(t, db, "ingest_conditions", "library_id = ?", 0, library.ID)
+	assertRawTableCount(t, db, "ingest_events", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "library_metadata_strategies", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "scan_exclusions", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "user_item_data", "item_id = ? OR asset_id = ?", 0, item.ID, asset.ID)
 	assertRawTableCount(t, db, "schedules", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "schedule_runs", "schedule_id = ?", 0, schedule.ID)
 	assertRawTableCount(t, db, "jobs", "id IN (?, ?)", 0, job.ID, probeJob.ID)
+	assertRawTableCount(t, db, "jobs", "id = ? AND status = ?", 1, runningJob.ID, "cancel_requested")
 	assertRawTableCount(t, db, "job_active_intents", "job_id = ?", 0, job.ID)
+	assertRawTableCount(t, db, "workflow_runs", "id = ?", 0, workflowRun.ID)
+	assertRawTableCount(t, db, "workflow_tasks", "id IN (?, ?)", 0, workflowTask.ID, dependentWorkflowTask.ID)
+	assertRawTableCount(t, db, "workflow_task_dependencies", "task_id = ? OR depends_on_task_id = ?", 0, dependentWorkflowTask.ID, workflowTask.ID)
+	assertRawTableCount(t, db, "workflow_task_leases", "task_id = ?", 0, workflowTask.ID)
+	assertRawTableCount(t, db, "workflow_resource_usages", "task_id = ? OR library_id = ?", 0, workflowTask.ID, library.ID)
 	assertRawTableCount(t, db, "media_items", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "media_files", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "playback_progresses", "media_item_id = 101 OR media_file_id = 201", 0)
@@ -189,7 +238,12 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	assertRawTableCount(t, db, "catalog_items", "id = ?", 1, otherItem.ID)
 	assertRawTableCount(t, db, "inventory_files", "id = ?", 1, otherInventoryFile.ID)
 	assertRawTableCount(t, db, "media_assets", "id = ?", 1, otherAsset.ID)
+	assertRawTableCount(t, db, "ingest_dirty_units", "library_id = ?", 1, otherLibrary.ID)
+	assertRawTableCount(t, db, "ingest_conditions", "library_id = ?", 1, otherLibrary.ID)
+	assertRawTableCount(t, db, "ingest_events", "library_id = ?", 1, otherLibrary.ID)
 	assertRawTableCount(t, db, "jobs", "id = ?", 1, otherJob.ID)
+	assertRawTableCount(t, db, "workflow_runs", "id = ?", 1, otherWorkflowRun.ID)
+	assertRawTableCount(t, db, "workflow_tasks", "id = ?", 1, otherWorkflowTask.ID)
 	assertRawTableCount(t, db, "people", "id = ?", 1, otherPerson.ID)
 	assertRawTableCount(t, db, "tags", "id = ?", 1, otherTag.ID)
 }

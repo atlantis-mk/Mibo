@@ -55,6 +55,7 @@ type LibraryScanPolicy struct {
 	IgnoreFileExtensionsJSON   string    `gorm:"type:text" json:"ignore_file_extensions_json"`
 	MinFileSizeBytes           int64     `gorm:"not null;default:0" json:"min_file_size_bytes"`
 	SampleIgnoreSizeBytes      int64     `gorm:"not null;default:0" json:"sample_ignore_size_bytes"`
+	InventoryProbeBatchEnabled bool      `gorm:"not null;default:true" json:"inventory_probe_batch_enabled"`
 	ConfigurableExclusionRules bool      `gorm:"not null;default:true" json:"configurable_exclusion_rules"`
 	CreatedAt                  time.Time `json:"created_at"`
 	UpdatedAt                  time.Time `json:"updated_at"`

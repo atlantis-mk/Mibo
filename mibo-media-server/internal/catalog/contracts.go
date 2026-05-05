@@ -71,24 +71,24 @@ type CatalogClassificationAlternative struct {
 }
 
 type CatalogClassificationDecision struct {
-	ID             uint                                `json:"id"`
-	SourcePath     string                              `json:"source_path"`
-	DecisionType   string                              `json:"decision_type"`
-	Role           string                              `json:"role,omitempty"`
-	CandidateType  string                              `json:"candidate_type,omitempty"`
-	TargetKind     string                              `json:"target_kind,omitempty"`
-	TargetKey      string                              `json:"target_key,omitempty"`
-	Status         string                              `json:"status"`
-	Confidence     *float64                            `json:"confidence,omitempty"`
-	Alternatives   []CatalogClassificationAlternative  `json:"alternatives"`
-	Evidence       []CatalogClassificationEvidence     `json:"evidence"`
-	AffectedFiles  []string                            `json:"affected_files"`
-	CorrectionActs []CatalogClassificationCorrection   `json:"correction_actions"`
-	Reason         string                              `json:"reason,omitempty"`
-	Warnings       []string                            `json:"warnings"`
-	CreatedAt      time.Time                           `json:"created_at"`
-	UpdatedAt      time.Time                           `json:"updated_at"`
-	ResolvedAt     *time.Time                          `json:"resolved_at,omitempty"`
+	ID             uint                               `json:"id"`
+	SourcePath     string                             `json:"source_path"`
+	DecisionType   string                             `json:"decision_type"`
+	Role           string                             `json:"role,omitempty"`
+	CandidateType  string                             `json:"candidate_type,omitempty"`
+	TargetKind     string                             `json:"target_kind,omitempty"`
+	TargetKey      string                             `json:"target_key,omitempty"`
+	Status         string                             `json:"status"`
+	Confidence     *float64                           `json:"confidence,omitempty"`
+	Alternatives   []CatalogClassificationAlternative `json:"alternatives"`
+	Evidence       []CatalogClassificationEvidence    `json:"evidence"`
+	AffectedFiles  []string                           `json:"affected_files"`
+	CorrectionActs []CatalogClassificationCorrection  `json:"correction_actions"`
+	Reason         string                             `json:"reason,omitempty"`
+	Warnings       []string                           `json:"warnings"`
+	CreatedAt      time.Time                          `json:"created_at"`
+	UpdatedAt      time.Time                          `json:"updated_at"`
+	ResolvedAt     *time.Time                         `json:"resolved_at,omitempty"`
 }
 
 type CatalogClassificationCorrection struct {
@@ -256,6 +256,12 @@ type CatalogMediaStreamSummary struct {
 type CatalogListItem struct {
 	ID                 uint                      `json:"id"`
 	LibraryID          uint                      `json:"library_id"`
+	SourceKind         string                    `json:"source_kind,omitempty"`
+	InventoryFileID    *uint                     `json:"inventory_file_id,omitempty"`
+	MaturityState      string                    `json:"maturity_state,omitempty"`
+	Organizing         bool                      `json:"organizing,omitempty"`
+	OrganizingSummary  *CatalogOrganizingSummary `json:"organizing_summary,omitempty"`
+	StoragePath        string                    `json:"storage_path,omitempty"`
 	Type               string                    `json:"type"`
 	Title              string                    `json:"title"`
 	OriginalTitle      string                    `json:"original_title,omitempty"`
@@ -263,6 +269,10 @@ type CatalogListItem struct {
 	Overview           string                    `json:"overview,omitempty"`
 	Year               *int                      `json:"year,omitempty"`
 	RuntimeSeconds     *int                      `json:"runtime_seconds,omitempty"`
+	IndexNumber        *int                      `json:"index_number,omitempty"`
+	IndexNumberEnd     *int                      `json:"index_number_end,omitempty"`
+	ParentIndexNumber  *int                      `json:"parent_index_number,omitempty"`
+	EpisodeLabel       string                    `json:"episode_label,omitempty"`
 	CommunityRating    *float64                  `json:"community_rating,omitempty"`
 	OfficialRating     string                    `json:"official_rating,omitempty"`
 	SeriesStatus       string                    `json:"series_status,omitempty"`
@@ -274,6 +284,22 @@ type CatalogListItem struct {
 	ChildSummary       *CatalogChildSummary      `json:"child_summary,omitempty"`
 	SelectedImages     []CatalogSelectedImage    `json:"selected_images,omitempty"`
 	ExternalIdentities []CatalogExternalIdentity `json:"external_identities,omitempty"`
+}
+
+type CatalogOrganizingSummary struct {
+	State      string                       `json:"state"`
+	Message    string                       `json:"message"`
+	Stage      string                       `json:"stage,omitempty"`
+	Severity   string                       `json:"severity,omitempty"`
+	Conditions []CatalogOrganizingCondition `json:"conditions,omitempty"`
+}
+
+type CatalogOrganizingCondition struct {
+	Type     string `json:"type"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Severity string `json:"severity,omitempty"`
 }
 
 type CatalogItemDetail struct {
@@ -383,22 +409,22 @@ type CatalogAssetDetail struct {
 }
 
 type CatalogGovernanceWorkspace struct {
-	ItemID              uint                      `json:"item_id"`
-	LibraryID           uint                      `json:"library_id"`
-	Type                string                    `json:"type"`
-	Title               string                    `json:"title"`
-	AvailabilityStatus  string                    `json:"availability_status"`
-	GovernanceStatus    string                    `json:"governance_status"`
-	SelectedImages      []CatalogSelectedImage    `json:"selected_images,omitempty"`
-	ImageCandidates     []CatalogSelectedImage    `json:"image_candidates,omitempty"`
-	ExternalIdentities  []CatalogExternalIdentity `json:"external_identities,omitempty"`
-	SourceEvidence      []CatalogSourceEvidence   `json:"source_evidence"`
-	FieldStates         []CatalogFieldState       `json:"field_states"`
-	Assets              []CatalogAssetDetail      `json:"assets"`
-	Classification      []CatalogClassificationDecision `json:"classification_decisions"`
+	ItemID              uint                               `json:"item_id"`
+	LibraryID           uint                               `json:"library_id"`
+	Type                string                             `json:"type"`
+	Title               string                             `json:"title"`
+	AvailabilityStatus  string                             `json:"availability_status"`
+	GovernanceStatus    string                             `json:"governance_status"`
+	SelectedImages      []CatalogSelectedImage             `json:"selected_images,omitempty"`
+	ImageCandidates     []CatalogSelectedImage             `json:"image_candidates,omitempty"`
+	ExternalIdentities  []CatalogExternalIdentity          `json:"external_identities,omitempty"`
+	SourceEvidence      []CatalogSourceEvidence            `json:"source_evidence"`
+	FieldStates         []CatalogFieldState                `json:"field_states"`
+	Assets              []CatalogAssetDetail               `json:"assets"`
+	Classification      []CatalogClassificationDecision    `json:"classification_decisions"`
 	ClassificationRules []CatalogClassificationRuleSummary `json:"classification_rules"`
-	RecommendedChildren []CatalogListItem         `json:"recommended_children"`
-	MetadataOperation   any                       `json:"metadata_operation,omitempty"`
+	RecommendedChildren []CatalogListItem                  `json:"recommended_children"`
+	MetadataOperation   any                                `json:"metadata_operation,omitempty"`
 }
 
 type CatalogListItemInput struct {
@@ -477,6 +503,8 @@ func BuildCatalogListItem(input CatalogListItemInput) CatalogListItem {
 	return CatalogListItem{
 		ID:                 item.ID,
 		LibraryID:          item.LibraryID,
+		SourceKind:         "catalog",
+		MaturityState:      "classified",
 		Type:               normalizeCatalogType(item.Type),
 		Title:              strings.TrimSpace(item.Title),
 		OriginalTitle:      strings.TrimSpace(item.OriginalTitle),
@@ -484,6 +512,10 @@ func BuildCatalogListItem(input CatalogListItemInput) CatalogListItem {
 		Overview:           item.Overview,
 		Year:               item.Year,
 		RuntimeSeconds:     item.RuntimeSeconds,
+		IndexNumber:        item.IndexNumber,
+		IndexNumberEnd:     item.IndexNumberEnd,
+		ParentIndexNumber:  item.ParentIndexNumber,
+		EpisodeLabel:       formatCatalogEpisodeLabel(item.ParentIndexNumber, item.IndexNumber, item.IndexNumberEnd),
 		CommunityRating:    item.CommunityRating,
 		OfficialRating:     strings.TrimSpace(item.OfficialRating),
 		SeriesStatus:       strings.TrimSpace(item.SeriesStatus),

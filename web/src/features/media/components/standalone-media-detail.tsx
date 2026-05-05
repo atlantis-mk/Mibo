@@ -61,6 +61,7 @@ type StandaloneMediaDetailProps = {
   itemProgressPercent: number
   progress: ProgressState | null
   seriesSeasons: CatalogSeasonRail[]
+  episodePage: number
   isSeriesEpisodesLoading: boolean
   seriesEpisodesErrorMessage: string | null
   onGoBack: () => void
@@ -85,6 +86,7 @@ export function StandaloneMediaDetail({
   itemProgressPercent,
   progress,
   seriesSeasons,
+  episodePage,
   isSeriesEpisodesLoading,
   seriesEpisodesErrorMessage,
   onGoBack,
@@ -225,18 +227,18 @@ export function StandaloneMediaDetail({
           scrollContainerRef={scrollContainerRef}
           leftSlot={
             <>
+              <SidebarTrigger />
               <TopBarIconButton
-                icon={<ArrowLeft className="size-5" />}
+                icon={<ArrowLeft />}
                 label="返回上一页"
                 onClick={onGoBack}
               />
-              <Button asChild variant="ghost" size="icon-sm">
+              <Button asChild variant="ghost" size="icon">
                 <Link to="/">
-                  <Home className="size-4.5" />
+                  <Home />
                   <span className="sr-only">返回首页</span>
                 </Link>
               </Button>
-              <SidebarTrigger />
               <div className="min-w-0 pl-1">
                 {showHeaderLogo && item.logo_url ? (
                   <img
@@ -254,11 +256,11 @@ export function StandaloneMediaDetail({
             </>
           }
           rightSlot={
-            <div className="hidden items-center gap-2 text-muted-foreground md:flex">
+            <div className="hidden items-center gap-2 md:flex">
               <Dialog>
                 <DialogTrigger asChild>
-                  <Button variant="ghost" size="icon-sm">
-                    <Tv className="size-4.5" />
+                  <Button variant="ghost" size="icon">
+                    <Tv/>
                     <span className="sr-only">投屏</span>
                   </Button>
                 </DialogTrigger>
@@ -272,16 +274,16 @@ export function StandaloneMediaDetail({
                   </DialogHeader>
                 </DialogContent>
               </Dialog>
-              <Button asChild variant="ghost" size="icon-sm">
+              <Button asChild variant="ghost" size="icon">
                 <Link to="/search" search={{ q: undefined }}>
-                  <Search className="size-4.5" />
+                  <Search />
                   <span className="sr-only">搜索</span>
                 </Link>
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-sm">
-                    <User className="size-4.5" />
+                  <Button variant="ghost" size="icon">
+                    <User />
                     <span className="sr-only">用户菜单</span>
                   </Button>
                 </DropdownMenuTrigger>
@@ -302,9 +304,9 @@ export function StandaloneMediaDetail({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button asChild variant="ghost" size="icon-sm">
+              <Button asChild variant="ghost" size="icon">
                 <Link to="/settings">
-                  <Settings className="size-4.5" />
+                  <Settings />
                   <span className="sr-only">进入设置</span>
                 </Link>
               </Button>
@@ -374,6 +376,7 @@ export function StandaloneMediaDetail({
           <SeriesEpisodesSection
             item={item}
             seasons={seriesSeasons}
+            episodePage={episodePage}
             isLoading={isSeriesEpisodesLoading}
             errorMessage={seriesEpisodesErrorMessage}
           />
@@ -399,7 +402,7 @@ function TopBarIconButton({
   onClick: () => void
 }) {
   return (
-    <Button variant="ghost" size="icon-sm" onClick={onClick}>
+    <Button variant="ghost" size="icon" onClick={onClick}>
       {icon}
       <span className="sr-only">{label}</span>
     </Button>

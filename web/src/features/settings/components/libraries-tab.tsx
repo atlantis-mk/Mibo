@@ -41,7 +41,7 @@ export function LibrariesTab({
   isScanning: boolean
   onCreate: () => void
   onEdit: (library: Library) => void
-  onScan: (libraryId: number) => void
+  onScan: (libraryId: number, mode: "full" | "changed") => void
   onDelete: (library: Library) => void
 }) {
   return (
@@ -67,7 +67,7 @@ export function LibrariesTab({
                 (source) => source.id === library.media_source_id
               )?.name ?? `媒体源 #${library.media_source_id}`
             const issue = healthIssues.find((entry) =>
-              entry.affected.libraries.some((ref) => ref.id === library.id)
+              entry.affected.libraries?.some((ref) => ref.id === library.id)
             )
 
             return (
@@ -156,12 +156,19 @@ export function LibrariesTab({
                     <Button
                       variant="outline"
                       className="border-border/60 bg-card/80 text-foreground hover:bg-muted hover:text-foreground"
-                      onClick={() => onScan(library.id)}
+                      onClick={() => onScan(library.id, "changed")}
                     >
                       {isScanning ? (
                         <LoaderCircleIcon className="size-4 animate-spin" />
                       ) : null}
-                      扫描
+                      扫描变化
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="border-border/60 bg-card/80 text-foreground hover:bg-muted hover:text-foreground"
+                      onClick={() => onScan(library.id, "full")}
+                    >
+                      全量扫描
                     </Button>
                     <Button
                       variant="outline"

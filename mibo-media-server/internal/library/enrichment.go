@@ -7,6 +7,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 )
 
 type CatalogMatchBatchPayload struct {
@@ -21,10 +22,21 @@ type InventoryProbeBatchPayload struct {
 	FileIDs   []uint `json:"file_ids"`
 }
 
+type CatalogMaterializeBatchPayload struct {
+	LibraryID uint   `json:"library_id"`
+	RootPath  string `json:"root_path,omitempty"`
+	FileIDs   []uint `json:"file_ids"`
+	mode      *scanMode
+}
+
+type CatalogPostMaterializeBatchPayload struct {
+	LibraryID uint   `json:"library_id"`
+	RootPath  string `json:"root_path,omitempty"`
+	FileIDs   []uint `json:"file_ids,omitempty"`
+	ItemIDs   []uint `json:"item_ids,omitempty"`
+}
+
 func (s *Service) QueueCatalogItemMatch(ctx context.Context, itemID uint) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
-	}
 	if itemID == 0 {
 		return database.Job{}, fmt.Errorf("catalog item id is required")
 	}
@@ -36,40 +48,65 @@ func (s *Service) QueueCatalogItemMatch(ctx context.Context, itemID uint) (datab
 	if !shouldQueue {
 		return database.Job{}, nil
 	}
-
-	return s.jobs.EnqueueUnique(ctx, JobKindMatchCatalogItem, fmt.Sprintf("match_catalog_item:%d", targetID), map[string]any{
-		"item_id": targetID,
-	})
+	if s.workflow != nil {
+		var item database.CatalogItem
+		if err := s.db.WithContext(ctx).First(&item, targetID).Error; err != nil {
+			return database.Job{}, err
+		}
+		run, err := s.queueStandaloneWorkflowTask(ctx, item.LibraryID, item.Path, WorkflowReasonManualScan, workflow.TaskTypeMatchMetadata, workflow.StageMetadataMatch, fmt.Sprintf("match-item:%d", targetID), CatalogMatchBatchPayload{LibraryID: item.LibraryID, RootPath: item.Path, ItemIDs: []uint{targetID}})
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
 func (s *Service) QueueCatalogMatchBatch(ctx context.Context, libraryID uint, rootPath string, itemIDs []uint) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
-	}
 	ids := normalizeUintIDs(itemIDs)
 	if len(ids) == 0 {
 		return database.Job{}, nil
 	}
-	return s.jobs.EnqueueUnique(ctx, JobKindCatalogMatchBatch, fmt.Sprintf("catalog_match_batch:%d:%s", libraryID, rootPath), CatalogMatchBatchPayload{
-		LibraryID: libraryID,
-		RootPath:  rootPath,
-		ItemIDs:   ids,
-	})
+	if s.workflow != nil {
+		run, err := s.queueStandaloneWorkflowTask(ctx, libraryID, rootPath, WorkflowReasonManualScan, workflow.TaskTypeMatchMetadata, workflow.StageMetadataMatch, fmt.Sprintf("match:%s", rootPath), CatalogMatchBatchPayload{LibraryID: libraryID, RootPath: rootPath, ItemIDs: ids})
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
 func (s *Service) QueueInventoryProbeBatch(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
-	}
 	ids := normalizeUintIDs(fileIDs)
 	if len(ids) == 0 {
 		return database.Job{}, nil
 	}
-	return s.jobs.EnqueueUnique(ctx, JobKindInventoryProbeBatch, fmt.Sprintf("inventory_probe_batch:%d:%s", libraryID, rootPath), InventoryProbeBatchPayload{
-		LibraryID: libraryID,
-		RootPath:  rootPath,
-		FileIDs:   ids,
-	})
+	if s.workflow != nil {
+		run, err := s.queueStandaloneWorkflowTask(ctx, libraryID, rootPath, WorkflowReasonProbeInventory, workflow.TaskTypeProbeInventory, workflow.StageProbe, fmt.Sprintf("probe:%s", rootPath), InventoryProbeBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: ids})
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
+}
+
+func (s *Service) QueueCatalogMaterializeBatch(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint) (database.Job, error) {
+	ids := normalizeUintIDs(fileIDs)
+	if len(ids) == 0 {
+		return database.Job{}, nil
+	}
+	if s.workflow != nil {
+		run, err := s.queueStandaloneWorkflowTask(ctx, libraryID, rootPath, WorkflowReasonManualScan, workflow.TaskTypeMaterializeCatalog, workflow.StageMaterialize, fmt.Sprintf("materialize:%s", rootPath), CatalogMaterializeBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: ids})
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
+}
+
+func (s *Service) QueueCatalogPostMaterializeBatch(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint, itemIDs []uint) (database.Job, error) {
+	normalizedFileIDs := normalizeUintIDs(fileIDs)
+	normalizedItemIDs := normalizeUintIDs(itemIDs)
+	if len(normalizedFileIDs) == 0 && len(normalizedItemIDs) == 0 {
+		return database.Job{}, nil
+	}
+	if s.workflow != nil {
+		payload := CatalogPostMaterializeBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: normalizedFileIDs, ItemIDs: normalizedItemIDs}
+		run, err := s.queueStandaloneWorkflowTask(ctx, libraryID, rootPath, WorkflowReasonManualScan, workflow.TaskTypeMaterializeCatalog, workflow.StageMaterialize, fmt.Sprintf("post-materialize:%s", rootPath), payload)
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
 func normalizeUintIDs(ids []uint) []uint {
@@ -123,6 +160,9 @@ func (s *Service) catalogMatchTargetForQueue(ctx context.Context, itemID uint) (
 	return targetID, targetItem.GovernanceStatus == catalog.GovernancePending, nil
 }
 func (s *Service) QueueInventoryFileProbe(ctx context.Context, inventoryFileID uint, force bool) (database.Job, error) {
+	if inventoryFileID == 0 {
+		return database.Job{}, fmt.Errorf("inventory file id is required")
+	}
 	if force {
 		var assetIDs []uint
 		if err := s.db.WithContext(ctx).
@@ -144,8 +184,33 @@ func (s *Service) QueueInventoryFileProbe(ctx context.Context, inventoryFileID u
 			}
 		}
 	}
+	if s.workflow == nil {
+		return database.Job{}, fmt.Errorf("workflow service unavailable")
+	}
+	var file database.InventoryFile
+	if err := s.db.WithContext(ctx).First(&file, inventoryFileID).Error; err != nil {
+		return database.Job{}, err
+	}
 
-	return s.jobs.EnqueueUnique(ctx, JobKindProbeInventoryFile, fmt.Sprintf("probe_inventory_file:%d", inventoryFileID), map[string]any{
-		"inventory_file_id": inventoryFileID,
+	run, reused, err := s.workflow.CreateOrReuseRun(ctx, workflow.CreateRunInput{
+		RunKey:    fmt.Sprintf("inventory-file:%d:probe", inventoryFileID),
+		LibraryID: file.LibraryID,
+		Reason:    WorkflowReasonProbeInventory,
+		Priority:  10,
+		ScopeKey:  fmt.Sprintf("inventory-file:%d", inventoryFileID),
+		Payload:   inventoryFileProbeWorkflowPayload{InventoryFileID: inventoryFileID},
 	})
+	if err != nil || reused {
+		return workflowRunCompatibilityJob(run), err
+	}
+	_, err = s.workflow.CreateTask(ctx, run, workflow.CreateTaskInput{
+		TaskKey:   fmt.Sprintf("run:%d:probe-file:%d", run.ID, inventoryFileID),
+		TaskType:  workflow.TaskTypeProbeInventoryFile,
+		Stage:     workflow.StageProbe,
+		Priority:  10,
+		ScopeKey:  run.ScopeKey,
+		Payload:   inventoryFileProbeWorkflowPayload{InventoryFileID: inventoryFileID},
+		Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeProbeInventoryFile].Resources,
+	})
+	return workflowRunCompatibilityJob(run), err
 }

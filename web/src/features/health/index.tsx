@@ -22,6 +22,7 @@ import {
 import {
   createAuthedMiboApi,
   healthIssuesQueryOptions,
+  ingestDiagnosticsQueryOptions,
   miboQueryKeys,
 } from "#/lib/mibo-query"
 import {
@@ -34,11 +35,13 @@ import {
 import type {
   HealthAction,
   HealthIssue,
+  IngestDiagnosticStage,
   MediaSourceValidationResult,
 } from "#/lib/mibo-api"
 import { useAuthStore } from "#/stores/auth-store"
 
 import { getHealthCenterState } from "./health-center-state"
+import { IngestDiagnosticsPanel } from "./ingest-diagnostics-panel"
 
 export default function HealthCenter() {
   const token = useAuthStore((state) => state.token)
@@ -50,6 +53,10 @@ export default function HealthCenter() {
   >({})
   const issuesQuery = useQuery({
     ...healthIssuesQueryOptions(queryToken),
+    enabled: hasHydrated && !!token,
+  })
+  const ingestQuery = useQuery({
+    ...ingestDiagnosticsQueryOptions(queryToken),
     enabled: hasHydrated && !!token,
   })
   const issues = issuesQuery.data ?? []
@@ -104,6 +111,40 @@ export default function HealthCenter() {
       await queryClient.invalidateQueries({ queryKey: ["home"] })
     },
   })
+  const retryIngestMutation = useMutation({
+    mutationFn: async (stages: IngestDiagnosticStage[]) => {
+      if (stages.length === 0) return []
+      const api = createAuthedMiboApi(queryToken)
+      return Promise.all(stages.map((stage) => api.retryIngestStage(stage.id)))
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.ingestDiagnostics(queryToken),
+      })
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.consoleSummary(queryToken),
+      })
+      await queryClient.invalidateQueries({ queryKey: ["home"] })
+    },
+  })
+  const resolveReviewMutation = useMutation({
+    mutationFn: async (stages: IngestDiagnosticStage[]) => {
+      if (stages.length === 0) return []
+      const api = createAuthedMiboApi(queryToken)
+      return Promise.all(
+        stages.map((stage) => api.resolveIngestReviewStage(stage.id))
+      )
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.ingestDiagnostics(queryToken),
+      })
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.consoleSummary(queryToken),
+      })
+      await queryClient.invalidateQueries({ queryKey: ["home"] })
+    },
+  })
   const healthState = getHealthCenterState(issues, {
     validatePending: validateMutation.isPending,
     rescanPending: rescanMutation.isPending,
@@ -129,6 +170,17 @@ export default function HealthCenter() {
           tone="neutral"
         />
       </section>
+
+      <IngestDiagnosticsPanel
+        stages={ingestQuery.data?.stages ?? []}
+        isLoading={ingestQuery.isPending}
+        error={ingestQuery.error}
+        isRetrying={retryIngestMutation.isPending}
+        isResolvingReview={resolveReviewMutation.isPending}
+        onRetry={(stages) => retryIngestMutation.mutate(stages)}
+        onResolveReview={(stages) => resolveReviewMutation.mutate(stages)}
+        onRefetch={() => void ingestQuery.refetch()}
+      />
 
       {issuesQuery.isLoading ? (
         <Card className="rounded-[1.5rem] border-border/60 bg-card/80">
@@ -302,7 +354,6 @@ function IssueCard({
             {issue.last_seen_at ? (
               <div>最近发生：{formatDate(issue.last_seen_at)}</div>
             ) : null}
-            {issue.latest_job_id ? <div>Job #{issue.latest_job_id}</div> : null}
           </div>
         </div>
       </CardHeader>
@@ -324,7 +375,7 @@ function IssueCard({
             .filter((action) => action.type !== "ignore_issue")
             .map((action) => (
               <IssueActionButton
-                key={`${action.type}-${action.media_source_id ?? action.job_id ?? issue.id}`}
+                key={`${action.type}-${action.media_source_id ?? issue.id}`}
                 issue={issue}
                 action={action}
                 validatePending={validatePending}
@@ -526,13 +577,7 @@ function IssueActionButton({
       </Button>
     )
   }
-  if (action.type === "view_job" && action.job_id) {
-    return (
-      <Button asChild variant="outline">
-        <Link to="/settings/jobs">{action.label}</Link>
-      </Button>
-    )
-  }
+  if (action.type === "view_job") return null
   return null
 }
 

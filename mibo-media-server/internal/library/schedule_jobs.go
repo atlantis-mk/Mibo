@@ -23,6 +23,18 @@ type ScheduledJobResult struct {
 }
 
 func (s *Service) RunScheduledScan(ctx context.Context, due schedule.DueSchedule) (ScheduledJobResult, error) {
+	if s.workflow != nil {
+		libraries, err := s.resolveScheduledLibraries(ctx, due)
+		if err != nil {
+			return ScheduledJobResult{}, err
+		}
+		for _, libraryRecord := range libraries {
+			if _, _, err := s.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryRecord.ID, Reason: WorkflowReasonScheduledScan, Priority: 5}); err != nil {
+				return ScheduledJobResult{}, err
+			}
+		}
+		return ScheduledJobResult{LibrariesProcessed: len(libraries), Summary: fmt.Sprintf("scheduled workflow scan queued for %d libraries", len(libraries))}, nil
+	}
 	return s.runScheduledLibraryTraversal(ctx, due, "scan", func(ctx context.Context, libraryRecord database.Library, pathRecord database.LibraryPath, provider storage.Provider) error {
 		libraryForPath := libraryRecord
 		libraryForPath.MediaSourceID = pathRecord.MediaSourceID

@@ -381,6 +381,8 @@ export function ContinueWatchingRail({
             {entries.map((entry) => {
               const displayItem = entry.display_item ?? entry.item
               const playbackItem = entry.play_item ?? entry.item
+              const { progressMeta, progressDescription } =
+                formatContinueWatchingProgress(playbackItem)
 
               return (
                 <SwiperSlide
@@ -391,6 +393,10 @@ export function ContinueWatchingRail({
                     item={displayItem}
                     playbackItem={playbackItem}
                     progress={entry}
+                    progressMeta={progressMeta}
+                    progressDescription={progressDescription}
+                    imageAspect="landscape"
+                    className="w-[280px] sm:w-[360px]"
                   />
                 </SwiperSlide>
               )
@@ -400,6 +406,45 @@ export function ContinueWatchingRail({
       </div>
     </section>
   )
+}
+
+function formatContinueWatchingProgress(playbackItem: CatalogUserItemEntry["item"]) {
+  if (playbackItem.type !== "episode") {
+    return { progressMeta: "", progressDescription: "" }
+  }
+
+  const episodeLabel = formatEpisodeProgressLabel(playbackItem)
+  const episodeTitle = playbackItem.title?.trim()
+  const progressMeta = [episodeLabel, episodeTitle].filter(Boolean).join("-")
+
+  return { progressMeta, progressDescription: "" }
+}
+
+function formatEpisodeProgressLabel(item: CatalogUserItemEntry["item"]) {
+  const label = item.episode_label?.trim()
+  if (label) {
+    return label
+  }
+
+  const seasonNumber = item.parent_index_number
+  const episodeNumber = item.index_number
+  const episodeNumberEnd = item.index_number_end
+
+  if (typeof seasonNumber !== "number" && typeof episodeNumber !== "number") {
+    return ""
+  }
+
+  const season = typeof seasonNumber === "number" ? `S${seasonNumber}` : ""
+  const episode =
+    typeof episodeNumber === "number"
+      ? `E${episodeNumber}${
+          typeof episodeNumberEnd === "number" && episodeNumberEnd !== episodeNumber
+            ? `-E${episodeNumberEnd}`
+            : ""
+        }`
+      : ""
+
+  return [season, episode].filter(Boolean).join(":")
 }
 
 function LibraryCollageCard({

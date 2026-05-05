@@ -13,6 +13,10 @@ import { ScrollArea } from '#/components/ui/scroll-area'
 import { cn } from '#/lib/utils'
 import type { StorageBrowseResult } from '#/lib/mibo-api'
 
+type BrowseOptions = {
+  refresh?: boolean
+}
+
 type PathPickerProps = {
   browseKey: string
   browseLabel: string
@@ -23,7 +27,7 @@ type PathPickerProps = {
   lockedMessage?: string
   selectCurrentOnBrowse?: boolean
   onValueChange: (value: string) => void
-  browse: ((path?: string) => Promise<StorageBrowseResult>) | null
+  browse: ((path?: string, options?: BrowseOptions) => Promise<StorageBrowseResult>) | null
 }
 
 export function PathPicker({
@@ -50,7 +54,7 @@ export function PathPicker({
   browseRef.current = browse
   onValueChangeRef.current = onValueChange
 
-  async function loadPath(targetPath?: string) {
+  async function loadPath(targetPath?: string, options?: BrowseOptions) {
     const browsePath = browseRef.current
     if (!browsePath) {
       setBrowserState(null)
@@ -60,7 +64,7 @@ export function PathPicker({
     setIsLoading(true)
     setErrorMessage(null)
     try {
-      const result = await browsePath(targetPath)
+      const result = await browsePath(targetPath, options)
       setBrowserState(result)
       if (selectCurrentOnBrowse) {
         onValueChangeRef.current(result.current_path)
@@ -110,7 +114,7 @@ export function PathPicker({
           type="button"
           variant="outline"
           disabled={disabled || isLocked || isLoading}
-          onClick={() => void loadPath(value.trim() || undefined)}
+          onClick={() => void loadPath(value.trim() || undefined, { refresh: true })}
         >
           {isLoading ? (
             <LoaderCircleIcon className="size-4 animate-spin" />

@@ -2,10 +2,13 @@ package storageindex
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +58,7 @@ type ObserveTreeInput struct {
 	RootPath        string
 	Provider        storage.Provider
 	Refresh         bool
+	SkipUnchanged   bool
 }
 
 func NewService(db *gorm.DB) *Service {
@@ -118,6 +122,13 @@ func (s *Service) UpsertPresent(ctx context.Context, input ObservationInput) (da
 }
 
 func (s *Service) ObservationFromObject(libraryID uint, providerName string, object storage.Object) ObservationInput {
+	providerMeta := object.SanitizedProviderMeta()
+	if thumbnailURL := strings.TrimSpace(object.ThumbnailURL); thumbnailURL != "" && isHTTPURL(thumbnailURL) {
+		if providerMeta == nil {
+			providerMeta = make(map[string]string)
+		}
+		providerMeta["thumbnail_url"] = thumbnailURL
+	}
 	return ObservationInput{
 		LibraryID:         libraryID,
 		StorageProvider:   providerName,
@@ -129,8 +140,13 @@ func (s *Service) ObservationFromObject(libraryID uint, providerName string, obj
 		Hashes:            storage.CloneStringMap(object.HashInfo),
 		ProviderName:      strings.TrimSpace(object.Provider),
 		ObjectType:        strings.TrimSpace(object.ObjectType),
-		ProviderMeta:      object.SanitizedProviderMeta(),
+		ProviderMeta:      providerMeta,
 	}
+}
+
+func isHTTPURL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func (s *Service) ObserveTree(ctx context.Context, input ObserveTreeInput) ([]database.StorageIndexEntry, error) {
@@ -168,7 +184,7 @@ func (s *Service) ObserveTree(ctx context.Context, input ObserveTreeInput) ([]da
 	if !rootObject.IsDir {
 		return entries, nil
 	}
-	if err := s.observeDirectory(ctx, input.Provider, input.LibraryID, providerName, root, input.Refresh, &entries, observed); err != nil {
+	if err := s.observeDirectory(ctx, input.Provider, input.LibraryID, providerName, root, observeOptions{refresh: input.Refresh, skipUnchanged: input.SkipUnchanged}, &entries, observed); err != nil {
 		return nil, err
 	}
 	for _, entry := range previous {
@@ -184,11 +200,26 @@ func (s *Service) ObserveTree(ctx context.Context, input ObserveTreeInput) ([]da
 	return entries, nil
 }
 
-func (s *Service) observeDirectory(ctx context.Context, provider storage.Provider, libraryID uint, providerName string, dirPath string, refresh bool, entries *[]database.StorageIndexEntry, observed map[string]struct{}) error {
-	objects, err := listAllDirectoryObjects(ctx, provider, dirPath, refresh)
+type observeOptions struct {
+	refresh       bool
+	skipUnchanged bool
+}
+
+func (s *Service) observeDirectory(ctx context.Context, provider storage.Provider, libraryID uint, providerName string, dirPath string, options observeOptions, entries *[]database.StorageIndexEntry, observed map[string]struct{}) error {
+	objects, err := listAllDirectoryObjects(ctx, provider, dirPath, options.refresh)
 	if err != nil {
 		_, _ = s.RecordFailure(ctx, FailureInput{LibraryID: libraryID, StorageProvider: providerName, StoragePath: dirPath, Reason: "list_failed", Error: err})
 		return err
+	}
+	unchanged, err := s.recordDirectoryFingerprint(ctx, libraryID, providerName, dirPath, objects, options.skipUnchanged)
+	if err != nil {
+		return err
+	}
+	if unchanged {
+		if err := s.markSubtreeObserved(ctx, libraryID, providerName, dirPath, observed, entries); err != nil {
+			return err
+		}
+		return nil
 	}
 	for _, object := range objects {
 		entry, err := s.UpsertPresent(ctx, s.ObservationFromObject(libraryID, providerName, object))
@@ -198,12 +229,88 @@ func (s *Service) observeDirectory(ctx context.Context, provider storage.Provide
 		observed[entry.StoragePath] = struct{}{}
 		*entries = append(*entries, entry)
 		if object.IsDir {
-			if err := s.observeDirectory(ctx, provider, libraryID, providerName, object.Path, refresh, entries, observed); err != nil {
+			if err := s.observeDirectory(ctx, provider, libraryID, providerName, object.Path, options, entries, observed); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func (s *Service) recordDirectoryFingerprint(ctx context.Context, libraryID uint, providerName string, dirPath string, objects []storage.Object, allowSkip bool) (bool, error) {
+	pathValue := normalizePath(dirPath)
+	fingerprint, err := directoryFingerprint(objects)
+	if err != nil {
+		return false, err
+	}
+	var previous database.StorageDirectoryFingerprint
+	previousErr := s.db.WithContext(ctx).
+		Where("library_id = ? AND storage_provider = ? AND storage_path = ?", libraryID, providerName, pathValue).
+		First(&previous).Error
+	if previousErr != nil && !errors.Is(previousErr, gorm.ErrRecordNotFound) {
+		return false, previousErr
+	}
+	now := s.now()
+	record := database.StorageDirectoryFingerprint{LibraryID: libraryID, StorageProvider: providerName, StoragePath: pathValue, Fingerprint: fingerprint, ChildCount: len(objects), ObservedAt: now}
+	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "library_id"}, {Name: "storage_provider"}, {Name: "storage_path"}},
+		DoUpdates: clause.Assignments(map[string]any{"fingerprint": fingerprint, "child_count": len(objects), "observed_at": now, "updated_at": now}),
+	}).Create(&record).Error; err != nil {
+		return false, err
+	}
+	return allowSkip && previousErr == nil && previous.Fingerprint == fingerprint, nil
+}
+
+func (s *Service) markSubtreeObserved(ctx context.Context, libraryID uint, providerName string, dirPath string, observed map[string]struct{}, currentEntries *[]database.StorageIndexEntry) error {
+	scopedEntries, err := s.ListScoped(ctx, libraryID, dirPath)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	paths := make([]string, 0, len(scopedEntries))
+	for _, entry := range scopedEntries {
+		if entry.StorageProvider != providerName || entry.ObservationStatus != ObservationStatusPresent {
+			continue
+		}
+		observed[entry.StoragePath] = struct{}{}
+		paths = append(paths, entry.StoragePath)
+		*currentEntries = append(*currentEntries, entry)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Model(&database.StorageIndexEntry{}).
+		Where("library_id = ? AND storage_provider = ? AND storage_path IN ?", libraryID, providerName, paths).
+		Updates(map[string]any{"last_observed_at": now, "updated_at": now}).Error
+}
+
+func directoryFingerprint(objects []storage.Object) (string, error) {
+	parts := make([]string, 0, len(objects))
+	for _, object := range objects {
+		modified := ""
+		if object.Modified != nil {
+			modified = object.Modified.UTC().Format(time.RFC3339Nano)
+		}
+		hashes, err := encodeStringMap(object.HashInfo)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, strings.Join([]string{normalizePath(object.Path), fmtBool(object.IsDir), fmtInt64(object.Size), modified, strings.TrimSpace(object.StableIdentity), hashes, strings.TrimSpace(object.Provider), strings.TrimSpace(object.ObjectType)}, "\x00"))
+	}
+	sort.Strings(parts)
+	hash := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func fmtBool(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
+}
+
+func fmtInt64(value int64) string {
+	return strconv.FormatInt(value, 10)
 }
 
 func listAllDirectoryObjects(ctx context.Context, provider storage.Provider, dirPath string, refresh bool) ([]storage.Object, error) {

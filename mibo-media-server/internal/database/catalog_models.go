@@ -187,6 +187,7 @@ type UserItemData struct {
 	AssetID          *uint      `gorm:"uniqueIndex:idx_user_item_data_user_item_asset;index" json:"asset_id,omitempty"`
 	PositionSeconds  int        `gorm:"not null;default:0" json:"position_seconds"`
 	PlayedPercentage *float64   `json:"played_percentage,omitempty"`
+	ProgressFrameURL string     `gorm:"size:1024" json:"progress_frame_url,omitempty"`
 	PlayCount        int        `gorm:"not null;default:0" json:"play_count"`
 	Favorite         bool       `gorm:"not null;default:false;index" json:"favorite"`
 	LastPlayedAt     *time.Time `gorm:"index" json:"last_played_at,omitempty"`

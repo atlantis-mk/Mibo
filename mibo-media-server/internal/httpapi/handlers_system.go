@@ -10,7 +10,6 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/settings"
-	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
 func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
@@ -34,35 +33,13 @@ func (r *Router) handleReady(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	provider, err := r.storage.Get(configuredStorageProvider(r.cfg))
-	if err != nil {
-		writeError(req.Context(), w, http.StatusServiceUnavailable, err)
-		return
-	}
-	if _, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: storageRootPath(r.cfg)}); err != nil {
-		writeError(req.Context(), w, http.StatusServiceUnavailable, fmt.Errorf("storage provider not ready: %w", err))
-		return
-	}
-
 	writeJSON(req.Context(), w, http.StatusOK, map[string]any{
 		"status":   "ready",
 		"database": r.cfg.Database.Driver,
-		"storage":  provider.Name(),
 	})
 }
 
 func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
-	provider, err := r.storage.Get(configuredStorageProvider(r.cfg))
-	if err != nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, err)
-		return
-	}
-	caps, err := provider.Capabilities(req.Context())
-	if err != nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, err)
-		return
-	}
-
 	tmdbSettings := map[string]any{"configured": r.cfg.Metadata.TMDB.APIKey != "", "source": sourceLabel(r.cfg.Metadata.TMDB.APIKey)}
 	providerInstances := []map[string]any{}
 	if r.settings != nil {
@@ -93,11 +70,6 @@ func (r *Router) handleSystemInfo(w http.ResponseWriter, req *http.Request) {
 		"service":                     "mibo-media-server",
 		"database":                    r.cfg.Database.Driver,
 		"available_storage_providers": r.storage.Names(),
-		"storage_provider": map[string]any{
-			"name":         provider.Name(),
-			"root_path":    storageRootPath(r.cfg),
-			"capabilities": caps,
-		},
 		"modules": map[string]any{
 			"auth":    "active",
 			"worker":  map[string]any{"enabled": r.cfg.Worker.Enabled},

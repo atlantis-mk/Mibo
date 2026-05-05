@@ -2,13 +2,16 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"gorm.io/gorm"
 )
 
@@ -19,19 +22,20 @@ type CatalogLatestByLibrarySection struct {
 }
 
 type BrowseItemsInput struct {
-	LibraryID     uint
-	Query         string
-	TypeFilter    string
-	Genre         string
-	Region        string
-	Year          *int
-	MinRating     *float64
-	WatchedState  string
-	Sort          string
-	SortDirection string
-	Limit         int
-	Offset        int
-	UserID        uint
+	LibraryID       uint
+	Query           string
+	TypeFilter      string
+	Genre           string
+	Region          string
+	Year            *int
+	MinRating       *float64
+	WatchedState    string
+	OrganizingState string
+	Sort            string
+	SortDirection   string
+	Limit           int
+	Offset          int
+	UserID          uint
 }
 
 type BrowseItemsResult struct {
@@ -42,6 +46,14 @@ type BrowseItemsResult struct {
 	HasMore       bool              `json:"has_more"`
 	Sort          string            `json:"sort"`
 	SortDirection string            `json:"sort_direction"`
+}
+
+type browseListEntry struct {
+	Item      CatalogListItem
+	TitleKey  string
+	Year      *int
+	CreatedAt string
+	StableID  uint
 }
 
 func (s *Service) ListLibraryItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
@@ -139,7 +151,7 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 	}
 	if query := strings.TrimSpace(input.Query); query != "" {
 		like := "%" + strings.ToLower(query) + "%"
-		db = db.Where(`LOWER(catalog_items.title) LIKE ?
+		db = db.Where(`(LOWER(catalog_items.title) LIKE ?
 			OR LOWER(catalog_items.original_title) LIKE ?
 			OR LOWER(catalog_items.sort_title) LIKE ?
 			OR EXISTS (
@@ -148,7 +160,7 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 				AND (LOWER(catalog_search_documents.people_text) LIKE ?
 					OR LOWER(catalog_search_documents.tags_text) LIKE ?
 					OR LOWER(catalog_search_documents.provider_ids_text) LIKE ?)
-			)`, like, like, like, like, like, like)
+			))`, like, like, like, like, like, like)
 	}
 	if genre := strings.TrimSpace(input.Genre); genre != "" {
 		db = db.Where(`EXISTS (
@@ -176,29 +188,477 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 		}
 	}
 
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return BrowseItemsResult{}, err
-	}
-
 	var items []database.CatalogItem
-	ordered := applyBrowseItemsOrder(db, input)
-	if err := ordered.Limit(input.Limit).Offset(input.Offset).Find(&items).Error; err != nil {
+	if err := applyBrowseItemsOrder(db, input).Find(&items).Error; err != nil {
 		return BrowseItemsResult{}, err
 	}
 	mapped, err := s.buildCatalogListItems(ctx, items)
 	if err != nil {
 		return BrowseItemsResult{}, err
 	}
+	if err := s.attachOrganizingSummaries(ctx, mapped); err != nil {
+		return BrowseItemsResult{}, err
+	}
+	entries := make([]browseListEntry, 0, len(mapped))
+	for idx, item := range mapped {
+		entries = append(entries, browseListEntry{Item: item, TitleKey: catalogListItemTitleKey(item), Year: item.Year, CreatedAt: items[idx].CreatedAt.Format("2006-01-02T15:04:05.000000000Z07:00"), StableID: item.ID})
+	}
+	discovered, err := s.discoveredBrowseEntries(ctx, input)
+	if err != nil {
+		return BrowseItemsResult{}, err
+	}
+	entries = append(entries, discovered...)
+	entries = filterBrowseListEntriesByOrganizing(entries, input.OrganizingState)
+	applyBrowseListEntryOrder(entries, input)
+	total := int64(len(entries))
+	start := input.Offset
+	if start > len(entries) {
+		start = len(entries)
+	}
+	end := start + input.Limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	paged := make([]CatalogListItem, 0, end-start)
+	for _, entry := range entries[start:end] {
+		paged = append(paged, entry.Item)
+	}
 	return BrowseItemsResult{
-		Items:         mapped,
+		Items:         paged,
 		Total:         total,
 		Limit:         input.Limit,
 		Offset:        input.Offset,
-		HasMore:       int64(input.Offset+len(mapped)) < total,
+		HasMore:       int64(input.Offset+len(paged)) < total,
 		Sort:          input.Sort,
 		SortDirection: input.SortDirection,
 	}, nil
+}
+
+func (s *Service) discoveredBrowseEntries(ctx context.Context, input BrowseItemsInput) ([]browseListEntry, error) {
+	if input.OrganizingState == "organized" {
+		return nil, nil
+	}
+	if input.TypeFilter == ItemTypeSeries || input.TypeFilter == "show" || input.TypeFilter == ItemTypeEpisode {
+		return nil, nil
+	}
+	if input.Genre != "" || input.Region != "" || input.Year != nil || input.MinRating != nil || input.WatchedState == "watched" || input.WatchedState == "in_progress" {
+		return nil, nil
+	}
+	query := s.db.WithContext(ctx).
+		Model(&database.InventoryFile{}).
+		Where("inventory_files.deleted_at IS NULL").
+		Where("inventory_files.status = ?", "available").
+		Where("inventory_files.content_class = ?", "video").
+		Where(`NOT EXISTS (
+			SELECT 1 FROM asset_files
+			JOIN media_assets ON media_assets.id = asset_files.asset_id AND media_assets.deleted_at IS NULL
+			JOIN asset_items ON asset_items.asset_id = media_assets.id
+			JOIN catalog_items ON catalog_items.id = asset_items.item_id AND catalog_items.deleted_at IS NULL
+			WHERE asset_files.file_id = inventory_files.id
+		)`)
+	if input.LibraryID != 0 {
+		query = query.Where("inventory_files.library_id = ?", input.LibraryID)
+	}
+	if input.WatchedState == "unwatched" {
+		query = query.Where(`NOT EXISTS (
+			SELECT 1 FROM user_item_data
+			WHERE user_item_data.asset_id IN (
+				SELECT asset_files.asset_id FROM asset_files WHERE asset_files.file_id = inventory_files.id
+			)
+			AND user_item_data.user_id = ?
+			AND (user_item_data.completed_at IS NOT NULL OR user_item_data.position_seconds > 0)
+		)`, input.UserID)
+	}
+	var files []database.InventoryFile
+	if err := query.Find(&files).Error; err != nil {
+		return nil, err
+	}
+	conditionByFileID, err := s.organizingConditionsByInventoryFile(ctx, files)
+	if err != nil {
+		return nil, err
+	}
+	thumbnailByFileID, err := s.inventoryFileThumbnailURLs(ctx, files)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]browseListEntry, 0, len(files))
+	for _, file := range files {
+		title := discoveredTitleFromPath(file.StoragePath)
+		if input.Query != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(input.Query)) && !strings.Contains(strings.ToLower(file.StoragePath), strings.ToLower(input.Query)) {
+			continue
+		}
+		fileID := file.ID
+		state := defaultString(file.ScanState, "discovered")
+		item := CatalogListItem{
+			ID:                 0,
+			LibraryID:          file.LibraryID,
+			SourceKind:         "inventory_file",
+			InventoryFileID:    &fileID,
+			MaturityState:      state,
+			Organizing:         state == "discovered" || state == "review_required",
+			StoragePath:        strings.TrimSpace(file.StoragePath),
+			Type:               ItemTypeMovie,
+			Title:              title,
+			SortTitle:          title,
+			AvailabilityStatus: AvailabilityAvailable,
+			GovernanceStatus:   GovernancePending,
+		}
+		if summary := buildOrganizingSummary(conditionByFileID[file.ID], true); summary != nil {
+			item.OrganizingSummary = summary
+			item.Organizing = summary.State == "organizing" || summary.State == "review_required" || summary.State == "failed"
+		}
+		if thumbnailURL := strings.TrimSpace(thumbnailByFileID[file.ID]); thumbnailURL != "" {
+			item.SelectedImages = []CatalogSelectedImage{{ImageType: "poster", URL: thumbnailURL}}
+		}
+		entries = append(entries, browseListEntry{Item: item, TitleKey: strings.ToLower(title), CreatedAt: file.CreatedAt.Format("2006-01-02T15:04:05.000000000Z07:00"), StableID: file.ID})
+	}
+	return entries, nil
+}
+
+func (s *Service) inventoryFileThumbnailURLs(ctx context.Context, files []database.InventoryFile) (map[uint]string, error) {
+	thumbnails := make(map[uint]string)
+	if len(files) == 0 {
+		return thumbnails, nil
+	}
+	paths := make([]string, 0, len(files))
+	fileIDByKey := make(map[string]uint, len(files))
+	for _, file := range files {
+		if thumbnailURL := normalizeThumbnailURL(file.ThumbnailURL); thumbnailURL != "" {
+			thumbnails[file.ID] = thumbnailURL
+			continue
+		}
+		provider := strings.TrimSpace(file.StorageProvider)
+		storagePath := strings.TrimSpace(file.StoragePath)
+		if provider == "" || storagePath == "" {
+			continue
+		}
+		paths = append(paths, storagePath)
+		fileIDByKey[provider+"\x00"+storagePath] = file.ID
+	}
+	if len(paths) == 0 {
+		return thumbnails, nil
+	}
+	var entries []database.StorageIndexEntry
+	if err := s.db.WithContext(ctx).
+		Where("storage_path IN ? AND observation_status = ?", paths, "present").
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		fileID := fileIDByKey[strings.TrimSpace(entry.StorageProvider)+"\x00"+strings.TrimSpace(entry.StoragePath)]
+		if fileID == 0 {
+			continue
+		}
+		thumbnailURL := thumbnailURLFromProviderMeta(entry.ProviderMetaJSON)
+		if thumbnailURL == "" {
+			continue
+		}
+		thumbnails[fileID] = thumbnailURL
+	}
+	return thumbnails, nil
+}
+
+func thumbnailURLFromProviderMeta(providerMetaJSON string) string {
+	if strings.TrimSpace(providerMetaJSON) == "" {
+		return ""
+	}
+	var meta map[string]string
+	if err := json.Unmarshal([]byte(providerMetaJSON), &meta); err != nil {
+		return ""
+	}
+	return normalizeThumbnailURL(meta["thumbnail_url"])
+}
+
+func normalizeThumbnailURL(value string) string {
+	thumbnailURL := strings.TrimSpace(value)
+	if !strings.HasPrefix(strings.ToLower(thumbnailURL), "http://") && !strings.HasPrefix(strings.ToLower(thumbnailURL), "https://") {
+		return ""
+	}
+	return thumbnailURL
+}
+
+func filterBrowseListEntriesByOrganizing(entries []browseListEntry, organizingState string) []browseListEntry {
+	switch organizingState {
+	case "organized", "unorganized":
+	default:
+		return entries
+	}
+	filtered := make([]browseListEntry, 0, len(entries))
+	for _, entry := range entries {
+		if organizingState == "organized" && !entry.Item.Organizing {
+			filtered = append(filtered, entry)
+		}
+		if organizingState == "unorganized" && entry.Item.Organizing {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func (s *Service) attachOrganizingSummaries(ctx context.Context, items []CatalogListItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	itemIDs := make([]uint, 0, len(items))
+	for _, item := range items {
+		if item.ID != 0 {
+			itemIDs = append(itemIDs, item.ID)
+		}
+	}
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	conditions, err := s.organizingConditionsByCatalogItemID(ctx, itemIDs)
+	if err != nil {
+		return err
+	}
+	for idx := range items {
+		summary := buildOrganizingSummary(conditions[items[idx].ID], false)
+		if summary == nil {
+			continue
+		}
+		items[idx].OrganizingSummary = summary
+		items[idx].Organizing = summary.State == "organizing" || summary.State == "review_required" || summary.State == "failed"
+	}
+	return nil
+}
+
+func (s *Service) organizingConditionsByCatalogItemID(ctx context.Context, itemIDs []uint) (map[uint][]database.IngestCondition, error) {
+	result := make(map[uint][]database.IngestCondition, len(itemIDs))
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+	var conditions []database.IngestCondition
+	if err := s.db.WithContext(ctx).Where("catalog_item_id IN ?", itemIDs).Order("catalog_item_id asc, condition_type asc").Find(&conditions).Error; err != nil {
+		return nil, err
+	}
+	for _, condition := range conditions {
+		if condition.CatalogItemID == nil {
+			continue
+		}
+		result[*condition.CatalogItemID] = append(result[*condition.CatalogItemID], condition)
+	}
+	return result, nil
+}
+
+func (s *Service) organizingConditionsByInventoryFile(ctx context.Context, files []database.InventoryFile) (map[uint][]database.IngestCondition, error) {
+	result := make(map[uint][]database.IngestCondition, len(files))
+	if len(files) == 0 {
+		return result, nil
+	}
+	fileIDs := make([]uint, 0, len(files))
+	for _, file := range files {
+		fileIDs = append(fileIDs, file.ID)
+	}
+	var conditions []database.IngestCondition
+	if err := s.db.WithContext(ctx).Where("inventory_file_id IN ?", fileIDs).Order("inventory_file_id asc, condition_type asc").Find(&conditions).Error; err != nil {
+		return nil, err
+	}
+	for _, condition := range conditions {
+		if condition.InventoryFileID == nil {
+			continue
+		}
+		result[*condition.InventoryFileID] = append(result[*condition.InventoryFileID], condition)
+	}
+	return result, nil
+}
+
+func buildOrganizingSummary(conditions []database.IngestCondition, inventoryOnly bool) *CatalogOrganizingSummary {
+	if len(conditions) == 0 {
+		if !inventoryOnly {
+			return nil
+		}
+		return &CatalogOrganizingSummary{State: "organizing", Stage: ingest.ConditionMaterialized, Severity: ingest.SeverityInfo, Message: "Identifying media"}
+	}
+	cards := make([]CatalogOrganizingCondition, 0, len(conditions))
+	for _, condition := range conditions {
+		cards = append(cards, CatalogOrganizingCondition{Type: condition.ConditionType, Status: condition.Status, Reason: condition.Reason, Message: condition.Message, Severity: condition.Severity})
+	}
+	if selected := firstConditionWithStatuses(conditions, ingest.ConditionStatusReviewRequired); selected != nil {
+		return organizingSummaryFromCondition("review_required", "Review needed", selected, cards)
+	}
+	if selected := firstMetadataNoCandidateCondition(conditions); selected != nil {
+		return organizingSummaryFromCondition("review_required", "Review needed", selected, cards)
+	}
+	if selected := firstConditionWithStatuses(conditions, ingest.ConditionStatusFailed); selected != nil {
+		return organizingSummaryFromCondition("failed", "Organizing failed", selected, cards)
+	}
+	if selected := firstBlockingConditionWithStatuses(conditions, ingest.ConditionStatusRunning, ingest.ConditionStatusPending, ingest.ConditionStatusUnknown); selected != nil {
+		return organizingSummaryFromCondition("organizing", organizingMessageForStage(selected.ConditionType), selected, cards)
+	}
+	if allReadyOrSkippedOrEnhancing(conditions) {
+		return &CatalogOrganizingSummary{State: "ready", Stage: "ready", Severity: ingest.SeverityInfo, Message: "Ready", Conditions: cards}
+	}
+	return &CatalogOrganizingSummary{State: "partial_ready", Stage: "partial_ready", Severity: ingest.SeverityWarning, Message: "Partially ready", Conditions: cards}
+}
+
+func firstMetadataNoCandidateCondition(conditions []database.IngestCondition) *database.IngestCondition {
+	for idx := range conditions {
+		if conditions[idx].ConditionType == ingest.ConditionMetadataMatched && conditions[idx].Status == ingest.ConditionStatusFalse && conditions[idx].Reason == "no_candidate" {
+			return &conditions[idx]
+		}
+	}
+	return nil
+}
+
+func firstConditionWithStatuses(conditions []database.IngestCondition, statuses ...string) *database.IngestCondition {
+	statusSet := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		statusSet[status] = struct{}{}
+	}
+	for _, conditionType := range []string{ingest.ConditionReviewRequired, ingest.ConditionMaterialized, ingest.ConditionProbed, ingest.ConditionMetadataMatched, ingest.ConditionProjectionCurrent, ingest.ConditionVisible} {
+		for idx := range conditions {
+			if conditions[idx].ConditionType != conditionType {
+				continue
+			}
+			if _, ok := statusSet[conditions[idx].Status]; ok {
+				return &conditions[idx]
+			}
+		}
+	}
+	return nil
+}
+
+func firstBlockingConditionWithStatuses(conditions []database.IngestCondition, statuses ...string) *database.IngestCondition {
+	materialized := conditionHasStatus(conditions, ingest.ConditionMaterialized, ingest.ConditionStatusTrue)
+	statusSet := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		statusSet[status] = struct{}{}
+	}
+	for _, conditionType := range []string{ingest.ConditionReviewRequired, ingest.ConditionMaterialized, ingest.ConditionProbed, ingest.ConditionMetadataMatched, ingest.ConditionProjectionCurrent, ingest.ConditionVisible} {
+		for idx := range conditions {
+			if conditions[idx].ConditionType != conditionType {
+				continue
+			}
+			if _, ok := statusSet[conditions[idx].Status]; !ok {
+				continue
+			}
+			if materialized && isPostMaterializeEnhancementCondition(conditions[idx].ConditionType) {
+				continue
+			}
+			return &conditions[idx]
+		}
+	}
+	return nil
+}
+
+func conditionHasStatus(conditions []database.IngestCondition, conditionType string, status string) bool {
+	for _, condition := range conditions {
+		if condition.ConditionType == conditionType && condition.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func isPostMaterializeEnhancementCondition(conditionType string) bool {
+	switch conditionType {
+	case ingest.ConditionProbed, ingest.ConditionMetadataMatched, ingest.ConditionProjectionCurrent:
+		return true
+	default:
+		return false
+	}
+}
+
+func organizingSummaryFromCondition(state string, fallbackMessage string, condition *database.IngestCondition, conditions []CatalogOrganizingCondition) *CatalogOrganizingSummary {
+	message := strings.TrimSpace(condition.Message)
+	if message == "" {
+		message = fallbackMessage
+	}
+	return &CatalogOrganizingSummary{State: state, Stage: condition.ConditionType, Severity: condition.Severity, Message: message, Conditions: conditions}
+}
+
+func organizingMessageForStage(stage string) string {
+	switch stage {
+	case ingest.ConditionMaterialized:
+		return "Identifying media"
+	case ingest.ConditionProbed:
+		return "Analyzing video streams"
+	case ingest.ConditionMetadataMatched:
+		return "Matching metadata"
+	case ingest.ConditionProjectionCurrent:
+		return "Updating library view"
+	default:
+		return "Organizing media"
+	}
+}
+
+func allReadyOrSkippedOrEnhancing(conditions []database.IngestCondition) bool {
+	materialized := conditionHasStatus(conditions, ingest.ConditionMaterialized, ingest.ConditionStatusTrue)
+	for _, condition := range conditions {
+		switch condition.Status {
+		case ingest.ConditionStatusTrue, ingest.ConditionStatusSkipped, ingest.ConditionStatusFalse:
+			continue
+		case ingest.ConditionStatusRunning, ingest.ConditionStatusPending, ingest.ConditionStatusUnknown:
+			if materialized && isPostMaterializeEnhancementCondition(condition.ConditionType) {
+				continue
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func discoveredTitleFromPath(storagePath string) string {
+	base := strings.TrimSpace(path.Base(storagePath))
+	if base == "." || base == "/" || base == "" {
+		return strings.TrimSpace(storagePath)
+	}
+	name := strings.TrimSuffix(base, path.Ext(base))
+	name = strings.TrimSpace(strings.NewReplacer(".", " ", "_", " ").Replace(name))
+	if name == "" {
+		return base
+	}
+	return name
+}
+
+func catalogListItemTitleKey(item CatalogListItem) string {
+	if item.SortTitle != "" {
+		return strings.ToLower(item.SortTitle)
+	}
+	return strings.ToLower(item.Title)
+}
+
+func applyBrowseListEntryOrder(entries []browseListEntry, input BrowseItemsInput) {
+	desc := input.SortDirection == "desc"
+	sort.SliceStable(entries, func(i, j int) bool {
+		left := entries[i]
+		right := entries[j]
+		switch input.Sort {
+		case "title":
+			if left.TitleKey != right.TitleKey {
+				return compareBrowseString(left.TitleKey, right.TitleKey, desc)
+			}
+		case "year":
+			if left.Year == nil || right.Year == nil {
+				if left.Year == nil && right.Year != nil {
+					return false
+				}
+				if left.Year != nil && right.Year == nil {
+					return true
+				}
+			} else if *left.Year != *right.Year {
+				if desc {
+					return *left.Year > *right.Year
+				}
+				return *left.Year < *right.Year
+			}
+		default:
+			if left.CreatedAt != right.CreatedAt {
+				return compareBrowseString(left.CreatedAt, right.CreatedAt, desc)
+			}
+		}
+		return left.StableID < right.StableID
+	})
+}
+
+func compareBrowseString(left string, right string, desc bool) bool {
+	if desc {
+		return left > right
+	}
+	return left < right
 }
 
 func normalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
@@ -209,6 +669,7 @@ func normalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
 	input.Sort = strings.ToLower(strings.TrimSpace(input.Sort))
 	input.SortDirection = strings.ToLower(strings.TrimSpace(input.SortDirection))
 	input.WatchedState = strings.ToLower(strings.TrimSpace(input.WatchedState))
+	input.OrganizingState = strings.ToLower(strings.TrimSpace(input.OrganizingState))
 	switch input.TypeFilter {
 	case ItemTypeMovie, ItemTypeSeries, "show", ItemTypeEpisode:
 	default:
@@ -223,6 +684,11 @@ func normalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
 	case "unwatched", "in_progress", "watched":
 	default:
 		input.WatchedState = "all"
+	}
+	switch input.OrganizingState {
+	case "organized", "unorganized":
+	default:
+		input.OrganizingState = "all"
 	}
 	if input.Limit <= 0 || input.Limit > 200 {
 		input.Limit = 50
@@ -712,7 +1178,7 @@ func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]CatalogLi
 	}
 	var items []database.CatalogItem
 	if err := s.db.WithContext(ctx).
-		Joins("JOIN libraries ON libraries.id = catalog_items.library_id AND libraries.status = ?", "active").
+		Joins("JOIN libraries ON libraries.id = catalog_items.library_id AND libraries.status IN ?", []string{"active", "syncing"}).
 		Where("catalog_items.deleted_at IS NULL").
 		Where("catalog_items.parent_id IS NULL").
 		Where("catalog_items.availability_status = ?", AvailabilityAvailable).
@@ -731,7 +1197,7 @@ func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]Catalog
 	}
 	var libraries []database.Library
 	if err := s.db.WithContext(ctx).
-		Where("status = ?", "active").
+		Where("status IN ?", []string{"active", "syncing"}).
 		Order("name asc").
 		Find(&libraries).Error; err != nil {
 		return nil, err

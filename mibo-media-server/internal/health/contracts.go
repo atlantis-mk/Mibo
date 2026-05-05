@@ -13,13 +13,17 @@ const (
 	SeverityError    = "error"
 	SeverityBlocking = "blocking"
 
-	ReasonStorageAuthExpired = "storage_auth_expired"
-	ReasonJobFailedUnknown   = "job_failed_unknown"
+	ReasonStorageAuthExpired   = "storage_auth_expired"
+	ReasonJobFailedUnknown     = "job_failed_unknown"
+	ReasonIngestStageFailed    = "ingest_stage_failed"
+	ReasonIngestStageStale     = "ingest_stage_stale"
+	ReasonIngestReviewRequired = "ingest_review_required"
 
 	ScopeGlobal      = "global"
 	ScopeMediaSource = "media_source"
 	ScopeLibrary     = "library"
 	ScopeJob         = "job"
+	ScopeIngest      = "ingest"
 	ScopeDependency  = "dependency"
 
 	ActionOpenExternalAdmin     = "open_external_admin"

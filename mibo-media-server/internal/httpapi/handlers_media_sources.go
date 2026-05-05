@@ -44,6 +44,7 @@ func (r *Router) handleBrowseStorageProvider(w http.ResponseWriter, req *http.Re
 	var input struct {
 		Provider string `json:"provider"`
 		Path     string `json:"path"`
+		Refresh  bool   `json:"refresh"`
 	}
 	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -56,7 +57,7 @@ func (r *Router) handleBrowseStorageProvider(w http.ResponseWriter, req *http.Re
 		return
 	}
 
-	result, err := r.library.BrowseProviderPath(req.Context(), providerName, input.Path)
+	result, err := r.library.BrowseProviderPath(req.Context(), providerName, input.Path, input.Refresh)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -72,15 +73,16 @@ func (r *Router) handleBrowseTemporaryOpenList(w http.ResponseWriter, req *http.
 	}
 
 	var input struct {
-		Path   string                         `json:"path"`
-		Config providers.OpenListSourceConfig `json:"config"`
+		Path    string                         `json:"path"`
+		Refresh bool                           `json:"refresh"`
+		Config  providers.OpenListSourceConfig `json:"config"`
 	}
 	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
 
-	result, err := r.library.BrowseTemporaryOpenListPath(req.Context(), input.Config, input.Path)
+	result, err := r.library.BrowseTemporaryOpenListPath(req.Context(), input.Config, input.Path, input.Refresh)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -191,8 +193,9 @@ func (r *Router) handleBrowseMediaSource(w http.ResponseWriter, req *http.Reques
 	}
 
 	var input struct {
-		ID   uint   `json:"id"`
-		Path string `json:"path"`
+		ID      uint   `json:"id"`
+		Path    string `json:"path"`
+		Refresh bool   `json:"refresh"`
 	}
 	if err := decodeJSON(req, &input); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
@@ -203,7 +206,7 @@ func (r *Router) handleBrowseMediaSource(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	result, err := r.library.BrowseMediaSourcePath(req.Context(), input.ID, input.Path)
+	result, err := r.library.BrowseMediaSourcePath(req.Context(), input.ID, input.Path, input.Refresh)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return

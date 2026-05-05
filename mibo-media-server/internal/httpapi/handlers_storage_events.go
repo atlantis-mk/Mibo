@@ -37,7 +37,7 @@ func (r *Router) handleStorageEvent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	job, err := r.listener.RecordStorageEvent(req.Context(), listener.EventIngestInput{
+	_, err = r.listener.RecordStorageEvent(req.Context(), listener.EventIngestInput{
 		LibraryID: input.LibraryID,
 		Kind:      strings.TrimSpace(strings.ToLower(input.Kind)),
 		Path:      validatedPath,
@@ -48,7 +48,7 @@ func (r *Router) handleStorageEvent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	writeJSON(req.Context(), w, http.StatusAccepted, job)
+	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
 func (r *Router) validateStorageEventPaths(ctx context.Context, libraryID uint, currentPath string, oldPath string) (string, string, error) {

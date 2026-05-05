@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +142,7 @@ func TestObservationFromObjectMapsProviderEvidence(t *testing.T) {
 		Provider:       "alist",
 		HashInfo:       map[string]string{"sha1": "abc"},
 		ObjectType:     "file",
+		ThumbnailURL:   "https://cdn.example.test/movie-thumb.jpg",
 		ProviderMeta:   map[string]string{"has_sign": "true"},
 	}))
 	if err != nil {
@@ -149,7 +151,7 @@ func TestObservationFromObjectMapsProviderEvidence(t *testing.T) {
 	if entry.StorageProvider != "openlist" || entry.StableIdentityKey != "openlist-stable-1" || entry.ProviderName != "alist" || entry.ObjectType != "file" {
 		t.Fatalf("unexpected mapped entry: %#v", entry)
 	}
-	if entry.HashesJSON == "" || entry.ProviderMetaJSON == "" {
+	if entry.HashesJSON == "" || !strings.Contains(entry.ProviderMetaJSON, "thumbnail_url") {
 		t.Fatalf("expected provider evidence to be encoded, got %#v", entry)
 	}
 }
@@ -198,16 +200,50 @@ func TestObserveTreeWalksProviderAndRecordsFailures(t *testing.T) {
 	}
 }
 
+func TestObserveTreeSkipsUnchangedSubtrees(t *testing.T) {
+	ctx, svc, library := newTestService(t)
+	provider := &fakeProvider{
+		name: "openlist",
+		objects: map[string]storage.Object{
+			"/media":             {Name: "media", Path: "/media", IsDir: true},
+			"/media/Movie":       {Name: "Movie", Path: "/media/Movie", IsDir: true},
+			"/media/Movie/a.mkv": {Name: "a.mkv", Path: "/media/Movie/a.mkv", StableIdentity: "stable-a", Size: 100},
+		},
+		children: map[string][]storage.Object{
+			"/media":       {{Name: "Movie", Path: "/media/Movie", IsDir: true}},
+			"/media/Movie": {{Name: "a.mkv", Path: "/media/Movie/a.mkv", StableIdentity: "stable-a", Size: 100}},
+		},
+	}
+	if _, err := svc.ObserveTree(ctx, ObserveTreeInput{LibraryID: library.ID, Provider: provider, RootPath: "/media", Refresh: true, SkipUnchanged: true}); err != nil {
+		t.Fatalf("seed observe tree: %v", err)
+	}
+	provider.listCounts = map[string]int{}
+	if _, err := svc.ObserveTree(ctx, ObserveTreeInput{LibraryID: library.ID, Provider: provider, RootPath: "/media", Refresh: true, SkipUnchanged: true}); err != nil {
+		t.Fatalf("second observe tree: %v", err)
+	}
+	if provider.listCounts["/media"] != 1 {
+		t.Fatalf("expected root to be listed once, got %#v", provider.listCounts)
+	}
+	if provider.listCounts["/media/Movie"] != 0 {
+		t.Fatalf("expected unchanged child subtree to be skipped, got %#v", provider.listCounts)
+	}
+}
+
 type fakeProvider struct {
 	name         string
 	objects      map[string]storage.Object
 	children     map[string][]storage.Object
 	failListPath string
+	listCounts   map[string]int
 }
 
 func (p *fakeProvider) Name() string { return p.name }
 
 func (p *fakeProvider) List(_ context.Context, req storage.ListRequest) ([]storage.Object, error) {
+	if p.listCounts == nil {
+		p.listCounts = make(map[string]int)
+	}
+	p.listCounts[req.Path]++
 	if req.Path == p.failListPath {
 		return nil, errors.New("list failed")
 	}

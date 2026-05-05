@@ -75,6 +75,19 @@
 - `MIBO_FFPROBE_TIMEOUT`: `ffprobe` 超时，默认 `30s`
 - `MIBO_WORKER_ENABLED`: 是否启动内置 Worker，默认 `true`
 - `MIBO_WORKER_POLL_INTERVAL`: Worker 轮询间隔，默认 `2s`
+- `MIBO_WORKFLOW_POLL_INTERVAL`: Workflow runner 轮询间隔，默认 `2s`
+- `MIBO_WORKFLOW_LEASE_DURATION`: Workflow task 租约时长，默认 `1m`
+
+## Workflow 调度调优
+
+资源感知 Workflow DAG 当前用于将媒体库扫描拆成按库、按路径、按阶段的后台任务。启用后，扫描、catalog materialize、projection refresh、probe 和 metadata match 可以按资源预算调度，不同库不会因为全局串行 job 被互相阻塞。
+
+默认建议：
+
+- SQLite / 本地开发：保持 `db_write=1` 的保守预算，避免写锁竞争。
+- Postgres / 较大部署：可提高数据库写、OpenList HTTP、ffprobe、metadata API 等资源预算。
+- Workflow 调度器随 worker 默认启用；legacy jobs 仍保留用于尚未迁移的后台工作。
+- 管理员可通过 `GET /api/v1/workflows`、`GET /api/v1/workflows/{id}`、`GET /api/v1/workflows/diagnostics` 查看 workflow 状态、阶段计数、资源等待和租约情况。
 
 ## 启动
 

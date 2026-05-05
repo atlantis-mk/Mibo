@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,9 +12,10 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -101,9 +103,9 @@ func TestListIssuesHidesStorageAuthFailureAfterSuccessfulRescan(t *testing.T) {
 	libraryRecord := createHealthTestLibrary(t, db, source.ID)
 	failed := createFailedJob(t, db, `{"library_id":`+uintString(libraryRecord.ID)+`}`, "captcha_token expired")
 	successAt := failed.UpdatedAt.Add(time.Minute)
-	completed := database.Job{Kind: library.JobKindSyncLibrary, Status: jobs.StatusCompleted, PayloadJSON: `{"library_id":` + uintString(libraryRecord.ID) + `}`, Attempts: 1, AvailableAt: successAt, CreatedAt: successAt, UpdatedAt: successAt, FinishedAt: &successAt}
+	completed := database.WorkflowRun{RunKey: "test-success", LibraryID: libraryRecord.ID, Reason: library.WorkflowReasonManualScan, Status: workflow.RunStatusCompleted, ScopeKey: fmt.Sprintf("library:%d", libraryRecord.ID), CreatedAt: successAt, UpdatedAt: successAt, FinishedAt: &successAt}
 	if err := db.Create(&completed).Error; err != nil {
-		t.Fatalf("create completed job: %v", err)
+		t.Fatalf("create completed workflow: %v", err)
 	}
 
 	issues, err := svc.ListIssues(ctx)
@@ -123,9 +125,9 @@ func TestListIssuesHidesStorageAuthFailureAfterSuccessfulValidation(t *testing.T
 	libraryRecord := createHealthTestLibrary(t, db, source.ID)
 	failed := createFailedJob(t, db, `{"library_id":`+uintString(libraryRecord.ID)+`}`, "captcha_token expired")
 	successAt := failed.UpdatedAt.Add(time.Minute)
-	completed := database.Job{Kind: JobKindValidateMediaSource, Status: jobs.StatusCompleted, PayloadJSON: `{"media_source_id":` + uintString(source.ID) + `}`, Attempts: 1, AvailableAt: successAt, CreatedAt: successAt, UpdatedAt: successAt, FinishedAt: &successAt}
+	completed := database.SystemSetting{Category: healthSettingsCategory, Key: fmt.Sprintf("media_source_%d_validated_at", source.ID), Value: successAt.Format(time.RFC3339Nano)}
 	if err := db.Create(&completed).Error; err != nil {
-		t.Fatalf("create completed validation: %v", err)
+		t.Fatalf("create completed validation setting: %v", err)
 	}
 
 	issues, err := svc.ListIssues(ctx)
@@ -155,6 +157,45 @@ func TestListIssuesFallsBackForUnknownFailure(t *testing.T) {
 	}
 }
 
+func TestListIssuesIncludesIngestConditionFailures(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	itemID := uint(9)
+	condition := database.IngestCondition{UnitKey: "catalog_item:9", LibraryID: 1, CatalogItemID: &itemID, ConditionType: ingest.ConditionMetadataMatched, Status: ingest.ConditionStatusReviewRequired, Reason: "no_candidate", Message: "Metadata match needed", Severity: ingest.SeverityWarning}
+	if err := svc.db.WithContext(ctx).Create(&condition).Error; err != nil {
+		t.Fatalf("create ingest condition: %v", err)
+	}
+
+	issues, err := svc.ListIssues(ctx)
+	if err != nil {
+		t.Fatalf("list issues: %v", err)
+	}
+	if len(issues) != 1 || issues[0].ReasonCode != ReasonIngestReviewRequired || issues[0].Scope != ScopeIngest {
+		t.Fatalf("unexpected ingest issue: %#v", issues)
+	}
+}
+
+func TestIngestEventRetentionRemovesExpiredEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := ingest.NewService(newTestService(t).db)
+	now := time.Now().UTC()
+	expired := now.Add(-time.Hour)
+	kept := now.Add(time.Hour)
+	if _, err := svc.AppendEvent(ctx, database.IngestEvent{UnitKey: "inventory_file:1", LibraryID: 1, EventType: ingest.EventConditionChanged, ExpiresAt: &expired}); err != nil {
+		t.Fatalf("append expired event: %v", err)
+	}
+	if _, err := svc.AppendEvent(ctx, database.IngestEvent{UnitKey: "inventory_file:2", LibraryID: 1, EventType: ingest.EventConditionChanged, ExpiresAt: &kept}); err != nil {
+		t.Fatalf("append kept event: %v", err)
+	}
+	removed, err := svc.RunEventRetention(ctx, now)
+	if err != nil {
+		t.Fatalf("run retention: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected one removed event, got %d", removed)
+	}
+}
+
 func TestIgnoreIssueHidesIssue(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
@@ -181,6 +222,33 @@ func TestIgnoreIssueHidesIssue(t *testing.T) {
 	}
 }
 
+func TestIgnoreIssueHidesIngestConditionIssue(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	db := svc.db
+	condition := database.IngestCondition{UnitKey: "inventory_file:1", LibraryID: 1, ConditionType: ingest.ConditionProbed, Status: ingest.ConditionStatusFailed, Reason: "probe_failed", Message: "probe failed", Severity: ingest.SeverityError}
+	if err := db.WithContext(ctx).Create(&condition).Error; err != nil {
+		t.Fatalf("create ingest condition: %v", err)
+	}
+	issues, err := svc.ListIssues(ctx)
+	if err != nil {
+		t.Fatalf("list issues: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one ingest issue before ignore, got %#v", issues)
+	}
+	if _, err := svc.IgnoreIssue(ctx, issues[0].ID); err != nil {
+		t.Fatalf("ignore issue: %v", err)
+	}
+	issues, err = svc.ListIssues(ctx)
+	if err != nil {
+		t.Fatalf("list issues after ignore: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("expected ingest issue hidden after ignore, got %#v", issues)
+	}
+}
+
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	cfg := config.Config{Database: config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")}}
@@ -188,10 +256,9 @@ func newTestService(t *testing.T) *Service {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	jobsSvc := jobs.NewService(db)
 	registry := providers.NewRegistry(cfg)
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
-	return NewService(db, registry, librarySvc, jobsSvc, "http://127.0.0.1:5244")
+	librarySvc := library.NewService(cfg, db, registry, nil)
+	return NewService(db, registry, librarySvc, "http://127.0.0.1:5244")
 }
 
 func createHealthTestSource(t *testing.T, db *gorm.DB) database.MediaSource {
@@ -216,14 +283,30 @@ func createHealthTestLibrary(t *testing.T, db *gorm.DB, mediaSourceID uint) data
 	return record
 }
 
-func createFailedJob(t *testing.T, db *gorm.DB, payloadJSON string, errorMessage string) database.Job {
+func createFailedJob(t *testing.T, db *gorm.DB, payloadJSON string, errorMessage string) database.WorkflowTask {
 	t.Helper()
 	now := time.Now().UTC()
-	job := database.Job{Kind: "targeted_refresh", Status: jobs.StatusFailed, PayloadJSON: payloadJSON, ErrorMessage: errorMessage, Attempts: 1, AvailableAt: now, CreatedAt: now, UpdatedAt: now, FinishedAt: &now}
-	if err := db.Create(&job).Error; err != nil {
-		t.Fatalf("create failed job: %v", err)
+	run := database.WorkflowRun{RunKey: fmt.Sprintf("test-run-%d", now.UnixNano()), LibraryID: libraryIDFromPayload(payloadJSON), Reason: library.WorkflowReasonTargetedRefresh, Status: workflow.RunStatusFailed, ScopeKey: "test", CreatedAt: now, UpdatedAt: now, FinishedAt: &now}
+	if run.LibraryID == 0 {
+		run.LibraryID = 1
 	}
-	return job
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create failed workflow run: %v", err)
+	}
+	task := database.WorkflowTask{RunID: run.ID, LibraryID: run.LibraryID, TaskKey: fmt.Sprintf("test-task-%d", now.UnixNano()), TaskType: workflow.TaskTypeScanLibraryPath, Stage: workflow.StageScan, Status: workflow.TaskStatusFailed, ScopeKey: run.ScopeKey, PayloadJSON: payloadJSON, ErrorMessage: errorMessage, Attempts: 1, AvailableAt: now, CreatedAt: now, UpdatedAt: now, FinishedAt: &now}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create failed workflow task: %v", err)
+	}
+	return task
+}
+
+func libraryIDFromPayload(payloadJSON string) uint {
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(payloadJSON), &payload)
+	if value, ok := payload["library_id"].(float64); ok && value > 0 {
+		return uint(value)
+	}
+	return 0
 }
 
 func uintString(value uint) string {

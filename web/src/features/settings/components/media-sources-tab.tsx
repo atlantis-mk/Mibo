@@ -53,7 +53,7 @@ export function MediaSourcesTab({
         <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
           {mediaSources.map((source) => {
             const issue = healthIssues.find((entry) =>
-              entry.affected.media_sources.some((ref) => ref.id === source.id),
+              entry.affected.media_sources?.some((ref) => ref.id === source.id),
             )
 
             return (

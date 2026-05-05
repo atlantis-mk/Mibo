@@ -2,17 +2,19 @@ package library
 
 import (
 	"github.com/atlan/mibo-media-server/internal/config"
-	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/settings"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
 type Service struct {
-	cfg     config.Config
-	db      *gorm.DB
-	storage *providers.Registry
-	jobs    *jobs.Service
+	cfg      config.Config
+	db       *gorm.DB
+	storage  *providers.Registry
+	workflow *workflow.Service
+	ingest   *ingest.Service
 }
 
 type CreateMediaSourceInput struct {
@@ -67,12 +69,26 @@ const (
 	JobKindMatchCatalogItem                = "match_catalog_item"
 	JobKindProbeInventoryFile              = "probe_inventory_file"
 	JobKindCatalogMatchBatch               = "catalog_match_batch"
+	JobKindCatalogMaterializeBatch         = "catalog_materialize_batch"
+	JobKindCatalogPostMaterializeBatch     = "catalog_post_materialize_batch"
 	JobKindInventoryProbeBatch             = "inventory_probe_batch"
 	JobKindMissingMediaCleanup             = "missing_media_cleanup"
 	JobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
 	JobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
 )
 
-func NewService(cfg config.Config, db *gorm.DB, registry *providers.Registry, jobs *jobs.Service) *Service {
-	return &Service{cfg: cfg, db: db, storage: registry, jobs: jobs}
+func NewService(cfg config.Config, db *gorm.DB, registry *providers.Registry, _ any, args ...any) *Service {
+	service := &Service{cfg: cfg, db: db, storage: registry}
+	for _, arg := range args {
+		if ingestSvc, ok := arg.(*ingest.Service); ok {
+			service.ingest = ingestSvc
+		}
+		if workflowSvc, ok := arg.(*workflow.Service); ok {
+			service.workflow = workflowSvc
+		}
+	}
+	if service.workflow == nil && db != nil {
+		service.workflow = workflow.NewService(db)
+	}
+	return service
 }

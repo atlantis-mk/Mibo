@@ -13,7 +13,7 @@ import { Button } from "#/components/ui/button"
 import { Input } from "#/components/ui/input"
 import { Label } from "#/components/ui/label"
 import { Switch } from "#/components/ui/switch"
-import type { CleanupSettingsInput, Job } from "#/lib/mibo-api"
+import type { CleanupSettingsInput } from "#/lib/mibo-api"
 import {
   cleanupSettingsQueryOptions,
   createAuthedMiboApi,
@@ -37,7 +37,7 @@ export function CleanupSettingsPanel({ token }: { token: string | null }) {
 function CleanupSettingsWorkspace({ token }: { token: string }) {
   const queryClient = useQueryClient()
   const [confirmText, setConfirmText] = useState("")
-  const [queuedJob, setQueuedJob] = useState<Job | null>(null)
+  const [cleanupQueued, setCleanupQueued] = useState(false)
   const [enabled, setEnabled] = useState(false)
   const [retentionDays, setRetentionDays] = useState("30")
   const [batchSize, setBatchSize] = useState("100")
@@ -51,12 +51,9 @@ function CleanupSettingsWorkspace({ token }: { token: string }) {
   })
   const runCleanupMutation = useMutation({
     mutationFn: () => createAuthedMiboApi(token).runMissingMediaCleanup(),
-    onSuccess: (job) => {
-      setQueuedJob(job)
+    onSuccess: () => {
+      setCleanupQueued(true)
       setConfirmText("")
-      void queryClient.invalidateQueries({
-        queryKey: miboQueryKeys.jobs(token, { kind: "missing_media_cleanup" }),
-      })
     },
   })
 
@@ -259,9 +256,9 @@ function CleanupSettingsWorkspace({ token }: { token: string }) {
             </p>
           ) : null}
 
-          {queuedJob ? (
+          {cleanupQueued ? (
             <div className="rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm">
-              已创建后台任务 #{queuedJob.id}，状态：{queuedJob.status}。
+              已提交后台清理任务，可在 Workflow 任务页查看执行状态。
             </div>
           ) : null}
 

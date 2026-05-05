@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   ActivityIcon,
   AlertTriangleIcon,
@@ -20,105 +20,105 @@ import {
   WifiIcon,
   WrenchIcon,
   XCircleIcon,
-} from 'lucide-react'
-import { toast } from 'sonner'
+} from "lucide-react"
+import { toast } from "sonner"
 
-import { Button } from '#/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
-import { Skeleton } from '#/components/ui/skeleton'
-import { SidebarTrigger } from '#/components/ui/sidebar'
+import { Button } from "#/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card"
+import { Skeleton } from "#/components/ui/skeleton"
+import { SidebarTrigger } from "#/components/ui/sidebar"
 import type {
   ConsoleActivityEvent,
   ConsoleQuickAction,
   ConsoleStatus,
   ConsoleSummary,
-} from '#/lib/mibo-api'
-import { createAuthedMiboApi, miboQueryKeys } from '#/lib/mibo-query'
-import { consoleSummaryQueryOptions } from '#/lib/mibo-query'
-import { cn } from '#/lib/utils'
-import { useAuthStore } from '#/stores/auth-store'
+} from "#/lib/mibo-api"
+import { createAuthedMiboApi, miboQueryKeys } from "#/lib/mibo-query"
+import { consoleSummaryQueryOptions } from "#/lib/mibo-query"
+import { cn } from "#/lib/utils"
+import { useAuthStore } from "#/stores/auth-store"
 
 const managementEntries = [
   {
-    title: '用户',
-    description: '用户与权限管理规划中',
+    title: "用户",
+    description: "用户与权限管理规划中",
     icon: UserIcon,
     disabled: true,
   },
   {
-    title: '媒体库',
-    description: '管理来源、媒体库和扫描',
+    title: "媒体库",
+    description: "管理来源、媒体库和扫描",
     icon: DatabaseIcon,
-    to: '/settings/library',
+    to: "/settings/library",
   },
   {
-    title: '直播电视',
-    description: '配置直播源、EPG 和录制',
+    title: "直播电视",
+    description: "配置直播源、EPG 和录制",
     icon: PlayCircleIcon,
-    to: '/settings/live-tv',
+    to: "/settings/live-tv",
   },
   {
-    title: '网络',
-    description: '打开设置以配置访问方式',
+    title: "网络",
+    description: "打开设置以配置访问方式",
     icon: WifiIcon,
-    to: '/settings',
+    to: "/settings",
   },
   {
-    title: '转码',
-    description: '播放与 HLS 设置',
+    title: "转码",
+    description: "播放与 HLS 设置",
     icon: MonitorSmartphoneIcon,
-    to: '/settings/playback',
+    to: "/settings/playback",
   },
-  { title: '数据库', description: '目录一致性和投影维护', icon: HardDriveIcon },
+  { title: "数据库", description: "目录一致性和投影维护", icon: HardDriveIcon },
   {
-    title: '转换',
-    description: '媒体转换工作流规划中',
+    title: "转换",
+    description: "媒体转换工作流规划中",
     icon: RefreshCwIcon,
     disabled: true,
   },
   {
-    title: '计划任务',
-    description: '查看扫描计划和历史',
+    title: "计划任务",
+    description: "查看扫描计划和历史",
     icon: ClockIcon,
-    to: '/settings/schedules',
+    to: "/settings/schedules",
   },
   {
-    title: '日志',
-    description: '日志查看页面尚未实现',
+    title: "日志",
+    description: "日志查看页面尚未实现",
     icon: ActivityIcon,
     disabled: true,
   },
   {
-    title: '插件',
-    description: '插件系统规划中',
+    title: "插件",
+    description: "插件系统规划中",
     icon: WrenchIcon,
     disabled: true,
   },
   {
-    title: '设备',
-    description: '设备会话管理规划中',
+    title: "设备",
+    description: "设备会话管理规划中",
     icon: CastIcon,
     disabled: true,
   },
   {
-    title: '下载',
-    description: '离线下载尚未实现',
+    title: "下载",
+    description: "离线下载尚未实现",
     icon: ArrowLeftIcon,
     disabled: true,
   },
   {
-    title: '相机上传',
-    description: '移动端上传规划中',
+    title: "相机上传",
+    description: "移动端上传规划中",
     icon: MonitorSmartphoneIcon,
     disabled: true,
   },
   {
-    title: 'DLNA',
-    description: 'DLNA 服务尚未实现',
+    title: "DLNA",
+    description: "DLNA 服务尚未实现",
     icon: WifiIcon,
     disabled: true,
   },
-  { title: '高级维护', description: '谨慎运行昂贵维护操作', icon: ShieldIcon },
+  { title: "高级维护", description: "谨慎运行昂贵维护操作", icon: ShieldIcon },
 ] as const
 
 export default function ConsolePage({
@@ -128,7 +128,7 @@ export default function ConsolePage({
 }) {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
-  const queryToken = token ?? 'guest'
+  const queryToken = token ?? "guest"
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const summaryQuery = useQuery({
@@ -146,16 +146,15 @@ export default function ConsolePage({
     },
     onError: (error: Error) => toast.error(error.message),
   })
-
   const summary = summaryQuery.data
 
   const runAction = (action: ConsoleQuickAction) => {
     if (action.disabled) return
-    if (action.kind === 'route' && action.route) {
-      void navigate({ to: action.route as '/' })
+    if (action.kind === "route" && action.route) {
+      void navigate({ to: action.route as "/" })
       return
     }
-    if (action.kind !== 'mutation') return
+    if (action.kind !== "mutation") return
     if (action.confirm && !window.confirm(`确认执行“${action.label}”？`)) return
     actionMutation.mutate(action)
   }
@@ -163,14 +162,14 @@ export default function ConsolePage({
   return (
     <div
       className={cn(
-        'flex-1 overflow-y-auto text-foreground',
-        embedded ? 'bg-transparent' : 'min-h-screen bg-background',
+        "flex-1 overflow-y-auto text-foreground",
+        embedded ? "bg-transparent" : "min-h-screen bg-background"
       )}
     >
       <div
         className={cn(
-          'flex w-full flex-col gap-6',
-          embedded ? 'p-0' : 'px-4 py-5 sm:px-6 lg:px-8',
+          "flex w-full flex-col gap-6",
+          embedded ? "p-0" : "px-4 py-5 sm:px-6 lg:px-8"
         )}
       >
         {!embedded ? (
@@ -201,7 +200,7 @@ export default function ConsolePage({
                 </Link>
               </Button>
               <div className="rounded-full border border-border px-3 py-2 text-sm text-muted-foreground">
-                {user?.username ?? '未登录'}
+                {user?.username ?? "未登录"}
               </div>
             </div>
           </header>
@@ -250,17 +249,15 @@ export default function ConsolePage({
 
 function ServerOverview({ summary }: { summary: ConsoleSummary }) {
   const addresses = summary.access.addresses ?? []
+  const storageLabel = summary.health.storage.message || "暂无"
   const fields = [
-    ['服务', summary.server.service],
-    ['版本', summary.server.version || '未知'],
-    ['更新状态', summary.server.update_status || '未知'],
-    ['API 端口', summary.server.port ? String(summary.server.port) : '未知'],
-    ['运行时长', formatDuration(summary.server.uptime_seconds)],
-    [
-      '存储',
-      `${summary.server.storage_provider} ${summary.server.storage_root}`,
-    ],
-    ['数据库', summary.server.database_driver],
+    ["服务", summary.server.service],
+    ["版本", summary.server.version || "未知"],
+    ["更新状态", summary.server.update_status || "未知"],
+    ["API 端口", summary.server.port ? String(summary.server.port) : "未知"],
+    ["运行时长", formatDuration(summary.server.uptime_seconds)],
+    ["存储", storageLabel],
+    ["数据库", summary.server.database_driver],
   ]
   return (
     <Card className="border-border bg-card shadow-sm">
@@ -289,7 +286,7 @@ function ServerOverview({ summary }: { summary: ConsoleSummary }) {
             >
               <span className="text-muted-foreground">{address.label}</span>
               <span className="truncate font-mono text-xs">
-                {address.url ?? address.message ?? '未配置'}
+                {address.url ?? address.message ?? "未配置"}
               </span>
             </div>
           ))}
@@ -301,16 +298,18 @@ function ServerOverview({ summary }: { summary: ConsoleSummary }) {
 
 function MetricGrid({ summary }: { summary: ConsoleSummary }) {
   const metrics = [
-    ['媒体库', summary.media.libraries, DatabaseIcon],
-    ['媒体源', summary.media.media_sources, HardDriveIcon],
-    ['目录项目', summary.media.catalog_items, LayoutDashboardIcon],
-    ['库存文件', summary.media.inventory_files, HardDriveIcon],
-    ['电影', summary.media.movies, PlayCircleIcon],
-    ['剧集', summary.media.series, MonitorSmartphoneIcon],
-    ['分集', summary.media.episodes, PlayCircleIcon],
-    ['人物', summary.media.people, UserIcon],
-    ['活动任务', summary.media.active_jobs, RefreshCwIcon],
-    ['告警/失败', summary.media.warnings, AlertTriangleIcon],
+    ["媒体库", summary.media.libraries, DatabaseIcon],
+    ["媒体源", summary.media.media_sources, HardDriveIcon],
+    ["目录项目", summary.media.catalog_items, LayoutDashboardIcon],
+    ["库存文件", summary.media.inventory_files, HardDriveIcon],
+    ["电影", summary.media.movies, PlayCircleIcon],
+    ["剧集", summary.media.series, MonitorSmartphoneIcon],
+    ["分集", summary.media.episodes, PlayCircleIcon],
+    ["人物", summary.media.people, UserIcon],
+    ["活动任务", summary.media.active_jobs, RefreshCwIcon],
+    ["整理失败", summary.media.ingest?.failed ?? 0, XCircleIcon],
+    ["待确认", summary.media.ingest?.review_required ?? 0, AlertTriangleIcon],
+    ["告警/失败", summary.media.warnings, AlertTriangleIcon],
   ] as const
   return (
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -351,12 +350,12 @@ function QuickActions({
             disabled={action.disabled || isRunning}
             onClick={() => onRun(action)}
             className={cn(
-              'rounded-2xl border p-4 text-left transition hover:border-primary/30 hover:bg-accent hover:text-accent-foreground',
+              "rounded-2xl border p-4 text-left transition hover:border-primary/30 hover:bg-accent hover:text-accent-foreground",
               action.disabled &&
-                'cursor-not-allowed border-border bg-muted text-muted-foreground opacity-60 hover:border-border hover:bg-muted hover:text-muted-foreground',
-              action.risk === 'danger' &&
+                "cursor-not-allowed border-border bg-muted text-muted-foreground opacity-60 hover:border-border hover:bg-muted hover:text-muted-foreground",
+              action.risk === "danger" &&
                 !action.disabled &&
-                'border-destructive/30',
+                "border-destructive/30"
             )}
           >
             <div className="flex items-center justify-between gap-3">
@@ -397,7 +396,7 @@ function ActivityTimeline({ events }: { events: ConsoleActivityEvent[] }) {
                 <p className="truncate text-xs text-muted-foreground">
                   {[event.user, event.device, event.media_title]
                     .filter(Boolean)
-                    .join(' · ') || event.type}
+                    .join(" · ") || event.type}
                 </p>
               </div>
               <time className="text-xs text-muted-foreground">
@@ -420,15 +419,15 @@ function ManagementGrid({ summary }: { summary: ConsoleSummary }) {
       <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {managementEntries.map((entry) => {
           const Icon = entry.icon
-          const isDisabled = 'disabled' in entry && entry.disabled
+          const isDisabled = "disabled" in entry && entry.disabled
           const stats = managementEntryStats(entry.title, summary)
           const content = (
             <div
               className={cn(
-                'h-full rounded-2xl border p-4',
+                "h-full rounded-2xl border p-4",
                 isDisabled
-                  ? 'bg-muted text-muted-foreground opacity-70'
-                  : 'bg-card hover:border-primary/30 hover:bg-accent hover:text-accent-foreground',
+                  ? "bg-muted text-muted-foreground opacity-70"
+                  : "bg-card hover:border-primary/30 hover:bg-accent hover:text-accent-foreground"
               )}
             >
               <Icon className="mb-3 size-5" />
@@ -451,8 +450,8 @@ function ManagementGrid({ summary }: { summary: ConsoleSummary }) {
               {isDisabled ? <p className="mt-3 text-xs">即将推出</p> : null}
             </div>
           )
-          return 'to' in entry && entry.to ? (
-            <Link key={entry.title} to={entry.to as '/settings'}>
+          return "to" in entry && entry.to ? (
+            <Link key={entry.title} to={entry.to as "/settings"}>
               {content}
             </Link>
           ) : (
@@ -466,25 +465,26 @@ function ManagementGrid({ summary }: { summary: ConsoleSummary }) {
 
 function managementEntryStats(title: string, summary: ConsoleSummary) {
   switch (title) {
-    case '媒体库':
+    case "媒体库":
       return [
-        { label: '媒体库', value: summary.media.libraries },
-        { label: '媒体源', value: summary.media.media_sources },
+        { label: "媒体库", value: summary.media.libraries },
+        { label: "媒体源", value: summary.media.media_sources },
       ]
-    case '数据库':
+    case "数据库":
       return [
-        { label: '目录项目', value: summary.media.catalog_items },
-        { label: '库存文件', value: summary.media.inventory_files },
+        { label: "目录项目", value: summary.media.catalog_items },
+        { label: "库存文件", value: summary.media.inventory_files },
       ]
-    case '计划任务':
+    case "计划任务":
       return [
-        { label: '计划', value: summary.media.schedules },
-        { label: '启用', value: summary.media.enabled_schedules },
+        { label: "计划", value: summary.media.schedules },
+        { label: "启用", value: summary.media.enabled_schedules },
       ]
-    case '高级维护':
+    case "高级维护":
       return [
-        { label: '活动任务', value: summary.media.active_jobs },
-        { label: '告警', value: summary.media.warnings },
+        { label: "活动任务", value: summary.media.active_jobs },
+        { label: "告警", value: summary.media.warnings },
+        { label: "整理失败", value: summary.media.ingest?.failed ?? 0 },
       ]
     default:
       return []
@@ -508,7 +508,7 @@ function DeviceSection({ summary }: { summary: ConsoleSummary }) {
             <div key={device.id} className="rounded-2xl bg-muted p-3">
               <p className="font-medium">{device.name}</p>
               <p className="text-sm text-muted-foreground">
-                {device.user ?? '未知用户'} · {device.state ?? '未知状态'}
+                {device.user ?? "未知用户"} · {device.state ?? "未知状态"}
               </p>
             </div>
           ))
@@ -527,7 +527,7 @@ function PartialWarnings({ summary }: { summary: ConsoleSummary }) {
       <p className="mt-1">
         {warnings
           .map((warning) => `${warning.section}: ${warning.message}`)
-          .join('；')}
+          .join("；")}
       </p>
     </div>
   )
@@ -550,8 +550,8 @@ function StatusPill({ status }: { status: ConsoleStatus }) {
   return (
     <span
       className={cn(
-        'rounded-full px-2.5 py-1 text-xs font-medium',
-        statusClass(status),
+        "rounded-full px-2.5 py-1 text-xs font-medium",
+        statusClass(status)
       )}
     >
       {statusLabel(status)}
@@ -562,39 +562,39 @@ function StatusPill({ status }: { status: ConsoleStatus }) {
 function SeverityIcon({
   severity,
 }: {
-  severity: ConsoleActivityEvent['severity']
+  severity: ConsoleActivityEvent["severity"]
 }) {
-  if (severity === 'error')
+  if (severity === "error")
     return <XCircleIcon className="mt-0.5 size-4 text-destructive" />
-  if (severity === 'warning')
+  if (severity === "warning")
     return <AlertTriangleIcon className="mt-0.5 size-4 text-muted-foreground" />
   return <CheckCircle2Icon className="mt-0.5 size-4 text-primary" />
 }
 
 function statusClass(status: string) {
-  if (status === 'ok' || status === 'available')
-    return 'bg-primary/10 text-primary'
-  if (status === 'warning' || status === 'unknown')
-    return 'bg-muted text-muted-foreground'
-  if (status === 'error') return 'bg-destructive/10 text-destructive'
-  return 'bg-muted text-muted-foreground'
+  if (status === "ok" || status === "available")
+    return "bg-primary/10 text-primary"
+  if (status === "warning" || status === "unknown")
+    return "bg-muted text-muted-foreground"
+  if (status === "error") return "bg-destructive/10 text-destructive"
+  return "bg-muted text-muted-foreground"
 }
 
 function statusLabel(status: string) {
   const labels: Record<string, string> = {
-    ok: '正常',
-    available: '可用',
-    warning: '警告',
-    error: '错误',
-    unknown: '未知',
-    unavailable: '不可用',
-    not_configured: '未配置',
+    ok: "正常",
+    available: "可用",
+    warning: "警告",
+    error: "错误",
+    unknown: "未知",
+    unavailable: "不可用",
+    not_configured: "未配置",
   }
   return labels[status] ?? status
 }
 
 function formatDuration(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '未知'
+  if (!Number.isFinite(seconds) || seconds <= 0) return "未知"
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   if (hours > 0) return `${hours} 小时 ${minutes} 分钟`
@@ -603,11 +603,11 @@ function formatDuration(seconds: number) {
 
 function formatDate(value: string) {
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '未知时间'
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
+  if (Number.isNaN(date.getTime())) return "未知时间"
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   })
 }

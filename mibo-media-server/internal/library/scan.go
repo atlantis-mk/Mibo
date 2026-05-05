@@ -92,6 +92,7 @@ type catalogScanArtifact struct {
 	StableIdentityKey    string
 	ProviderName         string
 	HashesJSON           string
+	ThumbnailURL         string
 	ObjectType           string
 	ProviderMeta         map[string]string
 	SizeBytes            int64
@@ -161,12 +162,23 @@ type SyncResult struct {
 }
 
 type scanMode struct {
-	partial               bool
-	rootPath              string
-	catalogMatchItemIDs   []uint
-	inventoryProbeFileIDs []uint
-	classificationFileIDs []uint
-	directorySummaries    map[string]scanDirectorySummary
+	partial                     bool
+	rootPath                    string
+	deferCatalogMaterialization bool
+	catalogMatchItemIDs         []uint
+	catalogMaterializeFileIDs   []uint
+	inventoryProbeFileIDs       []uint
+	classificationFileIDs       []uint
+	directorySummaries          map[string]scanDirectorySummary
+	directorySnapshots          map[string]scanDirectorySnapshot
+	classificationCache        *classificationDirectoryCache
+}
+
+func (m *scanMode) recordCatalogMaterializeCandidate(fileID uint) {
+	if m == nil || fileID == 0 {
+		return
+	}
+	m.catalogMaterializeFileIDs = append(m.catalogMaterializeFileIDs, fileID)
 }
 
 func (m *scanMode) directorySummary(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot) scanDirectorySummary {
@@ -183,6 +195,23 @@ func (m *scanMode) directorySummary(libraryType string, libraryRoot string, snap
 	summary := buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
 	m.directorySummaries[key] = summary
 	return summary
+}
+
+func (m *scanMode) recordDirectorySnapshot(snapshot scanDirectorySnapshot) {
+	if m == nil {
+		return
+	}
+	key := strings.TrimSpace(snapshot.Path)
+	if key == "" {
+		return
+	}
+	if m.directorySnapshots == nil {
+		m.directorySnapshots = make(map[string]scanDirectorySnapshot)
+	}
+	if _, ok := m.directorySnapshots[key]; ok {
+		return
+	}
+	m.directorySnapshots[key] = snapshot
 }
 
 func (m *scanMode) recordCatalogMatchCandidate(itemID uint) {

@@ -14,7 +14,6 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	openliststorage "github.com/atlan/mibo-media-server/internal/storage/openlist"
 	"gorm.io/gorm"
@@ -235,7 +234,7 @@ func newIdentityScanService(t *testing.T) (*gorm.DB, *Service, database.Library)
 		t.Fatalf("open database: %v", err)
 	}
 
-	svc := NewService(config.Config{}, db, nil, jobs.NewService(db))
+	svc := NewService(config.Config{}, db, nil, nil)
 
 	ctx := context.Background()
 	libraryRecord := database.Library{Name: "Identity", Type: "movies", RootPath: "/library", Status: "active"}

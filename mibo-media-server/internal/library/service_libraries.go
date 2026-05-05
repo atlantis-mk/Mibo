@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/settings"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -82,11 +83,27 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 			return database.Library{}, database.Job{}, err
 		}
 	}
-	job, err := s.QueueLibraryScan(ctx, library.ID)
+	job, err := s.QueueLibraryScanWithReason(ctx, library.ID, WorkflowReasonCreateLibrary)
 	if err != nil {
+		if strings.Contains(err.Error(), "workflow service unavailable") {
+			return library, database.Job{}, nil
+		}
 		return database.Library{}, database.Job{}, err
 	}
 	return library, job, nil
+}
+
+func (s *Service) QueueLibraryScanWithReason(ctx context.Context, libraryID uint, reason string) (database.Job, error) {
+	if s.workflow != nil {
+		run, _, err := s.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryID, Reason: reason, Priority: 10})
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
+}
+
+func workflowRunCompatibilityJob(run database.WorkflowRun) database.Job {
+	now := time.Now().UTC()
+	return database.Job{ID: run.ID, JobKey: run.RunKey, Kind: JobKindSyncLibrary, Status: run.Status, PayloadJSON: run.PayloadJSON, ErrorMessage: run.ErrorMessage, AvailableAt: now, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt}
 }
 
 func deriveLibraryNameFromPath(rootPath string, fallback string) string {
@@ -109,9 +126,6 @@ func (s *Service) QueueTargetedRefresh(ctx context.Context, libraryID uint, root
 	if err != nil {
 		return database.Job{}, err
 	}
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
-	}
 	normalizedReason := strings.TrimSpace(strings.ToLower(reason))
 	if normalizedReason == "" {
 		normalizedReason = "manual"
@@ -120,32 +134,41 @@ func (s *Service) QueueTargetedRefresh(ctx context.Context, libraryID uint, root
 	if err != nil {
 		return database.Job{}, err
 	}
-	jobKey := fmt.Sprintf("targeted-refresh:%d:%s:%s", config.Library.ID, targetRoot, normalizedReason)
-	return s.jobs.EnqueueUnique(ctx, JobKindTargetedRefresh, jobKey, targetedRefreshPayload{LibraryID: config.Library.ID, RootPath: targetRoot, Reason: normalizedReason})
+	s.markLibraryScopeDirty(ctx, config.Library.ID, targetRoot, "targeted_refresh_queued")
+	if s.workflow != nil {
+		run, _, err := s.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: config.Library.ID, RootPath: targetRoot, Reason: WorkflowReasonTargetedRefresh, Priority: 8})
+		return workflowRunCompatibilityJob(run), err
+	}
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
 func (s *Service) QueueCatalogItemProjectionRefresh(ctx context.Context, itemID uint) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	if s.workflow != nil {
+		if itemID == 0 {
+			return database.Job{}, fmt.Errorf("item id is required")
+		}
+		var item database.CatalogItem
+		if err := s.db.WithContext(ctx).First(&item, itemID).Error; err != nil {
+			return database.Job{}, err
+		}
+		run, err := s.queueStandaloneWorkflowTask(ctx, item.LibraryID, "", WorkflowReasonManualScan, workflow.TaskTypeRefreshProjection, workflow.StageProjection, fmt.Sprintf("projection:item:%d", itemID), map[string]any{"item_id": itemID, "library_id": item.LibraryID})
+		return workflowRunCompatibilityJob(run), err
 	}
 	if itemID == 0 {
 		return database.Job{}, fmt.Errorf("item id is required")
 	}
-	payload := catalog.ItemProjectionRefreshPayload{ItemID: itemID}
-	jobKey := fmt.Sprintf("catalog-refresh-item-projection:%d", itemID)
-	return s.jobs.EnqueueUnique(ctx, JobKindCatalogRefreshItemProjection, jobKey, payload)
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
 func (s *Service) QueueCatalogLibraryProjectionRefresh(ctx context.Context, libraryID uint, rootPath string) (database.Job, error) {
-	if s.jobs == nil {
-		return database.Job{}, fmt.Errorf("jobs service unavailable")
+	if s.workflow != nil {
+		run, err := s.queueStandaloneWorkflowTask(ctx, libraryID, rootPath, WorkflowReasonManualScan, workflow.TaskTypeRefreshProjection, workflow.StageProjection, fmt.Sprintf("projection:%s", rootPath), map[string]any{"library_id": libraryID, "root_path": rootPath})
+		return workflowRunCompatibilityJob(run), err
 	}
 	if libraryID == 0 {
 		return database.Job{}, fmt.Errorf("library id is required")
 	}
-	payload := catalog.LibraryProjectionRefreshPayload{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)}
-	jobKey := fmt.Sprintf("catalog-refresh-library-projection:%d:%s", libraryID, payload.RootPath)
-	return s.jobs.EnqueueUnique(ctx, JobKindCatalogRefreshLibraryProjection, jobKey, payload)
+	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
 func (s *Service) ListLibraries(ctx context.Context) ([]database.Library, error) {
@@ -209,9 +232,17 @@ func deleteLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) erro
 }
 
 func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID uint) error {
+	if err := cancelRunningLibraryJobs(ctx, tx, libraryID); err != nil {
+		return err
+	}
 	queries := []string{
 		`DELETE FROM job_active_intents WHERE job_id IN (SELECT id FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
-		`DELETE FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM jobs WHERE status NOT IN ('running', 'cancel_requested') AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
+		`DELETE FROM workflow_task_dependencies WHERE task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?) OR depends_on_task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
+		`DELETE FROM workflow_task_leases WHERE task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
+		`DELETE FROM workflow_resource_usages WHERE library_id = ? OR task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
+		`DELETE FROM workflow_tasks WHERE library_id = ?`,
+		`DELETE FROM workflow_runs WHERE library_id = ?`,
 		`DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE library_id = ?)`,
 		`DELETE FROM library_scan_policies WHERE library_id = ?`,
 		`DELETE FROM scan_exclusion_rules WHERE library_id = ?`,
@@ -222,6 +253,9 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 		`DELETE FROM library_subtitle_policies WHERE library_id = ?`,
 		`DELETE FROM library_paths WHERE library_id = ?`,
 		`DELETE FROM storage_observation_failures WHERE library_id = ?`,
+		`DELETE FROM ingest_events WHERE library_id = ?`,
+		`DELETE FROM ingest_conditions WHERE library_id = ?`,
+		`DELETE FROM ingest_dirty_units WHERE library_id = ?`,
 		`DELETE FROM media_streams WHERE file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
 		`DELETE FROM asset_files WHERE asset_id IN (SELECT id FROM media_assets WHERE library_id = ?) OR file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
 		`DELETE FROM asset_items WHERE asset_id IN (SELECT id FROM media_assets WHERE library_id = ?) OR item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
@@ -240,6 +274,14 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 	args := [][]any{
 		{libraryID, libraryID, libraryID, libraryID},
 		{libraryID, libraryID, libraryID, libraryID},
+		{libraryID, libraryID},
+		{libraryID},
+		{libraryID, libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
 		{libraryID},
 		{libraryID},
 		{libraryID},
@@ -303,6 +345,18 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 	}
 
 	return nil
+}
+
+func cancelRunningLibraryJobs(ctx context.Context, tx *gorm.DB, libraryID uint) error {
+	now := time.Now().UTC()
+	return tx.WithContext(ctx).Exec(
+		`UPDATE jobs SET status = 'cancel_requested', error_message = 'library deleted; cancellation requested', updated_at = ? WHERE status = 'running' AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
+		now,
+		libraryID,
+		libraryID,
+		libraryID,
+		libraryID,
+	).Error
 }
 
 func deleteLegacyLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) error {

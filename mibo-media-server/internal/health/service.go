@@ -11,17 +11,16 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-const failedJobLookbackLimit = 200
-
-const JobKindValidateMediaSource = "validate_media_source"
+const failedWorkflowLookbackLimit = 200
 
 const healthSettingsCategory = "health"
 const ignoredIssueIDsKey = "ignored_issue_ids"
@@ -30,12 +29,11 @@ type Service struct {
 	db       *gorm.DB
 	storage  *providers.Registry
 	library  *library.Service
-	jobs     *jobs.Service
 	adminURL string
 }
 
-func NewService(db *gorm.DB, registry *providers.Registry, librarySvc *library.Service, jobsSvc *jobs.Service, adminURL string) *Service {
-	return &Service{db: db, storage: registry, library: librarySvc, jobs: jobsSvc, adminURL: strings.TrimRight(strings.TrimSpace(adminURL), "/")}
+func NewService(db *gorm.DB, registry *providers.Registry, librarySvc *library.Service, adminURL string) *Service {
+	return &Service{db: db, storage: registry, library: librarySvc, adminURL: strings.TrimRight(strings.TrimSpace(adminURL), "/")}
 }
 
 func (s *Service) Summary(ctx context.Context) (Summary, error) {
@@ -70,18 +68,21 @@ func (s *Service) ListIssues(ctx context.Context) ([]Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	var jobRows []database.Job
+	var failedTasks []database.WorkflowTask
 	if err := s.db.WithContext(ctx).
-		Where("status = ? AND error_message <> ''", jobs.StatusFailed).
+		Where("status = ? AND error_message <> ''", workflow.TaskStatusFailed).
 		Order("updated_at desc").
-		Limit(failedJobLookbackLimit).
-		Find(&jobRows).Error; err != nil {
+		Limit(failedWorkflowLookbackLimit).
+		Find(&failedTasks).Error; err != nil {
 		return nil, err
 	}
 
 	groups := map[string]*issueBuilder{}
-	for _, job := range jobRows {
-		issue, key, err := s.issueForFailedJob(ctx, job)
+	if err := s.addIngestConditionIssues(ctx, groups); err != nil {
+		return nil, err
+	}
+	for _, task := range failedTasks {
+		issue, key, err := s.issueForFailedWorkflowTask(ctx, task)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +92,7 @@ func (s *Service) ListIssues(ctx context.Context) ([]Issue, error) {
 		if _, ok := ignored[issue.ID]; ok {
 			continue
 		}
-		resolved, err := s.issueResolvedAfterFailure(ctx, job, issue)
+		resolved, err := s.issueResolvedAfterFailure(ctx, task, issue)
 		if err != nil {
 			return nil, err
 		}
@@ -104,12 +105,15 @@ func (s *Service) ListIssues(ctx context.Context) ([]Issue, error) {
 			builder = &issueBuilder{issue: copyIssue}
 			groups[key] = builder
 		}
-		builder.addJob(job)
+		builder.addWorkflowTask(task)
 	}
 
 	issues := make([]Issue, 0, len(groups))
 	for _, builder := range groups {
 		builder.finish()
+		if _, ok := ignored[builder.issue.ID]; ok {
+			continue
+		}
 		issues = append(issues, builder.issue)
 	}
 	sort.SliceStable(issues, func(i, j int) bool {
@@ -121,6 +125,60 @@ func (s *Service) ListIssues(ctx context.Context) ([]Issue, error) {
 		return issues[i].ID < issues[j].ID
 	})
 	return issues, nil
+}
+
+func (s *Service) addIngestConditionIssues(ctx context.Context, groups map[string]*issueBuilder) error {
+	var conditions []database.IngestCondition
+	if err := s.db.WithContext(ctx).
+		Where("status IN ? OR stale_after <= ?", []string{ingest.ConditionStatusFailed, ingest.ConditionStatusReviewRequired}, time.Now().UTC()).
+		Order("updated_at desc").
+		Limit(100).
+		Find(&conditions).Error; err != nil {
+		return err
+	}
+	for _, condition := range conditions {
+		issue := ingestConditionIssue(condition)
+		if issue == nil {
+			continue
+		}
+		key := issue.ReasonCode + ":" + condition.ConditionType
+		builder := groups[key]
+		if builder == nil {
+			builder = &issueBuilder{issue: *issue}
+			groups[key] = builder
+		}
+		builder.issue.Impact.AffectedFiles++
+		if condition.CatalogItemID != nil {
+			builder.issue.Impact.AffectedCatalogItems++
+		}
+	}
+	return nil
+}
+
+func ingestConditionIssue(condition database.IngestCondition) *Issue {
+	now := time.Now().UTC()
+	reason := ReasonIngestStageFailed
+	title := "媒体整理阶段失败"
+	severity := SeverityError
+	if condition.Status == ingest.ConditionStatusReviewRequired {
+		reason = ReasonIngestReviewRequired
+		title = "媒体整理需要人工确认"
+		severity = SeverityWarning
+	} else if condition.StaleAfter != nil && !condition.StaleAfter.After(now) {
+		reason = ReasonIngestStageStale
+		title = "媒体整理阶段已过期"
+		severity = SeverityWarning
+	} else if condition.Status != ingest.ConditionStatusFailed {
+		return nil
+	}
+	message := strings.TrimSpace(condition.Message)
+	if message == "" {
+		message = condition.Reason
+	}
+	if message == "" {
+		message = condition.ConditionType
+	}
+	return &Issue{ID: "ingest:" + reason + ":" + condition.ConditionType, Severity: severity, ReasonCode: reason, Scope: ScopeIngest, Title: title, Message: message, Impact: Impact{BlocksHomeVisibility: condition.ConditionType == ingest.ConditionProjectionCurrent}, TechnicalDetail: TechnicalDetail{ErrorMessage: message}, FirstSeenAt: condition.LastTransitionAt, LastSeenAt: &condition.UpdatedAt}
 }
 
 func (s *Service) IgnoreIssue(ctx context.Context, issueID string) (IgnoreResult, error) {
@@ -198,19 +256,8 @@ func (s *Service) ValidateMediaSource(ctx context.Context, mediaSourceID uint) (
 }
 
 func (s *Service) recordSuccessfulValidation(ctx context.Context, mediaSourceID uint) error {
-	now := time.Now().UTC()
-	job := database.Job{
-		Kind:        JobKindValidateMediaSource,
-		Status:      jobs.StatusCompleted,
-		PayloadJSON: fmt.Sprintf(`{"media_source_id":%d}`, mediaSourceID),
-		Attempts:    1,
-		AvailableAt: now,
-		StartedAt:   &now,
-		FinishedAt:  &now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	return s.db.WithContext(ctx).Create(&job).Error
+	record := database.SystemSetting{Category: healthSettingsCategory, Key: fmt.Sprintf("media_source_%d_validated_at", mediaSourceID), Value: time.Now().UTC().Format(time.RFC3339Nano)}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "category"}, {Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"})}).Create(&record).Error
 }
 
 func (s *Service) RescanIssueLibraries(ctx context.Context, issueID string) (RescanResult, error) {
@@ -230,7 +277,7 @@ func (s *Service) RescanIssueLibraries(ctx context.Context, issueID string) (Res
 	}
 	result := RescanResult{IssueID: issueID}
 	for _, ref := range selected.Affected.Libraries {
-		job, err := s.library.QueueLibraryScan(ctx, ref.ID)
+		job, err := s.library.QueueLibraryScanWithReason(ctx, ref.ID, library.WorkflowReasonManualScan)
 		if err != nil {
 			return RescanResult{}, err
 		}
@@ -239,9 +286,9 @@ func (s *Service) RescanIssueLibraries(ctx context.Context, issueID string) (Res
 	return result, nil
 }
 
-func (s *Service) issueForFailedJob(ctx context.Context, job database.Job) (*Issue, string, error) {
-	reason, severity := classifyJobFailure(job)
-	refs, err := s.affectedForJob(ctx, job)
+func (s *Service) issueForFailedWorkflowTask(ctx context.Context, task database.WorkflowTask) (*Issue, string, error) {
+	reason, severity := classifyWorkflowFailure(task)
+	refs, err := s.affectedForWorkflowTask(ctx, task)
 	if err != nil {
 		return nil, "", err
 	}
@@ -252,35 +299,41 @@ func (s *Service) issueForFailedJob(ctx context.Context, job database.Job) (*Iss
 		Impact:     impactForReason(reason),
 		Affected:   refs,
 		TechnicalDetail: TechnicalDetail{
-			JobKind:      job.Kind,
-			JobStatus:    job.Status,
-			PayloadJSON:  job.PayloadJSON,
-			ErrorMessage: job.ErrorMessage,
+			JobKind:      task.TaskType,
+			JobStatus:    task.Status,
+			PayloadJSON:  task.PayloadJSON,
+			ErrorMessage: task.ErrorMessage,
 		},
 	}
 	issue.Title, issue.Message = copyForReason(reason, refs)
-	issue.Actions = s.actionsForIssue(reason, refs, job)
+	issue.Actions = s.actionsForIssue(reason, refs, task)
 	if err := s.addAffectedCounts(ctx, &issue); err != nil {
 		return nil, "", err
 	}
-	key := groupingKey(reason, refs, job)
+	key := groupingKey(reason, refs, task)
 	issue.ID = issueID(key)
 	return &issue, key, nil
 }
 
-func classifyJobFailure(job database.Job) (string, string) {
-	message := strings.ToLower(job.ErrorMessage)
+func classifyWorkflowFailure(task database.WorkflowTask) (string, string) {
+	message := strings.ToLower(task.ErrorMessage)
 	if strings.Contains(message, "captcha_invalid") || strings.Contains(message, "captcha_token expired") {
 		return ReasonStorageAuthExpired, SeverityBlocking
 	}
 	return ReasonJobFailedUnknown, SeverityError
 }
 
-func (s *Service) affectedForJob(ctx context.Context, job database.Job) (Affected, error) {
+func (s *Service) affectedForWorkflowTask(ctx context.Context, task database.WorkflowTask) (Affected, error) {
 	var payload map[string]any
-	_ = json.Unmarshal([]byte(job.PayloadJSON), &payload)
+	_ = json.Unmarshal([]byte(task.PayloadJSON), &payload)
 	libraryID := uintFromPayload(payload, "library_id")
 	fileID := uintFromPayload(payload, "inventory_file_id")
+	if fileID == 0 {
+		fileID = firstUintFromPayloadArray(payload, "file_ids")
+	}
+	if libraryID == 0 {
+		libraryID = task.LibraryID
+	}
 	if libraryID == 0 && fileID > 0 {
 		var file database.InventoryFile
 		if err := s.db.WithContext(ctx).First(&file, fileID).Error; err == nil {
@@ -297,7 +350,7 @@ func (s *Service) affectedForJob(ctx context.Context, job database.Job) (Affecte
 		}
 	}
 	sourceIDs := map[uint]struct{}{}
-	refs := Affected{Jobs: []JobRef{jobRef(job)}}
+	refs := Affected{Jobs: []JobRef{workflowTaskRef(task)}}
 	for _, record := range libraries {
 		refs.Libraries = append(refs.Libraries, libraryRef(record))
 		if record.MediaSourceID > 0 {
@@ -335,23 +388,18 @@ func (s *Service) addAffectedCounts(ctx context.Context, issue *Issue) error {
 	return s.db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id IN ?", libraryIDs).Count(&issue.Impact.AffectedFiles).Error
 }
 
-func (s *Service) issueResolvedAfterFailure(ctx context.Context, failedJob database.Job, issue *Issue) (bool, error) {
+func (s *Service) issueResolvedAfterFailure(ctx context.Context, failedTask database.WorkflowTask, issue *Issue) (bool, error) {
 	if issue.ReasonCode != ReasonStorageAuthExpired || len(issue.Affected.Libraries) == 0 {
 		return false, nil
 	}
 	if len(issue.Affected.MediaSources) > 0 {
 		validatedSources := 0
 		for _, sourceRef := range issue.Affected.MediaSources {
-			var count int64
-			if err := s.db.WithContext(ctx).Model(&database.Job{}).
-				Where("status = ?", jobs.StatusCompleted).
-				Where("kind = ?", JobKindValidateMediaSource).
-				Where("updated_at > ?", failedJob.UpdatedAt).
-				Where("payload_json LIKE ?", `%"media_source_id":`+fmt.Sprint(sourceRef.ID)+`%`).
-				Count(&count).Error; err != nil {
+			validatedAt, err := s.validationTime(ctx, sourceRef.ID)
+			if err != nil {
 				return false, err
 			}
-			if count == 0 {
+			if validatedAt == nil || !validatedAt.After(failedTask.UpdatedAt) {
 				continue
 			}
 			validatedSources++
@@ -362,11 +410,10 @@ func (s *Service) issueResolvedAfterFailure(ctx context.Context, failedJob datab
 	}
 	for _, libraryRef := range issue.Affected.Libraries {
 		var count int64
-		if err := s.db.WithContext(ctx).Model(&database.Job{}).
-			Where("status = ?", jobs.StatusCompleted).
-			Where("kind IN ?", []string{library.JobKindSyncLibrary, library.JobKindTargetedRefresh}).
-			Where("updated_at > ?", failedJob.UpdatedAt).
-			Where("payload_json LIKE ?", `%"library_id":`+fmt.Sprint(libraryRef.ID)+`%`).
+		if err := s.db.WithContext(ctx).Model(&database.WorkflowRun{}).
+			Where("status = ?", workflow.RunStatusCompleted).
+			Where("updated_at > ?", failedTask.UpdatedAt).
+			Where("library_id = ?", libraryRef.ID).
 			Count(&count).Error; err != nil {
 			return false, err
 		}
@@ -377,8 +424,8 @@ func (s *Service) issueResolvedAfterFailure(ctx context.Context, failedJob datab
 	return true, nil
 }
 
-func (s *Service) actionsForIssue(reason string, refs Affected, job database.Job) []Action {
-	actions := []Action{{Type: ActionViewJob, Label: "查看任务", Description: "查看失败任务的原始错误。", JobID: job.ID}, {Type: ActionIgnoreIssue, Label: "忽略", Description: "不再显示这个健康问题。"}}
+func (s *Service) actionsForIssue(reason string, refs Affected, task database.WorkflowTask) []Action {
+	actions := []Action{{Type: ActionViewJob, Label: "查看任务", Description: "查看失败 workflow task 的原始错误。", JobID: task.ID}, {Type: ActionIgnoreIssue, Label: "忽略", Description: "不再显示这个健康问题。"}}
 	if reason == ReasonStorageAuthExpired {
 		if len(refs.MediaSources) > 0 {
 			source := refs.MediaSources[0]
@@ -404,23 +451,23 @@ type issueBuilder struct {
 	issue Issue
 }
 
-func (b *issueBuilder) addJob(job database.Job) {
-	ref := jobRef(job)
+func (b *issueBuilder) addWorkflowTask(task database.WorkflowTask) {
+	ref := workflowTaskRef(task)
 	if !containsJob(b.issue.Affected.Jobs, ref.ID) {
 		b.issue.Affected.Jobs = append(b.issue.Affected.Jobs, ref)
 	}
-	if b.issue.FirstSeenAt == nil || job.CreatedAt.Before(*b.issue.FirstSeenAt) {
-		created := job.CreatedAt
+	if b.issue.FirstSeenAt == nil || task.CreatedAt.Before(*b.issue.FirstSeenAt) {
+		created := task.CreatedAt
 		b.issue.FirstSeenAt = &created
 	}
-	if b.issue.LastSeenAt == nil || job.UpdatedAt.After(*b.issue.LastSeenAt) {
-		updated := job.UpdatedAt
+	if b.issue.LastSeenAt == nil || task.UpdatedAt.After(*b.issue.LastSeenAt) {
+		updated := task.UpdatedAt
 		b.issue.LastSeenAt = &updated
-		b.issue.LatestJobID = job.ID
-		b.issue.TechnicalDetail.JobKind = job.Kind
-		b.issue.TechnicalDetail.JobStatus = job.Status
-		b.issue.TechnicalDetail.PayloadJSON = job.PayloadJSON
-		b.issue.TechnicalDetail.ErrorMessage = job.ErrorMessage
+		b.issue.LatestJobID = task.ID
+		b.issue.TechnicalDetail.JobKind = task.TaskType
+		b.issue.TechnicalDetail.JobStatus = task.Status
+		b.issue.TechnicalDetail.PayloadJSON = task.PayloadJSON
+		b.issue.TechnicalDetail.ErrorMessage = task.ErrorMessage
 	}
 }
 
@@ -460,7 +507,7 @@ func issueScope(refs Affected) string {
 	return ScopeGlobal
 }
 
-func groupingKey(reason string, refs Affected, job database.Job) string {
+func groupingKey(reason string, refs Affected, task database.WorkflowTask) string {
 	parts := []string{reason, issueScope(refs)}
 	if len(refs.MediaSources) > 0 {
 		parts = append(parts, fmt.Sprintf("source:%d", refs.MediaSources[0].ID))
@@ -476,7 +523,7 @@ func groupingKey(reason string, refs Affected, job database.Job) string {
 		}
 	}
 	if len(parts) == 2 {
-		parts = append(parts, fmt.Sprintf("job:%s", job.Kind))
+		parts = append(parts, fmt.Sprintf("task:%s", task.TaskType))
 	}
 	return strings.Join(parts, ":")
 }
@@ -517,6 +564,39 @@ func uintFromPayload(payload map[string]any, key string) uint {
 	return 0
 }
 
+func firstUintFromPayloadArray(payload map[string]any, key string) uint {
+	value, ok := payload[key]
+	if !ok {
+		return 0
+	}
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return 0
+	}
+	if typed, ok := items[0].(float64); ok && typed > 0 {
+		return uint(typed)
+	}
+	return 0
+}
+
+func (s *Service) validationTime(ctx context.Context, mediaSourceID uint) (*time.Time, error) {
+	var value string
+	if err := s.db.WithContext(ctx).Model(&database.SystemSetting{}).
+		Where("category = ? AND key = ?", healthSettingsCategory, fmt.Sprintf("media_source_%d_validated_at", mediaSourceID)).
+		Select("value").
+		Scan(&value).Error; err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
 func (s *Service) mediaSourceRef(source database.MediaSource) MediaSourceRef {
 	ref := MediaSourceRef{ID: source.ID, Name: source.Name, Provider: source.Provider, RootPath: source.RootPath}
 	if strings.EqualFold(source.Provider, "openlist") {
@@ -542,6 +622,10 @@ func libraryRef(record database.Library) LibraryRef {
 
 func jobRef(job database.Job) JobRef {
 	return JobRef{ID: job.ID, Kind: job.Kind, Status: job.Status, Attempts: job.Attempts, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, FinishedAt: job.FinishedAt, PayloadJSON: job.PayloadJSON}
+}
+
+func workflowTaskRef(task database.WorkflowTask) JobRef {
+	return JobRef{ID: task.ID, Kind: task.TaskType, Status: task.Status, Attempts: task.Attempts, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt, FinishedAt: task.FinishedAt, PayloadJSON: task.PayloadJSON}
 }
 
 func containsJob(jobs []JobRef, id uint) bool {

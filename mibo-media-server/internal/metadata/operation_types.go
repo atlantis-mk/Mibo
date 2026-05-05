@@ -3,10 +3,15 @@ package metadata
 import "github.com/atlan/mibo-media-server/internal/settings"
 
 const (
-	OperationTypeMatch       = "match"
-	OperationTypeRefetch     = "refetch"
-	OperationTypeManualApply = "manual_apply"
-	OperationTypeLocalApply  = "local_apply"
+	OperationTypeMatch                              = "match"
+	OperationTypeRefetch                            = "refetch"
+	OperationTypeManualApply                        = "manual_apply"
+	OperationTypeLocalApply                         = "local_apply"
+	OperationTypeGovernanceEpisodeNumbering         = "governance_episode_numbering"
+	OperationTypeGovernanceClassificationRule       = "governance_classification_rule"
+	OperationTypeGovernanceClassificationCorrection = "governance_classification_correction"
+	OperationTypeGovernanceAssetLink                = "governance_asset_link"
+	OperationTypeGovernanceAssetUnlink              = "governance_asset_unlink"
 
 	OperationStatusApplied     = "applied"
 	OperationStatusNoCandidate = "no_candidate"

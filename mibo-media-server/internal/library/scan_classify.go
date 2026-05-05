@@ -19,6 +19,7 @@ const (
 )
 
 func classifyMediaFile(libraryType string, libraryRoot string, object storage.Object) classifiedMedia {
+	libraryType = effectiveVideoLibraryType(libraryType)
 	filenameModel := extractFilenameSignalModel(object.Path)
 	fileName := path.Base(object.Path)
 	ext := path.Ext(fileName)

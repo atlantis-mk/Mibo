@@ -166,6 +166,36 @@ func TestResolveDirectoryShapeDoesNotTreatMovieCodecNumbersAsEpisodeEvidence(t *
 	}
 }
 
+func TestClassifyMediaFileWithDirectorySummaryKeepsNumericEpisodeWithQuality(t *testing.T) {
+	t.Parallel()
+
+	snapshot := scanDirectorySnapshot{
+		Path: "/My Pack/电视剧/我的山与海.2160p",
+	}
+	for episode := 1; episode <= 30; episode++ {
+		snapshot.Objects = append(snapshot.Objects, storage.Object{Path: fmt.Sprintf("/My Pack/电视剧/我的山与海.2160p/%02d.2160p.HD国语中字无水印[最新电影www.5266ys.com].mkv", episode)})
+	}
+	decision := resolveDirectoryShape("mixed", "/My Pack", snapshot)
+	classified := classifyMediaFileWithDirectorySummary("mixed", "/My Pack", snapshot.Objects[24], snapshot.Path, decision, snapshot, buildScanDirectorySummary("mixed", "/My Pack", snapshot))
+	if classified.Type != "episode" {
+		t.Fatalf("expected numeric quality filename to classify as episode, got %#v decision=%#v", classified, decision)
+	}
+	if classified.SeriesTitle != "我的山与海" {
+		t.Fatalf("expected clean series title, got %q", classified.SeriesTitle)
+	}
+	if classified.SeasonNumber == nil || *classified.SeasonNumber != 1 || classified.EpisodeNumber == nil || *classified.EpisodeNumber != 25 {
+		season := 0
+		if classified.SeasonNumber != nil {
+			season = *classified.SeasonNumber
+		}
+		episode := 0
+		if classified.EpisodeNumber != nil {
+			episode = *classified.EpisodeNumber
+		}
+		t.Fatalf("expected S01E25, got S%02dE%02d", season, episode)
+	}
+}
+
 func TestClassifyMediaFileRecognizesEmbeddedEpisodeToken(t *testing.T) {
 	t.Parallel()
 
@@ -464,12 +494,12 @@ func TestExtraTypeSignalUsesBoundedTokens(t *testing.T) {
 	cases := map[string]string{
 		"trailer":               "trailer",
 		"teaser":                "trailer",
-		"预告片":                  "trailer",
+		"预告片":                   "trailer",
 		"behind-the-scenes":     "behind_the_scenes",
 		"幕后花絮":                  "behind_the_scenes",
 		"sample":                "sample",
 		"featurette":            "featurette",
-		"特典":                     "featurette",
+		"特典":                    "featurette",
 		"interview":             "interview",
 		"PV01":                  "preview",
 		"先导预览":                  "preview",
@@ -493,10 +523,10 @@ func TestVideoFileRoleSignalUsesPathSegments(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"/library/Movie A/Trailers/Movie A Teaser.mkv": "trailer",
-		"/library/Show/Season 1/PV01.mp4":              "preview",
+		"/library/Movie A/Trailers/Movie A Teaser.mkv":  "trailer",
+		"/library/Show/Season 1/PV01.mp4":               "preview",
 		"/library/Movie A/extras/behind the scenes.mkv": "behind_the_scenes",
-		"/library/Movie A/Movie A 2024.mkv":            "",
+		"/library/Movie A/Movie A 2024.mkv":             "",
 	}
 	for input, expected := range cases {
 		if actual := videoFileRoleSignal(input); actual != expected {

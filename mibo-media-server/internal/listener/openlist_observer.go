@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/storageindex"
 )
@@ -20,13 +21,13 @@ func (s *Service) StartOpenListObserver(ctx context.Context) {
 	}
 	ticker := time.NewTicker(openListObserverPollInterval)
 	defer ticker.Stop()
-	s.pollOpenListLibraries(ctx, false)
+	s.pollOpenListLibraries(ctx, true)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.pollOpenListLibraries(ctx, false)
+			s.pollOpenListLibraries(ctx, true)
 		}
 	}
 }
@@ -61,7 +62,7 @@ func (s *Service) PollLibraryWithProvider(ctx context.Context, libraryRecord dat
 	if err != nil {
 		return err
 	}
-	if _, err := s.index.ObserveTree(ctx, storageindex.ObserveTreeInput{LibraryID: libraryRecord.ID, StorageProvider: provider.Name(), RootPath: libraryRecord.RootPath, Provider: provider, Refresh: refresh}); err != nil {
+	if _, err := s.index.ObserveTree(ctx, storageindex.ObserveTreeInput{LibraryID: libraryRecord.ID, StorageProvider: provider.Name(), RootPath: libraryRecord.RootPath, Provider: provider, Refresh: refresh, SkipUnchanged: true}); err != nil {
 		return err
 	}
 	current, err := s.index.ListScoped(ctx, libraryRecord.ID, libraryRecord.RootPath)
@@ -77,12 +78,42 @@ func (s *Service) PollLibraryWithProvider(ctx context.Context, libraryRecord dat
 	return nil
 }
 
+func (s *Service) RefreshLibraryChanges(ctx context.Context, libraryID uint, refresh bool) error {
+	if s == nil || s.db == nil || s.storage == nil {
+		return fmt.Errorf("listener storage refresh unavailable")
+	}
+	if s.library == nil {
+		return fmt.Errorf("library service unavailable")
+	}
+	config, err := s.library.EffectiveLibraryConfig(ctx, libraryID)
+	if err != nil {
+		return err
+	}
+	for _, pathRecord := range config.Paths {
+		var source database.MediaSource
+		if err := s.db.WithContext(ctx).First(&source, pathRecord.MediaSourceID).Error; err != nil {
+			return err
+		}
+		provider, err := s.storage.BuildForSource(source)
+		if err != nil {
+			return err
+		}
+		libraryForPath := config.Library
+		libraryForPath.MediaSourceID = pathRecord.MediaSourceID
+		libraryForPath.RootPath = pathRecord.RootPath
+		if err := s.PollLibraryWithProvider(ctx, libraryForPath, provider, refresh); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) enqueueRefreshPlan(ctx context.Context, plan storageindex.RefreshPlan) error {
 	if s.library == nil {
 		return fmt.Errorf("library service unavailable")
 	}
 	if plan.FullSync {
-		_, err := s.library.QueueLibraryScan(ctx, plan.LibraryID)
+		_, err := s.library.QueueLibraryScanWithReason(ctx, plan.LibraryID, library.WorkflowReasonStorageRefresh)
 		return err
 	}
 	_, err := s.library.QueueTargetedRefresh(ctx, plan.LibraryID, plan.RootPath, defaultString(plan.Reason, "storage_index_diff"))

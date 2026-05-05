@@ -3,11 +3,14 @@ package catalog
 import (
 	"context"
 	"errors"
+	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -31,18 +34,60 @@ func (s *Service) RefreshItemProjection(ctx context.Context, itemID uint) error 
 	if itemID == 0 {
 		return errors.New("item id is required")
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: itemID})
-	})
+	}); err != nil {
+		return err
+	}
+	s.markProjectionCurrent(ctx, itemID)
+	return nil
 }
 
 func (s *Service) RefreshLibraryProjection(ctx context.Context, libraryID uint, rootPath string) error {
 	if libraryID == 0 {
 		return errors.New("library id is required")
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{LibraryID: libraryID, RootPath: strings.TrimSpace(rootPath)})
-	})
+	}); err != nil {
+		return err
+	}
+	s.markProjectionLibraryCurrent(ctx, libraryID, rootPath)
+	return nil
+}
+
+func (s *Service) markProjectionCurrent(ctx context.Context, itemID uint) {
+	if s.ingest == nil || itemID == 0 {
+		return
+	}
+	if _, err := s.ingest.MarkCatalogItemDirty(ctx, itemID, "projection_refreshed"); err != nil {
+		log.Printf("catalog: mark catalog item %d ingest dirty after projection refresh: %v", itemID, err)
+	}
+	var item database.CatalogItem
+	if err := s.db.WithContext(ctx).Select("id", "library_id").First(&item, itemID).Error; err != nil {
+		return
+	}
+	if _, err := s.ingest.AppendEvent(ctx, database.IngestEvent{UnitKey: "catalog_item:" + strconv.FormatUint(uint64(itemID), 10), LibraryID: item.LibraryID, CatalogItemID: &itemID, ConditionType: ingest.ConditionProjectionCurrent, EventType: ingest.EventConditionChanged, Status: ingest.ConditionStatusTrue, Reason: "projection_refreshed", Message: "Catalog projection is current"}); err != nil {
+		log.Printf("catalog: append projection refresh event: %v", err)
+	}
+}
+
+func (s *Service) markProjectionLibraryCurrent(ctx context.Context, libraryID uint, rootPath string) {
+	if s.ingest == nil || libraryID == 0 {
+		return
+	}
+	var itemIDs []uint
+	query := s.db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id = ? AND deleted_at IS NULL", libraryID)
+	if strings.TrimSpace(rootPath) != "" {
+		query = query.Where("path = ? OR path LIKE ?", strings.TrimSpace(rootPath), strings.TrimRight(strings.TrimSpace(rootPath), "/")+"/%")
+	}
+	if err := query.Order("id asc").Pluck("id", &itemIDs).Error; err != nil {
+		log.Printf("catalog: load projection library items: %v", err)
+		return
+	}
+	for _, itemID := range itemIDs {
+		s.markProjectionCurrent(ctx, itemID)
+	}
 }
 
 func (s *Service) refreshProjectionWithDB(ctx context.Context, db *gorm.DB, request ProjectionRefreshRequest) error {

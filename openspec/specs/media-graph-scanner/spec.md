@@ -20,7 +20,7 @@ The system SHALL collect storage facts independently from catalog content-class 
 - **THEN** the system MUST preserve inventory facts and content-class evidence even when no deep catalog projection exists yet
 
 ### Requirement: Scanner builds media graph candidates before catalog writes
-The system SHALL group scanned files, current-directory siblings, sidecars, and learned classification rules into media graph candidates before writing catalog items, and SHALL treat directory shape as evidence rather than a final semantic type.
+The system SHALL group scanned files, current-directory siblings, sidecars, filename-derived signals, cached directory summaries, and learned classification rules into media graph candidates before writing catalog items, and SHALL treat directory shape as evidence rather than a final semantic type.
 
 #### Scenario: Directory contains multiple episode-like videos
 - **WHEN** a source directory contains multiple likely main videos that resolve to explicit or inferred episode slots
@@ -34,8 +34,12 @@ The system SHALL group scanned files, current-directory siblings, sidecars, and 
 - **WHEN** a source directory contains multiple likely main videos with distinct movie-like title or year evidence and no episode-sequence evidence
 - **THEN** the scanner MUST preserve separate movie candidates instead of forcing the directory into one movie, one series, or one mixed semantic type
 
+#### Scenario: Filename signals include release metadata
+- **WHEN** scanned files include filename-derived release hints such as quality, source, codec, audio, subtitle, edition, or release group
+- **THEN** the scanner MUST use those hints as candidate evidence for grouping and title cleanup without treating them as authoritative technical facts
+
 ### Requirement: Resolver decisions expose evidence and confidence
-The system SHALL represent scanner grouping and classification as resolver decisions with candidate type, role, confidence, alternatives, evidence, review state, and reason text.
+The system SHALL represent scanner grouping and classification as resolver decisions with candidate type, role, confidence, alternatives, filename-derived signal evidence, directory summary evidence, review state, and reason text.
 
 #### Scenario: Series candidate is inferred from a flat episode folder
 - **WHEN** a resolver groups a flat source-first folder into a series candidate
@@ -48,6 +52,10 @@ The system SHALL represent scanner grouping and classification as resolver decis
 #### Scenario: Attachment is detected
 - **WHEN** a video file is classified as trailer, extra, sample, preview, or another non-main role
 - **THEN** the resolver decision MUST expose the attachment role and evidence so catalog projection can link it to a likely parent work without treating it as a standalone movie or episode
+
+#### Scenario: Audio token prevents episode false positive
+- **WHEN** a resolver rejects weak episode inference because a numeric-looking token is classified as filename-derived audio evidence
+- **THEN** the decision MUST expose that anti-misclassification evidence in its reason or evidence summary
 
 ### Requirement: Catalog items use durable scanner identities
 The system SHALL reconcile scanner-created catalog items using durable identities that are independent of display title and independent of user-selected library type.
@@ -142,20 +150,25 @@ The system SHALL refresh catalog projections after hard deleting missing media r
 - **AND** subsequent browse and search queries MUST NOT return deleted records
 
 ### Requirement: Scanner completes core synchronization before enrichment
-The system SHALL complete library synchronization after storage refresh, catalog and inventory reconciliation, missing-file marking, availability updates, and projection refresh scheduling without requiring metadata matching or media probing to finish first.
+The system SHALL complete library synchronization after storage refresh, inventory reconciliation, skeleton visibility publication for newly discovered supported videos, missing-file marking or scheduling, availability updates, and projection refresh scheduling without requiring final catalog classification, metadata matching, media probing, artwork processing, or sidecar metadata parsing to finish first.
 
 #### Scenario: Manual scan encounters deleted files
 - **WHEN** a manual `sync_library` job scans a library where previously indexed source files no longer appear in refreshed storage listings
-- **THEN** the job MUST mark the missing inventory, asset, and catalog availability state before completing the scan job
+- **THEN** the job MUST mark or schedule reconciliation of the missing inventory, asset, and catalog availability state before completing the scan job
 - **AND** the job MUST NOT wait for metadata matching or media probing jobs before the synchronized state can be queried
 
-#### Scenario: Scan creates new catalog and inventory records
-- **WHEN** a scan discovers new supported video files and writes catalog and inventory rows
-- **THEN** the scan job MUST be able to complete after those rows are reconciled and visible through catalog browse APIs
-- **AND** metadata matching and media probing MUST be scheduled as follow-up enrichment work
+#### Scenario: Scan creates new inventory-backed skeleton records
+- **WHEN** a scan discovers new supported video files that pass scan policy and exclusion filters
+- **THEN** the scan job MUST be able to complete after file inventory facts and visible skeleton entries are reconciled or published
+- **AND** final catalog projection, metadata matching, media probing, sidecar parsing, and artwork enrichment MUST be scheduled or processed as follow-up work
+
+#### Scenario: Scan creates final catalog records on the fast path
+- **WHEN** a scan can confidently create or reuse catalog and inventory rows without delaying skeleton ingest
+- **THEN** the system MAY publish the final catalog-backed entry immediately
+- **AND** metadata matching and media probing MUST still be scheduled as follow-up enrichment work
 
 ### Requirement: Post-scan enrichment is scheduled as independent work
-The system SHALL schedule catalog metadata matching and inventory media probing as independent post-scan enrichment jobs that can fail or retry separately from the completed scan.
+The system SHALL schedule catalog classification refinement, catalog metadata matching, inventory media probing, sidecar metadata parsing, artwork processing, and projection refresh as independent post-scan work that can fail or retry separately from the completed scan.
 
 #### Scenario: Metadata provider is unavailable after scan
 - **WHEN** post-scan catalog metadata matching fails because a metadata provider is unavailable
@@ -165,6 +178,11 @@ The system SHALL schedule catalog metadata matching and inventory media probing 
 #### Scenario: Media probing backlog exists
 - **WHEN** a scan schedules media probing for many inventory files
 - **THEN** the system MUST process probing as background enrichment without blocking future `sync_library` jobs from starting
+
+#### Scenario: Classification refinement fails after skeleton ingest
+- **WHEN** asynchronous classification or catalog materialization fails for an inventory-backed discovered entry
+- **THEN** the discovered entry MUST remain visible with a failure or review-required maturity state
+- **AND** the failed refinement MUST NOT invalidate the persisted inventory facts
 
 ### Requirement: Synchronization jobs have queue priority over enrichment jobs
 The system SHALL prioritize synchronization jobs over metadata matching and media probing enrichment jobs when claiming available work from the job queue.

@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -79,15 +80,40 @@ func TestUpsertFileRefreshesInventoryRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert first file: %v", err)
 	}
-	second, err := svc.UpsertFile(ctx, inventory.UpsertFileInput{LibraryID: 1, StorageProvider: "local", StoragePath: "/movies/A.mkv", SizeBytes: 200, Container: "mkv"})
+	second, err := svc.UpsertFile(ctx, inventory.UpsertFileInput{LibraryID: 1, StorageProvider: "local", StoragePath: "/movies/A.mkv", ThumbnailURL: "https://cdn.example.test/thumb.jpg", SizeBytes: 200, Container: "mkv"})
 	if err != nil {
 		t.Fatalf("upsert second file: %v", err)
 	}
 	if first.ID != second.ID {
 		t.Fatalf("expected same inventory file id, got %d and %d", first.ID, second.ID)
 	}
-	if second.SizeBytes != 200 || second.Container != "mkv" {
+	if second.SizeBytes != 200 || second.Container != "mkv" || second.ThumbnailURL != "https://cdn.example.test/thumb.jpg" {
 		t.Fatalf("expected refreshed file metadata, got %#v", second)
+	}
+}
+
+func TestBulkUpsertFilesHandlesSQLiteVariableLimit(t *testing.T) {
+	db, ctx := newTestDB(t)
+	svc := inventory.NewService(db)
+
+	inputs := make([]inventory.UpsertFileInput, 0, 1200)
+	for i := 0; i < 1200; i++ {
+		inputs = append(inputs, inventory.UpsertFileInput{
+			LibraryID:         1,
+			StorageProvider:   "local",
+			StoragePath:       fmt.Sprintf("/movies/Movie %04d.mkv", i),
+			StableIdentityKey: fmt.Sprintf("local:/movies/Movie %04d.mkv", i),
+			SizeBytes:         int64(1000 + i),
+			Container:         "mkv",
+		})
+	}
+
+	result, err := svc.BulkUpsertFiles(ctx, inputs)
+	if err != nil {
+		t.Fatalf("bulk upsert files: %v", err)
+	}
+	if len(result.FilesByStoragePath) != len(inputs) {
+		t.Fatalf("expected %d files in result, got %d", len(inputs), len(result.FilesByStoragePath))
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/progress"
@@ -60,7 +59,7 @@ func TestLibraryPathAndPolicyHTTP(t *testing.T) {
 		t.Fatalf("expected disabled path, got %#v", disabled)
 	}
 
-	policyReq := httptest.NewRequest(http.MethodPut, "/api/v1/libraries/"+uintString(libraryRecord.ID)+"/policies/scan", strings.NewReader(`{"scanner_enabled":true,"realtime_monitor_enabled":false,"scheduled_refresh_enabled":true,"refresh_interval_hours":12,"ignore_hidden_files":true,"ignore_file_extensions":[".txt"],"min_file_size_bytes":1024,"sample_ignore_size_bytes":100,"configurable_exclusion_rules":true}`))
+	policyReq := httptest.NewRequest(http.MethodPut, "/api/v1/libraries/"+uintString(libraryRecord.ID)+"/policies/scan", strings.NewReader(`{"scanner_enabled":true,"realtime_monitor_enabled":false,"scheduled_refresh_enabled":true,"refresh_interval_hours":12,"ignore_hidden_files":true,"ignore_file_extensions":[".txt"],"min_file_size_bytes":1024,"sample_ignore_size_bytes":100,"inventory_probe_batch_enabled":false,"configurable_exclusion_rules":true}`))
 	policyReq.Header.Set("Content-Type", "application/json")
 	policyReq.Header.Set("Authorization", authHeader)
 	policyRec := httptest.NewRecorder()
@@ -69,7 +68,7 @@ func TestLibraryPathAndPolicyHTTP(t *testing.T) {
 		t.Fatalf("expected update policy 200, got %d: %s", policyRec.Code, policyRec.Body.String())
 	}
 	policy := decodeLibraryScanPolicyView(t, policyRec)
-	if policy.RealtimeMonitorEnabled || policy.RefreshIntervalHours != 12 || policy.MinFileSizeBytes != 1024 || len(policy.IgnoreFileExtensions) != 1 || policy.IgnoreFileExtensions[0] != ".txt" {
+	if policy.RealtimeMonitorEnabled || policy.RefreshIntervalHours != 12 || policy.MinFileSizeBytes != 1024 || policy.InventoryProbeBatchEnabled || len(policy.IgnoreFileExtensions) != 1 || policy.IgnoreFileExtensions[0] != ".txt" {
 		t.Fatalf("unexpected scan policy: %#v", policy)
 	}
 }
@@ -99,21 +98,20 @@ func TestLibraryPathHTTPRejectsInvalidPath(t *testing.T) {
 func newLibraryPolicyTestServer(t *testing.T) (http.Handler, *auth.Service, *gorm.DB, string) {
 	t.Helper()
 	root := t.TempDir()
-	cfg := config.Config{HTTP: config.HTTPConfig{Addr: ":8080"}, Storage: config.StorageConfig{Provider: "local"}, Local: config.LocalStorageConfig{RootPath: root}, Database: config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")}, Worker: config.WorkerConfig{Enabled: true}}
+	cfg := config.Config{HTTP: config.HTTPConfig{Addr: ":8080"}, Local: config.LocalStorageConfig{RootPath: root}, Database: config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")}, Worker: config.WorkerConfig{Enabled: true}}
 	db, err := database.Open(cfg.Database)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
 	registry := providers.NewRegistry(cfg)
 	authSvc := auth.NewService(db)
-	jobsSvc := jobs.NewService(db)
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	librarySvc := library.NewService(cfg, db, registry, nil)
 	searchSvc := search.NewService(db, librarySvc)
 	progressSvc := progress.NewService(db, searchSvc)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	catalogSvc := catalog.NewService(db)
 	playbackSvc := playback.NewService(db, registry)
-	handler := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc)
+	handler := New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc)
 	return handler, authSvc, db, root
 }
 

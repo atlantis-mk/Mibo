@@ -8,7 +8,6 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/schedule"
 	"gorm.io/gorm"
@@ -96,7 +95,7 @@ func newScheduledLibraryService(t *testing.T) (*gorm.DB, *Service, database.Libr
 		t.Fatalf("open database: %v", err)
 	}
 	cfg := config.Config{Local: config.LocalStorageConfig{RootPath: mediaRoot}}
-	svc := NewService(cfg, db, providers.NewRegistry(cfg), jobs.NewService(db))
+	svc := NewService(cfg, db, providers.NewRegistry(cfg), nil)
 
 	ctx := context.Background()
 	firstSource := database.MediaSource{Name: "LocalA", Provider: "local", RootPath: firstRoot, StorageRef: firstRoot}

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
-	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/metadata"
 	"github.com/atlan/mibo-media-server/internal/playback"
@@ -51,6 +50,32 @@ type catalogGovernanceClassificationRuleInput struct {
 	SeriesTitle     string `json:"series_title"`
 	SeasonNumber    *int   `json:"season_number"`
 	NumberingSource string `json:"numbering_source"`
+}
+
+type catalogGovernanceClassificationCorrectionInput struct {
+	Action   string `json:"action"`
+	RootPath string `json:"root_path"`
+	Title    string `json:"title"`
+}
+
+type manualSeriesRestructureInput struct {
+	RootPath        string                            `json:"root_path"`
+	SeriesTitle     string                            `json:"series_title"`
+	SeasonNumber    *int                              `json:"season_number"`
+	MigrateMetadata bool                              `json:"migrate_metadata"`
+	EpisodeMappings []manualSeriesEpisodeMappingInput `json:"episode_mappings"`
+}
+
+type manualSeriesEpisodeMappingInput struct {
+	SourceItemID     uint   `json:"source_item_id"`
+	AssetID          uint   `json:"asset_id"`
+	FileID           uint   `json:"file_id"`
+	StoragePath      string `json:"storage_path"`
+	SeasonNumber     *int   `json:"season_number"`
+	EpisodeNumber    *int   `json:"episode_number"`
+	EpisodeTitle     string `json:"episode_title"`
+	EpisodePath      string `json:"episode_path"`
+	EpisodeNumberEnd *int   `json:"episode_number_end"`
 }
 
 type scanExclusionMarkInput struct {
@@ -314,6 +339,30 @@ func (r *Router) handleGetCatalogPlaybackSource(w http.ResponseWriter, req *http
 	writeJSON(req.Context(), w, http.StatusOK, source)
 }
 
+func (r *Router) handleGetInventoryFilePlaybackSource(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	fileID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	clientProfile, err := parseClientProfileQuery(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	source, err := r.playback.GetInventoryFilePlaybackSource(req.Context(), fileID, clientProfile)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	source.URL = buildPlaybackURL(req, source.URL)
+	writeJSON(req.Context(), w, http.StatusOK, source)
+}
+
 func (r *Router) handleGetCatalogAssetLink(w http.ResponseWriter, req *http.Request) {
 	assetID, err := parseUintPathValue(req, "id")
 	if err != nil {
@@ -358,8 +407,8 @@ func (r *Router) handleUpdateCatalogGovernanceField(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
 		return
 	}
 	itemID, err := parseUintPathValue(req, "id")
@@ -376,15 +425,15 @@ func (r *Router) handleUpdateCatalogGovernanceField(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("field_key is required"))
 		return
 	}
-	if _, _, err := r.catalog.ApplyField(req.Context(), catalog.ApplyFieldInput{
-		ItemID:         itemID,
+	operation, err := r.metadata.ApplyCatalogGovernanceFieldOperation(req.Context(), itemID, metadata.ApplyGovernanceFieldInput{
 		FieldKey:       input.FieldKey,
 		Value:          input.Value,
 		Lock:           input.Lock,
 		LockReason:     input.LockReason,
 		EditedByUserID: &user.ID,
 		Force:          input.Force,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
@@ -393,17 +442,19 @@ func (r *Router) handleUpdateCatalogGovernanceField(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
 
 func (r *Router) handleSelectCatalogGovernanceImage(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
+	user, err := r.requireUser(req)
+	if err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
 		return
 	}
 	itemID, err := parseUintPathValue(req, "id")
@@ -416,7 +467,8 @@ func (r *Router) handleSelectCatalogGovernanceImage(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	if err := r.catalog.SelectImage(req.Context(), itemID, input.ImageType, input.URL); err != nil {
+	operation, err := r.metadata.SelectCatalogGovernanceImageOperation(req.Context(), itemID, metadata.SelectGovernanceImageInput{ImageType: input.ImageType, URL: input.URL, EditedByUserID: &user.ID})
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
@@ -425,6 +477,7 @@ func (r *Router) handleSelectCatalogGovernanceImage(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -434,8 +487,8 @@ func (r *Router) handleCorrectCatalogEpisodeNumbering(w http.ResponseWriter, req
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
 		return
 	}
 	episodeID, err := parseUintPathValue(req, "id")
@@ -448,8 +501,7 @@ func (r *Router) handleCorrectCatalogEpisodeNumbering(w http.ResponseWriter, req
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	updated, err := r.catalog.CorrectEpisodeNumbering(req.Context(), catalog.CorrectEpisodeNumberingInput{
-		EpisodeID:        episodeID,
+	operation, err := r.metadata.CorrectCatalogGovernanceEpisodeNumberingOperation(req.Context(), episodeID, metadata.CorrectGovernanceEpisodeNumberingInput{
 		SeasonNumber:     input.SeasonNumber,
 		EpisodeNumber:    input.EpisodeNumber,
 		EpisodeNumberEnd: input.EpisodeNumberEnd,
@@ -458,11 +510,12 @@ func (r *Router) handleCorrectCatalogEpisodeNumbering(w http.ResponseWriter, req
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), updated.ID)
+	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), operation.TargetItemID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -473,16 +526,11 @@ func (r *Router) handleCreateCatalogGovernanceClassificationRule(w http.Response
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
 		return
 	}
 	itemID, err := parseUintPathValue(req, "id")
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), itemID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
@@ -493,8 +541,7 @@ func (r *Router) handleCreateCatalogGovernanceClassificationRule(w http.Response
 		return
 	}
 	createdBy := user.ID
-	if _, err := r.catalog.CreateClassificationRule(req.Context(), catalog.ClassificationRuleInput{
-		LibraryID:       workspace.LibraryID,
+	operation, err := r.metadata.CreateCatalogGovernanceClassificationRuleOperation(req.Context(), itemID, metadata.CreateGovernanceClassificationRuleInput{
 		Name:            input.Name,
 		Description:     input.Description,
 		PathPattern:     input.PathPattern,
@@ -505,17 +552,148 @@ func (r *Router) handleCreateCatalogGovernanceClassificationRule(w http.Response
 		SeasonNumber:    input.SeasonNumber,
 		NumberingSource: input.NumberingSource,
 		CreatedByUserID: &createdBy,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	workspace, err = r.catalog.GetGovernanceWorkspace(req.Context(), itemID)
+	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), itemID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusCreated, workspace)
+}
+
+func (r *Router) handleApplyCatalogGovernanceClassificationCorrection(w http.ResponseWriter, req *http.Request) {
+	if _, err := r.requireUser(req); err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
+		return
+	}
+	itemID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input catalogGovernanceClassificationCorrectionInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	operation, err := r.metadata.ApplyCatalogGovernanceClassificationCorrectionOperation(req.Context(), itemID, metadata.ApplyGovernanceClassificationCorrectionInput{Action: input.Action, RootPath: input.RootPath, Title: input.Title})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), operation.TargetItemID)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, err)
+		return
+	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
+	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
+	writeJSON(req.Context(), w, http.StatusOK, workspace)
+}
+
+func (r *Router) handlePreviewManualSeriesRestructure(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	libraryID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input manualSeriesRestructureInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	createdBy := user.ID
+	result, err := r.catalog.PreviewManualSeriesRestructure(req.Context(), catalog.ManualSeriesRestructureInput{
+		LibraryID:       libraryID,
+		RootPath:        input.RootPath,
+		SeriesTitle:     input.SeriesTitle,
+		SeasonNumber:    input.SeasonNumber,
+		MigrateMetadata: input.MigrateMetadata,
+		EpisodeMappings: manualSeriesEpisodeMappings(input.EpisodeMappings),
+		CreatedByUserID: &createdBy,
+	})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, result)
+}
+
+func (r *Router) handleApplyManualSeriesRestructure(w http.ResponseWriter, req *http.Request) {
+	user, err := r.requireUser(req)
+	if err != nil {
+		writeError(req.Context(), w, http.StatusUnauthorized, err)
+		return
+	}
+	if r.catalog == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+		return
+	}
+	libraryID, err := parseUintPathValue(req, "id")
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	var input manualSeriesRestructureInput
+	if err := decodeJSON(req, &input); err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	createdBy := user.ID
+	result, err := r.catalog.ApplyManualSeriesRestructure(req.Context(), catalog.ManualSeriesRestructureInput{
+		LibraryID:       libraryID,
+		RootPath:        input.RootPath,
+		SeriesTitle:     input.SeriesTitle,
+		SeasonNumber:    input.SeasonNumber,
+		MigrateMetadata: input.MigrateMetadata,
+		EpisodeMappings: manualSeriesEpisodeMappings(input.EpisodeMappings),
+		CreatedByUserID: &createdBy,
+	})
+	if err != nil {
+		writeError(req.Context(), w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(req.Context(), w, http.StatusOK, result)
+}
+
+func manualSeriesEpisodeMappings(inputs []manualSeriesEpisodeMappingInput) []catalog.ManualSeriesEpisodeMappingInput {
+	if len(inputs) == 0 {
+		return nil
+	}
+	mappings := make([]catalog.ManualSeriesEpisodeMappingInput, 0, len(inputs))
+	for _, input := range inputs {
+		mappings = append(mappings, catalog.ManualSeriesEpisodeMappingInput{
+			SourceItemID:     input.SourceItemID,
+			AssetID:          input.AssetID,
+			FileID:           input.FileID,
+			StoragePath:      input.StoragePath,
+			SeasonNumber:     input.SeasonNumber,
+			EpisodeNumber:    input.EpisodeNumber,
+			EpisodeTitle:     input.EpisodeTitle,
+			EpisodePath:      input.EpisodePath,
+			EpisodeNumberEnd: input.EpisodeNumberEnd,
+		})
+	}
+	return mappings
 }
 
 func (r *Router) handleLinkCatalogGovernanceAsset(w http.ResponseWriter, req *http.Request) {
@@ -523,8 +701,8 @@ func (r *Router) handleLinkCatalogGovernanceAsset(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
 		return
 	}
 	workspaceItemID, err := parseUintPathValue(req, "id")
@@ -542,49 +720,25 @@ func (r *Router) handleLinkCatalogGovernanceAsset(w http.ResponseWriter, req *ht
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	allowed, err := r.catalog.IsGovernanceTargetAllowed(req.Context(), workspaceItemID, input.TargetItemID)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	if !allowed {
-		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("target_item_id 必须是当前治理条目或其后代"))
-		return
-	}
-	if input.SourceItemID != nil {
-		allowed, err := r.catalog.IsGovernanceTargetAllowed(req.Context(), workspaceItemID, *input.SourceItemID)
-		if err != nil {
-			writeError(req.Context(), w, http.StatusBadRequest, err)
-			return
-		}
-		if !allowed {
-			writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("source_item_id 必须是当前治理条目或其后代"))
-			return
-		}
-	}
-	if _, err := inventory.NewService(r.db).LinkAssetToItem(req.Context(), inventory.LinkAssetItemInput{
+	operation, err := r.metadata.LinkCatalogGovernanceAssetOperation(req.Context(), workspaceItemID, metadata.LinkGovernanceAssetInput{
 		AssetID:      assetID,
-		ItemID:       input.TargetItemID,
-		Role:         inventory.AssetItemRolePrimary,
+		TargetItemID: input.TargetItemID,
+		SourceItemID: input.SourceItemID,
+		Mode:         input.Mode,
 		SegmentIndex: input.SegmentIndex,
 		StartSeconds: input.StartSeconds,
 		EndSeconds:   input.EndSeconds,
-		Source:       "governance",
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
-	}
-	if strings.EqualFold(strings.TrimSpace(input.Mode), "move") && input.SourceItemID != nil && *input.SourceItemID != input.TargetItemID {
-		if err := inventory.NewService(r.db).UnlinkAssetFromItem(req.Context(), assetID, *input.SourceItemID); err != nil {
-			writeError(req.Context(), w, http.StatusBadRequest, err)
-			return
-		}
 	}
 	workspace, err := r.catalog.GetGovernanceWorkspace(req.Context(), workspaceItemID)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -594,8 +748,8 @@ func (r *Router) handleUnlinkCatalogGovernanceAsset(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusUnauthorized, err)
 		return
 	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
+	if r.catalog == nil || r.metadata == nil {
+		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog metadata service unavailable"))
 		return
 	}
 	workspaceItemID, err := parseUintPathValue(req, "id")
@@ -613,16 +767,8 @@ func (r *Router) handleUnlinkCatalogGovernanceAsset(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	allowed, err := r.catalog.IsGovernanceTargetAllowed(req.Context(), workspaceItemID, targetItemID)
+	operation, err := r.metadata.UnlinkCatalogGovernanceAssetOperation(req.Context(), workspaceItemID, metadata.UnlinkGovernanceAssetInput{AssetID: assetID, TargetItemID: targetItemID})
 	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	if !allowed {
-		writeError(req.Context(), w, http.StatusBadRequest, fmt.Errorf("target_item_id 必须是当前治理条目或其后代"))
-		return
-	}
-	if err := inventory.NewService(r.db).UnlinkAssetFromItem(req.Context(), assetID, targetItemID); err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
@@ -631,6 +777,7 @@ func (r *Router) handleUnlinkCatalogGovernanceAsset(w http.ResponseWriter, req *
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
+	workspace.MetadataOperation = metadata.OperationResponseFromResult(operation)
 	normalizeCatalogGovernanceWorkspaceArtworkURLs(req, &workspace)
 	writeJSON(req.Context(), w, http.StatusOK, workspace)
 }
@@ -778,12 +925,12 @@ func (r *Router) handleQueueInventoryFileProbe(w http.ResponseWriter, req *http.
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	job, err := r.library.QueueInventoryFileProbe(req.Context(), fileID, true)
+	_, err = r.library.QueueInventoryFileProbe(req.Context(), fileID, true)
 	if err != nil {
 		writeError(req.Context(), w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(req.Context(), w, http.StatusAccepted, job)
+	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
 func (r *Router) handleMarkInventoryFileScanExclusion(w http.ResponseWriter, req *http.Request) {

@@ -13,7 +13,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"gorm.io/gorm"
@@ -93,6 +92,33 @@ func TestProbeInventoryFileUpdatesAssetsAndStreams(t *testing.T) {
 		t.Fatalf("expected runtime_seconds=7260, got %#v", item.RuntimeSeconds)
 	}
 
+}
+
+func TestProbeInventoryFileDoesNotOverwriteLockedRuntime(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := newInventoryProbeFixture(t)
+	lockedRuntime := 5400
+	if err := fixture.db.WithContext(ctx).Create(&database.MetadataFieldState{ItemID: fixture.item.ID, FieldKey: "runtime_seconds", ValueJSON: `5400`, IsLocked: true, LockReason: "operator lock"}).Error; err != nil {
+		t.Fatalf("seed locked runtime field: %v", err)
+	}
+	if err := fixture.db.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", fixture.item.ID).Update("runtime_seconds", lockedRuntime).Error; err != nil {
+		t.Fatalf("seed locked runtime value: %v", err)
+	}
+
+	service := NewService(fixture.db, fixture.registry, fixture.cfg.FFprobe)
+	if err := service.ProbeInventoryFile(ctx, fixture.file.ID); err != nil {
+		t.Fatalf("probe inventory file: %v", err)
+	}
+
+	var item database.CatalogItem
+	if err := fixture.db.WithContext(ctx).First(&item, fixture.item.ID).Error; err != nil {
+		t.Fatalf("load catalog item: %v", err)
+	}
+	if item.RuntimeSeconds == nil || *item.RuntimeSeconds != lockedRuntime {
+		t.Fatalf("expected locked runtime_seconds=%d, got %#v", lockedRuntime, item.RuntimeSeconds)
+	}
 }
 
 func TestBuildInventoryMediaStreamsAllowsSparseVideoMetadata(t *testing.T) {
@@ -409,8 +435,7 @@ func newInventoryProbeFixture(t *testing.T) inventoryProbeFixture {
 		FFprobe: config.FFprobeConfig{Enabled: true, Path: writeInventoryFakeFFprobe(t), Timeout: time.Second},
 	}
 	registry := providers.NewRegistry(cfg)
-	jobsSvc := jobs.NewService(db)
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	librarySvc := library.NewService(cfg, db, registry, nil)
 	inventorySvc := inventory.NewService(db)
 	ctx := context.Background()
 

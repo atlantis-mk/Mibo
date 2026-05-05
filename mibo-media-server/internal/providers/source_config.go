@@ -101,7 +101,7 @@ func normalizeOpenListSourceConfig(input *SourceConfig, fallback config.Config) 
 		timeout = fallback.OpenList.Timeout.String()
 	}
 	if timeout == "" {
-		timeout = (15 * time.Second).String()
+		timeout = (60 * time.Second).String()
 	}
 	if _, err := time.ParseDuration(timeout); err != nil {
 		return SourceConfig{}, fmt.Errorf("invalid openlist timeout %q", timeout)
@@ -143,7 +143,7 @@ func (cfg SourceConfig) OpenListConfig(rootPath string) (config.OpenListConfig, 
 	if cfg.OpenList == nil {
 		return config.OpenListConfig{}, fmt.Errorf("openlist config is required")
 	}
-	timeout := 15 * time.Second
+	timeout := 60 * time.Second
 	if strings.TrimSpace(cfg.OpenList.Timeout) != "" {
 		parsed, err := time.ParseDuration(cfg.OpenList.Timeout)
 		if err != nil {

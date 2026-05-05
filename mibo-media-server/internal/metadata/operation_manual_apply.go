@@ -47,6 +47,12 @@ func (s *Service) runManualApplyMetadataOperation(ctx context.Context, input Met
 				s.recordProviderFailure(ctx, provider, err)
 				return attempt, false, err
 			}
+			if normalized.Hierarchy != nil {
+				if err := s.completeTMDBTVHierarchy(ctx, provider, &normalized); err != nil {
+					return metadataProviderFailureAttempt("hierarchy", provider, err), false, err
+				}
+				result.ProviderAttempts = append(result.ProviderAttempts, hierarchyProviderAttempt(provider, normalized.Hierarchy))
+			}
 			detail = normalized
 			return attempt, true, nil
 		case database.MetadataProviderTypeMetaTube:
@@ -102,6 +108,19 @@ func (s *Service) applyNormalizedManualDetail(ctx context.Context, startedAt tim
 	}
 	if err := s.applyNormalizedPeople(ctx, target.ID, detail.People, &sourceID); err != nil {
 		return MetadataOperationResult{}, err
+	}
+	if target.Type == catalog.ItemTypeSeries && detail.Hierarchy != nil {
+		hierarchyProvider := detailProviderForResult(plan.DetailProviders, detail.Provider)
+		if hierarchyProvider.Record.ID != 0 {
+			hierarchyResult, err := s.applyNormalizedTVHierarchy(ctx, target, resolvedProfileFromPlan(plan), hierarchyProvider, *detail.Hierarchy, governanceStatus, confidence, true)
+			if err != nil {
+				return MetadataOperationResult{}, err
+			}
+			result.AffectedScope.ItemIDs = appendUniqueUint(result.AffectedScope.ItemIDs, hierarchyResult.AffectedItemIDs...)
+			result.MetadataSourceIDs = appendUniqueUint(result.MetadataSourceIDs, hierarchyResult.MetadataSourceIDs...)
+			applied = append(applied, hierarchyResult.AppliedFields...)
+			skipped = append(skipped, hierarchyResult.SkippedFields...)
+		}
 	}
 	result.Status = OperationStatusApplied
 	result.GovernanceStatus = governanceStatus

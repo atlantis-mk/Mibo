@@ -50,6 +50,46 @@ const HIDDEN_METADATA_PROVIDER_TYPES = new Set(["local_scan"])
 
 type Api = ReturnType<typeof createAuthedMiboApi> | null
 
+function hasAnyMetadataStageProvider(strategy: LibraryMetadataStrategy) {
+  return [
+    strategy.search_provider_ids,
+    strategy.detail_provider_ids,
+    strategy.image_provider_ids,
+    strategy.people_provider_ids,
+    strategy.hierarchy_provider_ids,
+  ].some((ids) => ids.length > 0)
+}
+
+function applyMetadataProfileToStrategy(
+  strategy: LibraryMetadataStrategy,
+  metadataProfiles: MetadataProfile[],
+  profileId: number,
+  options: { onlyWhenStagesEmpty?: boolean } = {}
+) {
+  if (options.onlyWhenStagesEmpty && hasAnyMetadataStageProvider(strategy)) {
+    return strategy
+  }
+
+  const profile = metadataProfiles.find((item) => item.id === profileId)
+  if (!profile) return strategy
+
+  return {
+    ...strategy,
+    template_profile_id: profileId,
+    search_provider_ids: profile.search_provider_ids,
+    detail_provider_ids: profile.detail_provider_ids,
+    image_provider_ids: profile.image_provider_ids,
+    people_provider_ids: profile.people_provider_ids,
+    hierarchy_provider_ids: profile.hierarchy_provider_ids,
+    preferred_metadata_language:
+      strategy.preferred_metadata_language ||
+      profile.preferred_metadata_language ||
+      "",
+    preferred_image_language:
+      strategy.preferred_image_language || profile.preferred_image_language || "",
+  }
+}
+
 export function LibrarySettingsDrawer({
   open,
   library,
@@ -103,7 +143,16 @@ export function LibrarySettingsDrawer({
         setPaths(nextPaths)
         setScan(policies.scan)
         setMetadata(policies.metadata)
-        setMetadataStrategy(strategy)
+        setMetadataStrategy(
+          strategy.template_profile_id
+            ? applyMetadataProfileToStrategy(
+                strategy,
+                profiles,
+                strategy.template_profile_id,
+                { onlyWhenStagesEmpty: true }
+              )
+            : strategy
+        )
         setMetadataProfiles(profiles)
         setProviderInstances(providers)
         setPlayback(policies.playback)
@@ -176,6 +225,14 @@ export function LibrarySettingsDrawer({
         )
       },
       enabled ? "路径已启用。" : "路径已停用。"
+    )
+  }
+
+  function applyMetadataProfile(value: string) {
+    if (!metadataStrategy) return
+    const profileId = Number(value)
+    setMetadataStrategy(
+      applyMetadataProfileToStrategy(metadataStrategy, metadataProfiles, profileId)
     )
   }
 
@@ -292,6 +349,14 @@ export function LibrarySettingsDrawer({
                   }
                 />
                 <ToggleRow
+                  label="批量探测库存"
+                  description="关闭后扫描不会创建 inventory_probe_batch 批量探测任务。"
+                  checked={scan.inventory_probe_batch_enabled}
+                  onChange={(checked) =>
+                    setScan({ ...scan, inventory_probe_batch_enabled: checked })
+                  }
+                />
+                <ToggleRow
                   label="隐藏文件忽略"
                   checked={scan.ignore_hidden_files}
                   onChange={(checked) =>
@@ -367,12 +432,7 @@ export function LibrarySettingsDrawer({
                   <FieldLabel>Metadata Template</FieldLabel>
                   <Select
                     value={String(metadataStrategy.template_profile_id || "")}
-                    onValueChange={(value) =>
-                      setMetadataStrategy({
-                        ...metadataStrategy,
-                        template_profile_id: Number(value),
-                      })
-                    }
+                    onValueChange={applyMetadataProfile}
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="选择 metadata template" />
@@ -743,16 +803,25 @@ function PolicySection({
 
 function ToggleRow({
   label,
+  description,
   checked,
   onChange,
 }: {
   label: string
+  description?: string
   checked: boolean
   onChange: (checked: boolean) => void
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 px-3 py-2 text-sm">
-      <span>{label}</span>
+      <span className="grid gap-0.5">
+        <span>{label}</span>
+        {description ? (
+          <span className="text-xs leading-5 text-muted-foreground">
+            {description}
+          </span>
+        ) : null}
+      </span>
       <Switch checked={checked} onCheckedChange={onChange} />
     </div>
   )

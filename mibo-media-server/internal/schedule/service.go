@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"gorm.io/gorm"
 )
 
@@ -31,10 +30,12 @@ const (
 )
 
 type Service struct {
-	db   *gorm.DB
-	jobs *jobs.Service
-	now  func() time.Time
+	db         *gorm.DB
+	dispatcher Dispatcher
+	now        func() time.Time
 }
+
+type Dispatcher func(context.Context, DueSchedule) (database.Job, error)
 
 type Option func(*Service)
 
@@ -56,9 +57,14 @@ func NewService(db *gorm.DB, opts ...Option) *Service {
 	return svc
 }
 
-func WithJobs(jobsSvc *jobs.Service) Option {
+func WithJobs(_ any) Option {
 	return func(s *Service) {
-		s.jobs = jobsSvc
+	}
+}
+
+func WithDispatcher(dispatcher Dispatcher) Option {
+	return func(s *Service) {
+		s.dispatcher = dispatcher
 	}
 }
 
@@ -294,9 +300,6 @@ func (s *Service) ListHistory(ctx context.Context, scheduleID uint, limit int) (
 }
 
 func (s *Service) RunNow(ctx context.Context, scheduleID uint) (RunNowResult, error) {
-	if s.jobs == nil {
-		return RunNowResult{}, fmt.Errorf("jobs service unavailable")
-	}
 	var schedule database.Schedule
 	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", scheduleID).First(&schedule).Error; err != nil {
 		return RunNowResult{}, err
@@ -309,8 +312,13 @@ func (s *Service) RunNow(ctx context.Context, scheduleID uint) (RunNowResult, er
 	if schedule.LibraryID != nil {
 		payload["library_id"] = *schedule.LibraryID
 	}
-	jobKey := fmt.Sprintf("schedule-run:%d:%d", schedule.ID, s.now().UnixNano())
-	job, err := s.jobs.EnqueueUnique(ctx, JobKindForSchedule(schedule.Kind), jobKey, payload)
+	var job database.Job
+	var err error
+	if s.dispatcher == nil {
+		err = fmt.Errorf("schedule dispatcher unavailable")
+	} else {
+		job, err = s.dispatcher(ctx, DueSchedule{ID: schedule.ID, Kind: schedule.Kind, ScopeKind: ScopeKind(schedule.ScopeKind), LibraryID: schedule.LibraryID})
+	}
 	if err != nil {
 		return RunNowResult{}, err
 	}

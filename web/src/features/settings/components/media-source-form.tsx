@@ -94,7 +94,10 @@ export function SourceForm({
   const [isOpenListConnectionVerified, setIsOpenListConnectionVerified] =
     useState(false)
 
-  async function browseSourcePath(path?: string): Promise<StorageBrowseResult> {
+  async function browseSourcePath(
+    path?: string,
+    options?: { refresh?: boolean },
+  ): Promise<StorageBrowseResult> {
     if (!api) {
       throw new Error('当前未登录，无法浏览路径。')
     }
@@ -102,6 +105,7 @@ export function SourceForm({
     if (draft.provider === 'openlist') {
       return api.browseOpenList({
         path,
+        refresh: options?.refresh,
         config: {
           base_url: draft.baseUrl || DEFAULT_OPENLIST_BASE_URL,
           username: draft.username || undefined,
@@ -110,7 +114,7 @@ export function SourceForm({
       })
     }
 
-    return api.browseStorageProvider('local', path)
+    return api.browseStorageProvider('local', path, options?.refresh)
   }
 
   return (

@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import {
   FileX2Icon,
   HeartIcon,
   InfoIcon,
   MoreHorizontalIcon,
-  RefreshCwIcon,
+  ShieldCheckIcon,
 } from "lucide-react"
 
 import { Button } from "#/components/ui/button"
@@ -30,12 +30,15 @@ import type {
   FilenameExclusionPreview,
   ProgressState,
 } from "#/lib/mibo-api"
+import { buildApiUrl } from "#/lib/mibo-api"
 import {
   formatMediaCardTitle,
   formatMediaCardYearRange,
+  getMediaCardOrganizingLabel,
   getMediaCardBadgeCount,
   getMediaCardPosterUrl,
   getMediaCardType,
+  blocksMediaCardCatalogActions,
 } from "#/lib/media-presentation"
 import {
   createAuthedMiboApi,
@@ -50,9 +53,12 @@ type MediaPosterCardProps = {
   item: CatalogListItem
   playbackItem?: CatalogListItem
   progress?: ProgressState | null
+  progressMeta?: string
+  progressDescription?: string
   favorite?: boolean
   libraryName?: string
   layout?: "rail" | "grid"
+  imageAspect?: "poster" | "landscape"
   className?: string
 }
 
@@ -66,6 +72,7 @@ type MediaLandscapeCardProps = {
   status?: string
   description?: string
   current?: boolean
+  actionSlot?: ReactNode
   className?: string
 }
 
@@ -73,8 +80,11 @@ export function MediaPosterCard({
   item,
   playbackItem,
   progress,
+  progressMeta,
+  progressDescription,
   favorite,
   layout = "rail",
+  imageAspect = "poster",
   className,
 }: MediaPosterCardProps) {
   const token = useAuthStore((state) => state.token)
@@ -84,23 +94,43 @@ export function MediaPosterCard({
     useState<FilenameExclusionPreview | null>(null)
   const queryToken = token ?? "guest"
   const title = formatMediaCardTitle(item)
-  const posterUrl = getMediaCardPosterUrl(item)
+  const progressFrameUrl = useAuthedObjectUrl(progress?.progress_frame_url)
+  const posterUrl = progressFrameUrl || getMediaCardPosterUrl(item)
   const badgeCount = getMediaCardBadgeCount(item)
   const hasProgress = Boolean(progress && progress.position_seconds > 0)
+  const progressPercent = progress ? getProgressPercent(progress) : 0
   const mediaType = getMediaCardType(item)
+  const yearRange = formatMediaCardYearRange(item)
   const playTarget = playbackItem ?? item
+  const isInventoryOnly = item.source_kind === "inventory_file"
+  const playInventoryFileID = isInventoryOnly
+    ? item.inventory_file_id
+    : undefined
+  const organizingState = item.organizing_summary?.state
+  const isOrganizing = Boolean(item.organizing || isInventoryOnly)
+  const blocksCatalogActions = blocksMediaCardCatalogActions(item)
+  const canOpenDetails = !isInventoryOnly
+  const canApplyIgnore =
+    !isInventoryOnly &&
+    (!item.organizing || organizingState === "review_required")
+  const organizingLabel = getMediaCardOrganizingLabel(item)
   const favoritesQuery = useQuery({
     ...favoritesQueryOptions(queryToken),
     enabled: Boolean(token) && favorite === undefined,
     staleTime: 60_000,
   })
-  const isFavorite =
-    favorite ??
-    Boolean(favoritesQuery.data?.some((entry) => entry.item.id === item.id))
+  const isFavorite = isOrganizing
+    ? Boolean(
+        favorite ??
+        favoritesQuery.data?.some((entry) => entry.item.id === item.id)
+      )
+    : (favorite ??
+      Boolean(favoritesQuery.data?.some((entry) => entry.item.id === item.id)))
   const favoriteMutation = useMutation({
     mutationFn: async (favorite: boolean) => {
       if (!token) throw new Error("当前未登录，无法更新收藏。")
       const api = createAuthedMiboApi(token)
+      if (isInventoryOnly) throw new Error("生成条目后可收藏。")
       return favorite ? api.addFavorite(item.id) : api.removeFavorite(item.id)
     },
     onSuccess: async () => {
@@ -115,18 +145,10 @@ export function MediaPosterCard({
       ])
     },
   })
-  const identifyMutation = useMutation({
-    mutationFn: async () => {
-      if (!token) throw new Error("当前未登录，无法重新识别。")
-      return createAuthedMiboApi(token).matchCatalogItem(playTarget.id)
-    },
-    onSuccess: async () => {
-      await invalidateMediaCardQueries(queryClient, queryToken)
-    },
-  })
   const ignoreMutation = useMutation({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法标记忽略。")
+      if (!canApplyIgnore) throw new Error("当前条目暂不支持标记忽略。")
       return createAuthedMiboApi(token).markCatalogItemScanExclusion(
         playTarget.id,
         "advertisement"
@@ -144,6 +166,7 @@ export function MediaPosterCard({
   const previewIgnoreMutation = useMutation({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法预览忽略影响。")
+      if (!canApplyIgnore) throw new Error("当前条目暂不支持标记忽略。")
       return createAuthedMiboApi(token).previewCatalogItemScanExclusion(
         playTarget.id
       )
@@ -156,6 +179,7 @@ export function MediaPosterCard({
   const filenameGroupMutation = useMutation({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法标记同名忽略。")
+      if (!canApplyIgnore) throw new Error("当前条目暂不支持同名忽略。")
       return createAuthedMiboApi(token).createCatalogItemFilenameExclusionRule(
         playTarget.id,
         "advertisement"
@@ -176,11 +200,11 @@ export function MediaPosterCard({
   })
   const actionsPending =
     favoriteMutation.isPending ||
-    identifyMutation.isPending ||
     ignoreMutation.isPending ||
     previewIgnoreMutation.isPending ||
     filenameGroupMutation.isPending
-  const canIgnore = playTarget.type !== "series" && playTarget.type !== "show"
+  const canIgnore =
+    canApplyIgnore && playTarget.type !== "series" && playTarget.type !== "show"
 
   return (
     <article
@@ -195,13 +219,24 @@ export function MediaPosterCard({
       <div className="relative overflow-hidden rounded-[1.35rem] border border-border/40 bg-card/75 shadow-lg">
         <Link
           to="/play/$id"
-          params={{ id: String(playTarget.id) }}
-          search={{ fromStart: !hasProgress, assetId: undefined }}
+          params={{
+            id: String(playInventoryFileID ?? playTarget.id),
+          }}
+          search={{
+            fromStart: !hasProgress,
+            assetId: undefined,
+            inventoryFileId: playInventoryFileID,
+          }}
           preload={false}
           aria-label={`${hasProgress ? "继续播放" : "播放"} ${title}`}
           className="absolute inset-0 z-10 rounded-[1.35rem] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
-        <div className="relative aspect-[2/3] overflow-hidden bg-muted">
+        <div
+          className={cn(
+            "relative overflow-hidden bg-muted",
+            imageAspect === "landscape" ? "aspect-video" : "aspect-[2/3]"
+          )}
+        >
           {posterUrl ? (
             <img
               src={posterUrl}
@@ -220,6 +255,28 @@ export function MediaPosterCard({
               {badgeCount}
             </span>
           ) : null}
+          {isOrganizing ? (
+            <span
+              className={cn(
+                "absolute top-2 left-2 rounded-full border border-white/20 px-2 py-1 text-[0.65rem] font-medium text-white shadow-lg backdrop-blur",
+                organizingState === "failed"
+                  ? "bg-red-600/75"
+                  : organizingState === "review_required"
+                    ? "bg-amber-600/75"
+                    : "bg-black/55"
+              )}
+            >
+              {organizingLabel}
+            </span>
+          ) : null}
+          {hasProgress ? (
+            <div className="absolute right-0 bottom-0 left-0 h-1.5 bg-white/25">
+              <div
+                className="h-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.6)]"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          ) : null}
         </div>
         <div className="space-y-3 px-3 pt-3 pb-3">
           <div>
@@ -227,26 +284,38 @@ export function MediaPosterCard({
               {title}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
-              {formatMediaCardYearRange(item)}
+              {[yearRange, progressMeta].filter(Boolean).join(" · ")}
             </div>
+            {progressDescription ? (
+              <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                {progressDescription}
+              </div>
+            ) : null}
           </div>
           <div className="relative z-20 flex items-center gap-2">
-            <Button asChild size="icon-sm" variant="outline">
-              <Link
-                to="/media/$id"
-                params={{ id: String(item.id) }}
-                search={{ view: mediaType === "show" ? "series" : undefined }}
-                preload={false}
-              >
+            {canOpenDetails ? (
+              <Button asChild size="icon-sm" variant="outline">
+                <Link
+                  to="/media/$id"
+                  params={{ id: String(item.id) }}
+                  search={{ view: mediaType === "show" ? "series" : undefined }}
+                  preload={false}
+                >
+                  <InfoIcon className="size-3.5" />
+                  <span className="sr-only">详情</span>
+                </Link>
+              </Button>
+            ) : (
+              <Button size="icon-sm" variant="outline" disabled>
                 <InfoIcon className="size-3.5" />
                 <span className="sr-only">详情</span>
-              </Link>
-            </Button>
+              </Button>
+            )}
             <Button
               type="button"
               size="icon-sm"
               variant="outline"
-              disabled={!token || favoriteMutation.isPending}
+              disabled={isInventoryOnly || !token || favoriteMutation.isPending}
               onClick={() => favoriteMutation.mutate(!isFavorite)}
             >
               <HeartIcon
@@ -262,7 +331,7 @@ export function MediaPosterCard({
                   type="button"
                   size="icon-sm"
                   variant="outline"
-                  disabled={!token}
+                  disabled={isInventoryOnly || !token}
                 >
                   <MoreHorizontalIcon className="size-3.5" />
                   <span className="sr-only">更多操作</span>
@@ -273,13 +342,20 @@ export function MediaPosterCard({
                   {title}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={actionsPending}
-                  onSelect={() => identifyMutation.mutate()}
-                >
-                  <RefreshCwIcon className="size-4" />
-                  重新识别
-                </DropdownMenuItem>
+                {isInventoryOnly ? (
+                  <DropdownMenuItem disabled>生成条目后可操作</DropdownMenuItem>
+                ) : null}
+                {isInventoryOnly ? null : (
+                  <DropdownMenuItem asChild disabled={actionsPending}>
+                    <Link
+                      to="/settings/metadata/$id"
+                      params={{ id: String(item.id) }}
+                    >
+                      <ShieldCheckIcon className="size-4" />
+                      治理元数据
+                    </Link>
+                  </DropdownMenuItem>
+                )}
                 {canIgnore ? (
                   <DropdownMenuItem
                     variant="destructive"
@@ -361,6 +437,72 @@ export function MediaPosterCard({
   )
 }
 
+function useAuthedObjectUrl(url?: string) {
+  const token = useAuthStore((state) => state.token)
+  const [objectUrl, setObjectUrl] = useState("")
+
+  useEffect(() => {
+    if (!url || !token) {
+      setObjectUrl("")
+      return
+    }
+
+    let cancelled = false
+    let nextObjectUrl = ""
+
+    async function loadImage() {
+      try {
+        const response = await fetch(buildApiUrl(url), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) {
+          return
+        }
+        const blob = await response.blob()
+        if (cancelled) {
+          return
+        }
+        nextObjectUrl = URL.createObjectURL(blob)
+        setObjectUrl(nextObjectUrl)
+      } catch {
+        if (!cancelled) {
+          setObjectUrl("")
+        }
+      }
+    }
+
+    void loadImage()
+
+    return () => {
+      cancelled = true
+      if (nextObjectUrl) {
+        URL.revokeObjectURL(nextObjectUrl)
+      }
+    }
+  }, [token, url])
+
+  return objectUrl
+}
+
+function getProgressPercent(progress: ProgressState) {
+  if (typeof progress.played_percentage === "number") {
+    return clampProgressPercent(progress.played_percentage)
+  }
+
+  if (progress.duration_seconds && progress.duration_seconds > 0) {
+    return clampProgressPercent(
+      (progress.position_seconds / progress.duration_seconds) * 100
+    )
+  }
+
+  return 0
+}
+
+function clampProgressPercent(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(100, Math.max(0, value))
+}
+
 async function invalidateMediaCardQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   queryToken: string
@@ -418,6 +560,7 @@ export function MediaLandscapeCard({
   status,
   description,
   current,
+  actionSlot,
   className,
 }: MediaLandscapeCardProps) {
   const visualUrl = imageUrl || fallbackImageUrl
@@ -441,9 +584,20 @@ export function MediaLandscapeCard({
         <div className="absolute inset-0 bg-gradient-to-t from-background/90 via-background/15 to-transparent" />
       </div>
       <div className="space-y-2 p-4">
-        <div className="line-clamp-1 text-lg text-foreground">
-          {subtitle ? `${subtitle} - ${title}` : title}
-        </div>
+        {actionSlot && itemId ? (
+          <Link
+            to="/media/$id"
+            params={{ id: String(itemId) }}
+            search={{ view: undefined }}
+            className="line-clamp-1 text-lg text-foreground underline-offset-4 hover:underline"
+          >
+            {subtitle ? `${subtitle} - ${title}` : title}
+          </Link>
+        ) : (
+          <div className="line-clamp-1 text-lg text-foreground">
+            {subtitle ? `${subtitle} - ${title}` : title}
+          </div>
+        )}
         {meta ? (
           <div className="text-sm text-muted-foreground">{meta}</div>
         ) : null}
@@ -455,11 +609,16 @@ export function MediaLandscapeCard({
             {description}
           </p>
         ) : null}
+        {actionSlot ? <div className="pt-1">{actionSlot}</div> : null}
       </div>
     </div>
   )
 
   if (!itemId) {
+    return cardContent
+  }
+
+  if (actionSlot) {
     return cardContent
   }
 

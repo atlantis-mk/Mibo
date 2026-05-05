@@ -1,6 +1,10 @@
 import { queryOptions } from "@tanstack/react-query"
 
-import { createMiboApi, getApiBaseUrl } from "#/lib/mibo-api"
+import {
+  createMiboApi,
+  getApiBaseUrl,
+  type CatalogUserItemEntry,
+} from "#/lib/mibo-api"
 
 export const miboQueryKeys = {
   authUser: (token: string) => ["auth", "me", token] as const,
@@ -10,6 +14,8 @@ export const miboQueryKeys = {
   healthIssues: (token: string) => ["health", "issues", token] as const,
   favorites: (token: string) => ["me", "favorites", token] as const,
   consoleSummary: (token: string) => ["admin", "console", token] as const,
+  ingestDiagnostics: (token: string) =>
+    ["admin", "ingest", "diagnostics", token] as const,
   adminLogs: (token: string) => ["admin", "logs", token] as const,
   adminUsers: (token: string) => ["admin", "users", token] as const,
   libraryDetail: (token: string, libraryId: number) =>
@@ -19,8 +25,19 @@ export const miboQueryKeys = {
     libraryId: number,
     tab: string,
     filters: unknown,
-    page: number
-  ) => ["library", "browse", token, libraryId, tab, filters, page] as const,
+    page: number,
+    pageSize: number
+  ) =>
+    [
+      "library",
+      "browse",
+      token,
+      libraryId,
+      tab,
+      filters,
+      page,
+      pageSize,
+    ] as const,
   catalogItemDetail: (token: string, itemId: number) =>
     ["catalog", "detail", token, itemId] as const,
   catalogPersonDetail: (token: string, personId: number) =>
@@ -31,6 +48,8 @@ export const miboQueryKeys = {
     ["catalog", "series-seasons", token, itemId] as const,
   catalogPlayback: (token: string, itemId: number, assetId?: number) =>
     ["catalog", "playback", token, itemId, assetId ?? "default"] as const,
+  inventoryFilePlayback: (token: string, fileId: number) =>
+    ["inventory-file", "playback", token, fileId] as const,
   catalogGovernanceWorkspace: (token: string, itemId: number) =>
     ["catalog", "governance", token, itemId] as const,
   metadataWorkspace: (token: string) =>
@@ -54,8 +73,10 @@ export const miboQueryKeys = {
     ["schedules", "detail", token, scheduleId] as const,
   scheduleHistory: (token: string, scheduleId: number) =>
     ["schedules", "history", token, scheduleId] as const,
-  jobs: (token: string, filters: unknown) =>
-    ["admin", "jobs", token, filters] as const,
+  workflows: (token: string, filters: unknown) =>
+    ["admin", "workflows", token, filters] as const,
+  workflowDiagnostics: (token: string) =>
+    ["admin", "workflows", "diagnostics", token] as const,
   cleanupSettings: (token: string) => ["settings", "cleanup", token] as const,
 }
 
@@ -83,6 +104,13 @@ export function loginSessionsQueryOptions(token: string) {
 export function homeDataQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.homeData(token),
+    refetchInterval: (query) => {
+      const libraries = query.state.data?.libraries ?? []
+      const hasActiveIngest = libraries.some((library) =>
+        ["pending", "syncing"].includes(library.status)
+      )
+      return hasActiveIngest ? 5000 : false
+    },
     queryFn: async () => {
       const api = createAuthedMiboApi(token)
       const [
@@ -100,7 +128,9 @@ export function homeDataQueryOptions(token: string) {
       ])
 
       const safeItems = items ?? []
-      const safeContinueWatching = continueWatching ?? []
+      const safeContinueWatching = getLatestContinueWatchingEntries(
+        continueWatching ?? []
+      )
       const safeLibraries = libraries ?? []
       const safeLatestByLibrary = latestByLibrary ?? []
       const safeHealthIssues = healthIssues ?? []
@@ -116,6 +146,41 @@ export function homeDataQueryOptions(token: string) {
       }
     },
   })
+}
+
+export function getLatestContinueWatchingEntries(
+  entries: CatalogUserItemEntry[]
+) {
+  const latestByDisplayItem = new Map<string, CatalogUserItemEntry>()
+
+  for (const entry of entries) {
+    const key = getContinueWatchingDisplayKey(entry)
+    const existing = latestByDisplayItem.get(key)
+
+    if (!existing || isNewerContinueWatchingEntry(entry, existing)) {
+      latestByDisplayItem.set(key, entry)
+    }
+  }
+
+  return Array.from(latestByDisplayItem.values()).sort(
+    (left, right) => getPlayedAtTime(right) - getPlayedAtTime(left)
+  )
+}
+
+function getContinueWatchingDisplayKey(entry: CatalogUserItemEntry) {
+  const displayItem = entry.display_item ?? entry.item
+  return `${displayItem.library_id}:${displayItem.type}:${displayItem.id}`
+}
+
+function isNewerContinueWatchingEntry(
+  candidate: CatalogUserItemEntry,
+  current: CatalogUserItemEntry
+) {
+  return getPlayedAtTime(candidate) > getPlayedAtTime(current)
+}
+
+function getPlayedAtTime(entry: CatalogUserItemEntry) {
+  return entry.last_played_at ? Date.parse(entry.last_played_at) || 0 : 0
 }
 
 export function healthSummaryQueryOptions(token: string) {
@@ -143,6 +208,13 @@ export function consoleSummaryQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.consoleSummary(token),
     queryFn: () => createAuthedMiboApi(token).getConsoleSummary(),
+  })
+}
+
+export function ingestDiagnosticsQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.ingestDiagnostics(token),
+    queryFn: () => createAuthedMiboApi(token).getIngestDiagnostics(),
   })
 }
 
@@ -220,6 +292,20 @@ export function catalogPlaybackQueryOptions(
         assetId,
       }),
     enabled: itemId > 0,
+  })
+}
+
+export function inventoryFilePlaybackQueryOptions(
+  token: string,
+  fileId: number
+) {
+  return queryOptions({
+    queryKey: miboQueryKeys.inventoryFilePlayback(token, fileId),
+    queryFn: () =>
+      createAuthedMiboApi(token).getInventoryFilePlayback(fileId, {
+        clientProfile: "web",
+      }),
+    enabled: fileId > 0,
   })
 }
 
@@ -322,13 +408,20 @@ export function scheduleHistoryQueryOptions(token: string, scheduleId: number) {
   })
 }
 
-export function jobsQueryOptions(
+export function workflowsQueryOptions(
   token: string,
-  filters: { limit?: number; offset?: number; status?: string; kind?: string }
+  filters: { limit?: number; offset?: number; status?: string }
 ) {
   return queryOptions({
-    queryKey: miboQueryKeys.jobs(token, filters),
-    queryFn: () => createAuthedMiboApi(token).listJobs(filters),
+    queryKey: miboQueryKeys.workflows(token, filters),
+    queryFn: () => createAuthedMiboApi(token).listWorkflows(filters),
+  })
+}
+
+export function workflowDiagnosticsQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: miboQueryKeys.workflowDiagnostics(token),
+    queryFn: () => createAuthedMiboApi(token).getWorkflowDiagnostics(),
   })
 }
 

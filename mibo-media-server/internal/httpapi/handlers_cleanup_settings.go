@@ -65,10 +65,10 @@ func (r *Router) handleRunMissingMediaCleanup(w http.ResponseWriter, req *http.R
 		writeError(req.Context(), w, http.StatusBadRequest, errors.New("missing cleanup is disabled"))
 		return
 	}
-	job, err := r.library.QueueMissingMediaCleanup(req.Context(), library.MissingMediaCleanupPayload{ScopeKind: "global"})
+	_, err = r.library.QueueMissingMediaCleanup(req.Context(), library.MissingMediaCleanupPayload{ScopeKind: "global"})
 	if err != nil {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(req.Context(), w, http.StatusAccepted, job)
+	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": true})
 }

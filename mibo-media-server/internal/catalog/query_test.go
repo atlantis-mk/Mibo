@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 )
 
 func TestCatalogQueryAPIsReturnDetailAndGovernanceWorkspace(t *testing.T) {
@@ -129,6 +130,223 @@ func TestBrowseItemsHidesUnavailableItems(t *testing.T) {
 	}
 	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != available.ID {
 		t.Fatalf("expected only available item in browse result, got %#v", result)
+	}
+}
+
+func TestBrowseItemsIncludesDiscoveredInventoryEntries(t *testing.T) {
+	svc, ctx := newTestService(t)
+	available, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Available Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create available item: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: 1, StorageProvider: "local", StoragePath: "/movies/New.Movie.2024.mkv", Container: "mkv", ContentClass: "video", Status: AvailabilityAvailable, ScanState: "discovered"}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Sort: "title", SortDirection: "asc", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	if result.Total != 2 || len(result.Items) != 2 {
+		t.Fatalf("expected catalog and discovered entries, got %#v", result)
+	}
+	if result.Items[0].ID != available.ID || result.Items[0].SourceKind != "catalog" || result.Items[0].MaturityState != "classified" {
+		t.Fatalf("unexpected catalog entry: %#v", result.Items[0])
+	}
+	discovered := result.Items[1]
+	if discovered.SourceKind != "inventory_file" || discovered.InventoryFileID == nil || *discovered.InventoryFileID != file.ID || discovered.MaturityState != "discovered" || !discovered.Organizing {
+		t.Fatalf("unexpected discovered entry: %#v", discovered)
+	}
+	if discovered.Title != "New Movie 2024" || discovered.StoragePath != file.StoragePath {
+		t.Fatalf("unexpected discovered display fields: %#v", discovered)
+	}
+	if discovered.OrganizingSummary == nil || discovered.OrganizingSummary.State != "organizing" || discovered.OrganizingSummary.Stage != ingest.ConditionMaterialized {
+		t.Fatalf("unexpected discovered organizing summary: %#v", discovered.OrganizingSummary)
+	}
+}
+
+func TestBrowseItemsUsesDiscoveredInventoryThumbnail(t *testing.T) {
+	svc, ctx := newTestService(t)
+	file := database.InventoryFile{LibraryID: 1, StorageProvider: "openlist", StoragePath: "/movies/New.Movie.2024.mkv", ThumbnailURL: "https://cdn.example.test/movie-thumb.jpg", Container: "mkv", ContentClass: "video", Status: AvailabilityAvailable, ScanState: "discovered"}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Sort: "title", SortDirection: "asc", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one discovered entry, got %#v", result)
+	}
+	images := result.Items[0].SelectedImages
+	if len(images) != 1 || images[0].ImageType != "poster" || images[0].URL != "https://cdn.example.test/movie-thumb.jpg" {
+		t.Fatalf("expected discovered thumbnail poster, got %#v", images)
+	}
+}
+
+func TestBrowseItemsUsesDiscoveredInventoryStorageIndexThumbnail(t *testing.T) {
+	svc, ctx := newTestService(t)
+	file := database.InventoryFile{LibraryID: 1, StorageProvider: "openlist", StoragePath: "/movies/New.Movie.2024.mkv", Container: "mkv", ContentClass: "video", Status: AvailabilityAvailable, ScanState: "discovered"}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.StorageIndexEntry{LibraryID: 1, StorageProvider: "openlist", StoragePath: file.StoragePath, SizeBytes: 100, ObservationStatus: "present", ProviderMetaJSON: `{"thumbnail_url":"https://cdn.example.test/index-thumb.jpg"}`}).Error; err != nil {
+		t.Fatalf("create storage index entry: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Sort: "title", SortDirection: "asc", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	images := result.Items[0].SelectedImages
+	if len(images) != 1 || images[0].ImageType != "poster" || images[0].URL != "https://cdn.example.test/index-thumb.jpg" {
+		t.Fatalf("expected storage index thumbnail poster, got %#v", images)
+	}
+}
+
+func TestBrowseItemsSearchDoesNotBypassTypeFilter(t *testing.T) {
+	svc, ctx := newTestService(t)
+	seasonNumber := 1
+	episodeNumber := 8
+	series, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "High Education", SortKey: "High Education", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	season, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeason, ParentID: &series.ID, Title: "Season 1", SortKey: "High Education Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episode, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeEpisode, ParentID: &season.ID, Title: "Episode 8", OriginalTitle: "Vladimir.S01E08.Against.Interpretation", SortKey: "High Education S01E08", ParentIndexNumber: &seasonNumber, IndexNumber: &episodeNumber, AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+	if err := svc.RefreshItemProjection(ctx, episode.ID); err != nil {
+		t.Fatalf("refresh episode projection: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, Query: "S01E08", TypeFilter: "all", Sort: "title", SortDirection: "desc", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	for _, item := range result.Items {
+		if item.Type == ItemTypeEpisode {
+			t.Fatalf("expected type=all search to exclude episodes, got %#v", item)
+		}
+	}
+}
+
+func TestBrowseItemsIncludesCatalogOrganizingSummary(t *testing.T) {
+	svc, ctx := newTestService(t)
+	movie, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Organizing Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create movie: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.IngestCondition{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionMetadataMatched, Status: ingest.ConditionStatusReviewRequired, Reason: "no_candidate", Message: "Metadata match needed", Severity: ingest.SeverityWarning}).Error; err != nil {
+		t.Fatalf("create ingest condition: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one item, got %#v", result)
+	}
+	summary := result.Items[0].OrganizingSummary
+	if summary == nil || summary.State != "review_required" || summary.Stage != ingest.ConditionMetadataMatched || summary.Message != "Metadata match needed" {
+		t.Fatalf("unexpected organizing summary: %#v", summary)
+	}
+	if !result.Items[0].Organizing {
+		t.Fatalf("expected organizing flag for review-required summary: %#v", result.Items[0])
+	}
+}
+
+func TestBrowseItemsTreatsMaterializedPendingEnhancementsAsReady(t *testing.T) {
+	svc, ctx := newTestService(t)
+	movie, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Fast Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create movie: %v", err)
+	}
+	conditions := []database.IngestCondition{
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionMaterialized, Status: ingest.ConditionStatusTrue, Reason: "linked", Message: "Media is linked", Severity: ingest.SeverityInfo},
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionProbed, Status: ingest.ConditionStatusPending, Reason: "probe_pending", Message: "Media probe is pending", Severity: ingest.SeverityInfo},
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionMetadataMatched, Status: ingest.ConditionStatusPending, Reason: "pending", Message: "Metadata matching is pending", Severity: ingest.SeverityInfo},
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionProjectionCurrent, Status: ingest.ConditionStatusPending, Reason: "projection_pending", Message: "Catalog projection refresh is pending", Severity: ingest.SeverityInfo},
+	}
+	if err := svc.db.WithContext(ctx).Create(&conditions).Error; err != nil {
+		t.Fatalf("create ingest conditions: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one item, got %#v", result)
+	}
+	item := result.Items[0]
+	if item.Organizing {
+		t.Fatalf("expected materialized item to be organized while enhancements are pending: %#v", item)
+	}
+	if item.OrganizingSummary == nil || item.OrganizingSummary.State != "ready" {
+		t.Fatalf("expected ready organizing summary, got %#v", item.OrganizingSummary)
+	}
+}
+
+func TestBrowseItemsIncludesPartialReadyProbeFailureSummary(t *testing.T) {
+	svc, ctx := newTestService(t)
+	movie, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Playable Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create movie: %v", err)
+	}
+	conditions := []database.IngestCondition{
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionMaterialized, Status: ingest.ConditionStatusTrue, Reason: "linked", Message: "Media is linked", Severity: ingest.SeverityInfo},
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionProbed, Status: ingest.ConditionStatusFailed, Reason: "probe_failed", Message: "Media probe failed", Severity: ingest.SeverityError},
+		{UnitKey: "catalog_item:1", LibraryID: 1, CatalogItemID: &movie.ID, ConditionType: ingest.ConditionMetadataMatched, Status: ingest.ConditionStatusTrue, Reason: "matched", Message: "Metadata matched", Severity: ingest.SeverityInfo},
+	}
+	if err := svc.db.WithContext(ctx).Create(&conditions).Error; err != nil {
+		t.Fatalf("create ingest conditions: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	summary := result.Items[0].OrganizingSummary
+	if summary == nil || summary.State != "failed" || summary.Stage != ingest.ConditionProbed || summary.Message != "Media probe failed" {
+		t.Fatalf("unexpected failed probe summary: %#v", summary)
+	}
+}
+
+func TestBrowseItemsSuppressesDiscoveredEntryLinkedToCatalog(t *testing.T) {
+	svc, ctx := newTestService(t)
+	movie, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Linked Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create movie: %v", err)
+	}
+	asset := database.MediaAsset{LibraryID: 1, AssetType: "main", Status: AvailabilityAvailable, ProbeStatus: "pending"}
+	if err := svc.db.WithContext(ctx).Create(&asset).Error; err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	file := database.InventoryFile{LibraryID: 1, StorageProvider: "local", StoragePath: "/movies/Linked.Movie.mkv", Container: "mkv", ContentClass: "video", Status: AvailabilityAvailable, ScanState: "classified"}
+	if err := svc.db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetFile{AssetID: asset.ID, FileID: file.ID, Role: "source"}).Error; err != nil {
+		t.Fatalf("link asset file: %v", err)
+	}
+	if err := svc.db.WithContext(ctx).Create(&database.AssetItem{AssetID: asset.ID, ItemID: movie.ID, Role: "primary"}).Error; err != nil {
+		t.Fatalf("link asset item: %v", err)
+	}
+
+	result, err := svc.BrowseItems(ctx, BrowseItemsInput{LibraryID: 1, TypeFilter: "all", Limit: 20})
+	if err != nil {
+		t.Fatalf("browse items: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != movie.ID || result.Items[0].SourceKind != "catalog" {
+		t.Fatalf("expected only catalog-backed result, got %#v", result)
 	}
 }
 
@@ -364,16 +582,21 @@ func TestGetPersonDetailReturnsProfileAndOrderedRelatedWorks(t *testing.T) {
 	}
 }
 
-func TestListRecentlyAddedOnlyIncludesActiveLibraries(t *testing.T) {
+func TestListRecentlyAddedIncludesActiveAndSyncingLibraries(t *testing.T) {
 	svc, ctx := newTestService(t)
 	activeLibrary := database.Library{Name: "Active", Type: "movies", MediaSourceID: 1, RootPath: "/active", Status: "active"}
+	syncingLibrary := database.Library{Name: "Syncing", Type: "movies", MediaSourceID: 1, RootPath: "/syncing", Status: "syncing"}
 	inactiveLibrary := database.Library{Name: "Inactive", Type: "shows", MediaSourceID: 1, RootPath: "/inactive", Status: "deleted"}
-	if err := svc.db.WithContext(ctx).Create([]*database.Library{&activeLibrary, &inactiveLibrary}).Error; err != nil {
+	if err := svc.db.WithContext(ctx).Create([]*database.Library{&activeLibrary, &syncingLibrary, &inactiveLibrary}).Error; err != nil {
 		t.Fatalf("create libraries: %v", err)
 	}
 	activeItem, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: activeLibrary.ID, Type: ItemTypeMovie, Title: "Active Movie", AvailabilityStatus: AvailabilityAvailable})
 	if err != nil {
 		t.Fatalf("create active item: %v", err)
+	}
+	syncingItem, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: syncingLibrary.ID, Type: ItemTypeMovie, Title: "Syncing Movie", AvailabilityStatus: AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create syncing item: %v", err)
 	}
 	if _, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: inactiveLibrary.ID, Type: ItemTypeSeries, Title: "Inactive Show", AvailabilityStatus: AvailabilityAvailable}); err != nil {
 		t.Fatalf("create inactive item: %v", err)
@@ -386,7 +609,7 @@ func TestListRecentlyAddedOnlyIncludesActiveLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list recently added: %v", err)
 	}
-	if len(items) != 1 || items[0].ID != activeItem.ID {
+	if len(items) != 2 || items[0].ID != syncingItem.ID || items[1].ID != activeItem.ID {
 		t.Fatalf("unexpected recently added items: %#v", items)
 	}
 }
@@ -617,7 +840,7 @@ func TestUserItemFavoritesAndContinueWatching(t *testing.T) {
 	}
 
 	lastPlayed := time.Now().UTC()
-	if err := svc.db.WithContext(ctx).Create(&database.UserItemData{UserID: userID, ItemID: episode.ID, PositionSeconds: 120, LastPlayedAt: &lastPlayed}).Error; err != nil {
+	if err := svc.db.WithContext(ctx).Create(&database.UserItemData{UserID: userID, ItemID: episode.ID, PositionSeconds: 120, ProgressFrameURL: "/api/v1/me/progress-frames/1/default", LastPlayedAt: &lastPlayed}).Error; err != nil {
 		t.Fatalf("create progress: %v", err)
 	}
 	continueWatching, err := svc.ListContinueWatching(ctx, userID, 10)
@@ -629,6 +852,9 @@ func TestUserItemFavoritesAndContinueWatching(t *testing.T) {
 	}
 	if continueWatching[0].PlayItem == nil || continueWatching[0].PlayItem.ID != episode.ID {
 		t.Fatalf("expected episode play item, got %#v", continueWatching[0].PlayItem)
+	}
+	if continueWatching[0].ProgressFrameURL != "/api/v1/me/progress-frames/1/default" {
+		t.Fatalf("expected progress frame url, got %#v", continueWatching[0])
 	}
 	if continueWatching[0].DisplayItem == nil || continueWatching[0].DisplayItem.ID != show.ID || continueWatching[0].DisplayItem.Type != ItemTypeSeries {
 		t.Fatalf("expected series display item, got %#v", continueWatching[0].DisplayItem)

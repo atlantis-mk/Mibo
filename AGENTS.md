@@ -15,8 +15,8 @@
 - Focused backend checks: `go test ./internal/httpapi -run TestReadyz` and `go test ./internal/worker -run TestRunOnceProcessesSyncLibraryJob`.
 
 ## Runtime Quirks
-- Backend defaults to `MIBO_STORAGE_PROVIDER=openlist` and `MIBO_OPENLIST_BASE_URL=http://127.0.0.1:5244`. A bare `go run ./cmd/mibo-media-server` expects a live OpenList server unless you override env.
-- To use the repo's sample media instead of OpenList, start the backend with `MIBO_STORAGE_PROVIDER=local` and `MIBO_LOCAL_ROOT_PATH=/Users/atlan/Desktop/IdeaProjects/Mibo/demo-media`.
+- Storage is configured through user-added media sources; the backend no longer probes a global default storage provider on startup or readiness checks.
+- To use the repo's sample media with a local media source, set `MIBO_LOCAL_ROOT_PATH=/Users/atlan/Desktop/IdeaProjects/Mibo/demo-media` before starting the backend.
 - The local storage adapter only accepts absolute paths and rejects anything outside `MIBO_LOCAL_ROOT_PATH`.
 - For local manual testing in this workspace, use app login `admin` / `admin123`.
 - Frontend API base defaults to `http://127.0.0.1:8080` via `VITE_API_BASE_URL`, then is overridden from localStorage key `mibo-web-api-base-url`.

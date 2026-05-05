@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/ingest"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -44,14 +45,21 @@ const (
 type Service struct {
 	db                     *gorm.DB
 	personProfileRefresher PersonProfileRefresher
+	ingest                 *ingest.Service
 }
 
 type PersonProfileRefresher interface {
 	RefreshCatalogPersonProfile(ctx context.Context, personID uint) error
 }
 
-func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+func NewService(db *gorm.DB, args ...any) *Service {
+	service := &Service{db: db}
+	for _, arg := range args {
+		if ingestSvc, ok := arg.(*ingest.Service); ok {
+			service.ingest = ingestSvc
+		}
+	}
+	return service
 }
 
 func (s *Service) SetPersonProfileRefresher(refresher PersonProfileRefresher) {

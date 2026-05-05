@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/glebarez/sqlite"
@@ -73,6 +74,7 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&InventoryFile{},
 		&StorageIndexEntry{},
 		&StorageObservationFailure{},
+		&StorageDirectoryFingerprint{},
 		&ScanExclusion{},
 		&FilenameExclusionRule{},
 		&FilenameExclusionRestore{},
@@ -92,6 +94,15 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&Session{},
 		&SystemSetting{},
 		&SearchHistory{},
+		&IngestDirtyUnit{},
+		&IngestCondition{},
+		&IngestEvent{},
+		&WorkflowRun{},
+		&WorkflowTask{},
+		&WorkflowTaskDependency{},
+		&WorkflowTaskLease{},
+		&WorkflowResourceBudget{},
+		&WorkflowResourceUsage{},
 	); err != nil {
 		return nil, err
 	}
@@ -118,8 +129,49 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	if err := BackfillMissingSince(db); err != nil {
 		return nil, err
 	}
+	if err := BackfillInventoryScanState(db); err != nil {
+		return nil, err
+	}
+	if err := BackfillIngestDirtyScopes(db); err != nil {
+		return nil, err
+	}
 
 	return db, nil
+}
+
+func BackfillIngestDirtyScopes(db *gorm.DB) error {
+	var paths []LibraryPath
+	if err := db.Where("enabled = ? AND deleted_at IS NULL", true).Find(&paths).Error; err != nil {
+		return err
+	}
+	for _, pathRecord := range paths {
+		if pathRecord.LibraryID == 0 || strings.TrimSpace(pathRecord.RootPath) == "" {
+			continue
+		}
+		now := time.Now().UTC()
+		unit := IngestDirtyUnit{
+			DirtyKey:    fmt.Sprintf("library:%d:%s", pathRecord.LibraryID, strings.TrimSpace(pathRecord.RootPath)),
+			ScopeKind:   "library",
+			LibraryID:   pathRecord.LibraryID,
+			RootPath:    strings.TrimSpace(pathRecord.RootPath),
+			Reason:      "startup_backfill",
+			Status:      "dirty",
+			AvailableAt: now,
+		}
+		if err := db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "dirty_key"}},
+			DoNothing: true,
+		}).Create(&unit).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func BackfillInventoryScanState(db *gorm.DB) error {
+	return db.Model(&InventoryFile{}).
+		Where("scan_state = '' OR scan_state IS NULL").
+		Update("scan_state", "discovered").Error
 }
 
 func BackfillMissingSince(db *gorm.DB) error {
@@ -189,6 +241,17 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&SystemSetting{}, "idx_system_setting_category_key"},
 		{&LibraryPath{}, "idx_library_paths_library_source_path"},
 		{&MetadataProviderInstance{}, "idx_metadata_provider_instances_provider_type"},
+		{&IngestDirtyUnit{}, "idx_ingest_dirty_units_claim"},
+		{&IngestDirtyUnit{}, "idx_ingest_dirty_units_library"},
+		{&IngestDirtyUnit{}, "idx_ingest_dirty_units_scope"},
+		{&IngestCondition{}, "idx_ingest_conditions_unit_type"},
+		{&IngestCondition{}, "idx_ingest_conditions_type_status"},
+		{&IngestCondition{}, "idx_ingest_conditions_library_status"},
+		{&IngestCondition{}, "idx_ingest_conditions_unit_status"},
+		{&IngestCondition{}, "idx_ingest_conditions_retry_due"},
+		{&IngestEvent{}, "idx_ingest_events_unit_created"},
+		{&IngestEvent{}, "idx_ingest_events_library_created"},
+		{&IngestEvent{}, "idx_ingest_events_condition_created"},
 	}
 
 	for _, index := range requiredIndexes {
@@ -270,7 +333,7 @@ func EnsureLibraryPolicyDefaults(db *gorm.DB, libraryID uint) error {
 		return err
 	}
 	if count == 0 {
-		if err := db.Create(&LibraryScanPolicy{LibraryID: libraryID, ScannerEnabled: true, RealtimeMonitorEnabled: true, ScheduledRefreshEnabled: true, RefreshIntervalHours: 24, IgnoreHiddenFiles: true, IgnoreFileExtensionsJSON: "[]", ConfigurableExclusionRules: true}).Error; err != nil {
+		if err := db.Create(&LibraryScanPolicy{LibraryID: libraryID, ScannerEnabled: true, RealtimeMonitorEnabled: true, ScheduledRefreshEnabled: true, RefreshIntervalHours: 24, IgnoreHiddenFiles: true, IgnoreFileExtensionsJSON: "[]", InventoryProbeBatchEnabled: true, ConfigurableExclusionRules: true}).Error; err != nil {
 			return err
 		}
 	}

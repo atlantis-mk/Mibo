@@ -43,3 +43,19 @@ type StorageObservationFailure struct {
 func (StorageObservationFailure) TableName() string {
 	return "storage_observation_failures"
 }
+
+type StorageDirectoryFingerprint struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	LibraryID       uint      `gorm:"not null;uniqueIndex:idx_storage_dir_fingerprint_identity,priority:1;index" json:"library_id"`
+	StorageProvider string    `gorm:"size:64;not null;uniqueIndex:idx_storage_dir_fingerprint_identity,priority:2" json:"storage_provider"`
+	StoragePath     string    `gorm:"size:2048;not null;uniqueIndex:idx_storage_dir_fingerprint_identity,priority:3" json:"storage_path"`
+	Fingerprint     string    `gorm:"size:128;not null" json:"fingerprint"`
+	ChildCount      int       `gorm:"not null;default:0" json:"child_count"`
+	ObservedAt      time.Time `gorm:"not null;index" json:"observed_at"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (StorageDirectoryFingerprint) TableName() string {
+	return "storage_directory_fingerprints"
+}

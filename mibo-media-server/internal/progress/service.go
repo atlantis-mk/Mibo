@@ -15,11 +15,13 @@ type Service struct {
 }
 
 type UpdateInput struct {
-	ItemID          uint  `json:"item_id,omitempty"`
-	AssetID         *uint `json:"asset_id,omitempty"`
-	PositionSeconds int   `json:"position_seconds"`
-	DurationSeconds *int  `json:"duration_seconds,omitempty"`
-	Completed       bool  `json:"completed"`
+	ItemID            uint   `json:"item_id,omitempty"`
+	AssetID           *uint  `json:"asset_id,omitempty"`
+	PositionSeconds   int    `json:"position_seconds"`
+	DurationSeconds   *int   `json:"duration_seconds,omitempty"`
+	Completed         bool   `json:"completed"`
+	ProgressFrameURL  string `json:"progress_frame_url,omitempty"`
+	ProgressFrameData string `json:"progress_frame_data,omitempty"`
 }
 
 type State struct {
@@ -29,6 +31,7 @@ type State struct {
 	PositionSeconds  int        `json:"position_seconds"`
 	DurationSeconds  *int       `json:"duration_seconds,omitempty"`
 	PlayedPercentage *float64   `json:"played_percentage,omitempty"`
+	ProgressFrameURL string     `json:"progress_frame_url,omitempty"`
 	PlayCount        int        `json:"play_count,omitempty"`
 	Watched          bool       `json:"watched"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
@@ -119,6 +122,9 @@ func mergeCatalogProgress(data database.UserItemData, input UpdateInput, duratio
 	completed := input.Completed || policy.isCompleted(input.PositionSeconds, duration)
 	data.LastPlayedAt = &now
 	data.PlayedPercentage = playedPercentage(input.PositionSeconds, duration)
+	if input.ProgressFrameURL != "" {
+		data.ProgressFrameURL = input.ProgressFrameURL
+	}
 	if input.AssetID != nil {
 		data.AssetID = input.AssetID
 	}
@@ -209,6 +215,7 @@ func toCatalogState(data database.UserItemData, duration *int) State {
 		PositionSeconds:  data.PositionSeconds,
 		DurationSeconds:  duration,
 		PlayedPercentage: data.PlayedPercentage,
+		ProgressFrameURL: data.ProgressFrameURL,
 		PlayCount:        data.PlayCount,
 		Watched:          data.CompletedAt != nil,
 		CompletedAt:      data.CompletedAt,

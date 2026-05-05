@@ -90,6 +90,55 @@ export type ConsoleMediaSummary = {
   schedules: number
   enabled_schedules: number
   warnings: number
+  ingest?: ConsoleIngestSummary
+}
+
+export type ConsoleIngestSummary = {
+  organizing: number
+  failed: number
+  stale: number
+  review_required: number
+  retry_eligible: number
+}
+
+export type IngestDiagnosticsResult = {
+  summary: ConsoleIngestSummary
+  stages: IngestDiagnosticStage[]
+}
+
+export type IngestDiagnosticStage = {
+  id: number
+  unit_key: string
+  library_id: number
+  library_name?: string
+  inventory_file_id?: number
+  storage_path?: string
+  catalog_item_id?: number
+  catalog_title?: string
+  condition_type: string
+  status: string
+  reason?: string
+  message?: string
+  severity?: string
+  attempts: number
+  job_id?: number
+  metadata_operation_id?: number
+  retry_eligible: boolean
+  stale: boolean
+  updated_at: string
+  last_transition_at?: string
+}
+
+export type IngestRetryResult = {
+  condition_id: number
+  status: string
+  message: string
+}
+
+export type IngestResolveReviewResult = {
+  condition_id: number
+  status: string
+  message: string
 }
 
 export type ConsoleSectionStatus = {
@@ -247,6 +296,7 @@ export type LibraryScanPolicy = {
   ignore_file_extensions: string[]
   min_file_size_bytes: number
   sample_ignore_size_bytes: number
+  inventory_probe_batch_enabled: boolean
   configurable_exclusion_rules: boolean
 }
 
@@ -631,6 +681,17 @@ export type CatalogTagDetail = {
 export type CatalogListItem = {
   id: number
   library_id: number
+  source_kind?: "catalog" | "inventory_file"
+  inventory_file_id?: number
+  maturity_state?:
+    | "discovered"
+    | "classified"
+    | "enriched"
+    | "review_required"
+    | string
+  organizing?: boolean
+  organizing_summary?: CatalogOrganizingSummary
+  storage_path?: string
   type: string
   title: string
   original_title?: string
@@ -639,6 +700,10 @@ export type CatalogListItem = {
   year?: number
   end_year?: number
   runtime_seconds?: number
+  index_number?: number
+  index_number_end?: number
+  parent_index_number?: number
+  episode_label?: string
   community_rating?: number
   official_rating?: string
   series_status?: string
@@ -650,6 +715,28 @@ export type CatalogListItem = {
   child_summary?: CatalogChildSummary
   selected_images?: CatalogSelectedImage[]
   external_identities?: CatalogExternalIdentity[]
+}
+
+export type CatalogOrganizingSummary = {
+  state:
+    | "organizing"
+    | "partial_ready"
+    | "ready"
+    | "failed"
+    | "review_required"
+    | string
+  message: string
+  stage?: string
+  severity?: "info" | "warning" | "error" | string
+  conditions?: CatalogOrganizingCondition[]
+}
+
+export type CatalogOrganizingCondition = {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  severity?: string
 }
 
 export type CatalogAssetDetail = {
@@ -933,6 +1020,45 @@ export type CatalogGovernanceWorkspace = {
   metadata_operation?: CatalogMetadataOperation
 }
 
+export type ManualSeriesEpisodeMappingInput = {
+  source_item_id?: number
+  asset_id?: number
+  file_id?: number
+  storage_path?: string
+  season_number?: number
+  episode_number?: number
+  episode_title?: string
+  episode_path?: string
+  episode_number_end?: number
+}
+
+export type ManualSeriesRestructureInput = {
+  root_path: string
+  series_title?: string
+  season_number?: number
+  migrate_metadata?: boolean
+  episode_mappings?: ManualSeriesEpisodeMappingInput[]
+}
+
+export type ManualSeriesEpisodeLink = {
+  source_item_id?: number
+  asset_id: number
+  file_id?: number
+  storage_path: string
+  episode_item_id?: number
+  season_number: number
+  episode_number: number
+  episode_title: string
+}
+
+export type ManualSeriesRestructureResult = {
+  series?: CatalogListItem
+  seasons?: CatalogSeasonDetail[]
+  episodes?: CatalogEpisodeDetail[]
+  mappings: ManualSeriesEpisodeLink[]
+  warnings?: string[]
+}
+
 export type ProgressState = {
   user_id: number
   item_id?: number
@@ -940,6 +1066,7 @@ export type ProgressState = {
   position_seconds: number
   duration_seconds?: number
   played_percentage?: number
+  progress_frame_url?: string
   play_count?: number
   watched: boolean
   favorite?: boolean
@@ -997,9 +1124,9 @@ export type HealthImpact = {
 }
 
 export type HealthAffected = {
-  media_sources: HealthMediaSourceRef[]
-  libraries: HealthLibraryRef[]
-  jobs: HealthJobRef[]
+  media_sources: HealthMediaSourceRef[] | null
+  libraries: HealthLibraryRef[] | null
+  jobs: HealthJobRef[] | null
 }
 
 export type HealthMediaSourceRef = {
@@ -1044,6 +1171,17 @@ export type HealthTechnicalDetail = {
   job_status?: string
   payload_json?: string
   error_message?: string
+}
+
+function normalizeHealthIssues(issues: HealthIssue[]) {
+  return issues.map((issue) => ({
+    ...issue,
+    affected: {
+      media_sources: issue.affected?.media_sources ?? [],
+      libraries: issue.affected?.libraries ?? [],
+      jobs: issue.affected?.jobs ?? [],
+    },
+  }))
 }
 
 export type MediaSourceValidationResult = {
@@ -1201,6 +1339,7 @@ export type DiscoveryQuery = {
   year?: number
   min_rating?: number
   watched_state?: "all" | "unwatched" | "in_progress" | "watched"
+  organizing_state?: "all" | "organized" | "unorganized"
   sort?: "recent" | "title" | "year" | "watch_status"
   sort_direction?: "asc" | "desc"
   limit?: number
@@ -1277,19 +1416,87 @@ export type PlaybackSource = {
   decision: PlaybackDecision
 }
 
-export type Job = {
+export type WorkflowRun = {
   id: number
-  job_key: string
-  kind: string
+  run_key: string
+  library_id: number
+  reason: string
   status: string
+  priority: number
+  scope_key: string
   payload_json: string
   error_message: string
+  started_at?: string
+  finished_at?: string
+  cancelled_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type WorkflowTask = {
+  id: number
+  run_id: number
+  library_id: number
+  task_key: string
+  task_type: string
+  stage: string
+  status: string
+  priority: number
+  scope_key: string
+  payload_json: string
+  resource_json: string
+  blocked_by: number
   attempts: number
+  max_attempts: number
   available_at: string
+  lease_owner: string
+  lease_until?: string
+  error_message: string
+  resource_wait_key: string
   started_at?: string
   finished_at?: string
   created_at: string
   updated_at: string
+}
+
+export type WorkflowTaskStatusCount = {
+  stage: string
+  status: string
+  count: number
+}
+
+export type WorkflowResourceWaitCount = {
+  resource_key: string
+  count: number
+}
+
+export type WorkflowRunStatusView = {
+  run: WorkflowRun
+  task_counts: WorkflowTaskStatusCount[] | null
+  resource_waits: WorkflowResourceWaitCount[] | null
+  recent_tasks: WorkflowTask[] | null
+}
+
+export type WorkflowDiagnostics = {
+  active_runs: number
+  running_tasks: number
+  blocked_tasks: number
+  expired_leases: number
+  resource_budgets: Array<{
+    id: number
+    resource_key: string
+    max_concurrency: number
+    enabled: boolean
+  }> | null
+  resource_usage: Array<{
+    id: number
+    resource_key: string
+    task_id: number
+    run_id: number
+    library_id: number
+    units: number
+    lease_until: string
+  }> | null
 }
 
 export type ScheduleFrequencyKind = "daily" | "weekly" | "monthly"
@@ -1310,7 +1517,6 @@ export type ScheduleRun = {
   schedule_id: number
   status: ScheduleRunStatus
   job_id?: number
-  job?: Job
   error_summary: string
   started_at?: string
   finished_at?: string
@@ -1348,7 +1554,10 @@ export type ScheduleMutationInput = {
 
 export type ScheduleRunNowResult = {
   run: ScheduleRun
-  job: Job
+}
+
+export type AcceptedResult = {
+  queued: boolean
 }
 
 export type CleanupSettings = {
@@ -1394,6 +1603,14 @@ export function getApiBaseUrl() {
       ""
     ) ?? ""
   )
+}
+
+export function buildApiUrl(pathname: string) {
+  if (pathname.startsWith("http://") || pathname.startsWith("https://")) {
+    return pathname
+  }
+
+  return `${getApiBaseUrl()}${pathname.startsWith("/") ? pathname : `/${pathname}`}`
 }
 
 function handleUnauthorizedResponse(token?: string | null) {
@@ -1521,14 +1738,15 @@ export function createMiboApi(options: ApiOptions) {
     listMediaSources() {
       return request<MediaSource[]>("/api/v1/media-sources")
     },
-    browseStorageProvider(provider: string, path?: string) {
+    browseStorageProvider(provider: string, path?: string, refresh = false) {
       return request<StorageBrowseResult>("/api/v1/storage/providers/browse", {
         method: "POST",
-        body: JSON.stringify({ provider, path }),
+        body: JSON.stringify({ provider, path, refresh }),
       })
     },
     browseOpenList(input: {
       path?: string
+      refresh?: boolean
       config: OpenListMediaSourceConfig
     }) {
       return request<StorageBrowseResult>("/api/v1/storage/openlist/browse", {
@@ -1576,10 +1794,10 @@ export function createMiboApi(options: ApiOptions) {
         }
       )
     },
-    browseMediaSource(mediaSourceId: number, path?: string) {
+    browseMediaSource(mediaSourceId: number, path?: string, refresh = false) {
       return request<StorageBrowseResult>("/api/v1/media-sources/browse", {
         method: "POST",
-        body: JSON.stringify({ id: mediaSourceId, path }),
+        body: JSON.stringify({ id: mediaSourceId, path, refresh }),
       })
     },
     validateMediaSource(mediaSourceId: number) {
@@ -1595,7 +1813,9 @@ export function createMiboApi(options: ApiOptions) {
       return request<HealthSummary>("/api/v1/health/summary")
     },
     listHealthIssues() {
-      return request<HealthIssue[]>("/api/v1/health/issues")
+      return request<HealthIssue[]>("/api/v1/health/issues").then(
+        normalizeHealthIssues
+      )
     },
     rescanHealthIssueLibraries(issueId: string) {
       return request<HealthIssueRescanResult>(
@@ -1611,6 +1831,27 @@ export function createMiboApi(options: ApiOptions) {
     },
     getConsoleSummary() {
       return request<ConsoleSummary>("/api/v1/admin/console")
+    },
+    getIngestDiagnostics() {
+      return request<IngestDiagnosticsResult>(
+        "/api/v1/admin/ingest/diagnostics"
+      )
+    },
+    retryIngestStage(stageId: number) {
+      return request<IngestRetryResult>(
+        `/api/v1/admin/ingest/stages/${stageId}/retry`,
+        {
+          method: "POST",
+        }
+      )
+    },
+    resolveIngestReviewStage(stageId: number) {
+      return request<IngestResolveReviewResult>(
+        `/api/v1/admin/ingest/stages/${stageId}/resolve-review`,
+        {
+          method: "POST",
+        }
+      )
     },
     runConsoleAction(actionId: string) {
       const actionEndpoints: Record<string, string> = {
@@ -1834,10 +2075,14 @@ export function createMiboApi(options: ApiOptions) {
         }
       )
     },
-    scanLibrary(libraryId: number) {
-      return request<{ id: number }>(`/api/v1/libraries/${libraryId}/scan`, {
-        method: "POST",
-      })
+    scanLibrary(libraryId: number, mode: "full" | "changed" = "full") {
+      return request<{ queued: boolean; mode: "full" | "changed" }>(
+        `/api/v1/libraries/${libraryId}/scan`,
+        {
+          method: "POST",
+          body: JSON.stringify({ mode }),
+        }
+      )
     },
     listScanExclusions(filters?: { libraryId?: number; enabled?: boolean }) {
       const query = new URLSearchParams()
@@ -1989,6 +2234,9 @@ export function createMiboApi(options: ApiOptions) {
       if (queryOptions?.watched_state) {
         query.set("watched_state", queryOptions.watched_state)
       }
+      if (queryOptions?.organizing_state) {
+        query.set("organizing_state", queryOptions.organizing_state)
+      }
       if (queryOptions?.sort) query.set("sort", queryOptions.sort)
       if (queryOptions?.sort_direction) {
         query.set("sort_direction", queryOptions.sort_direction)
@@ -2012,6 +2260,18 @@ export function createMiboApi(options: ApiOptions) {
     },
     getCatalogItem(itemId: number) {
       return request<CatalogItemDetail>(`/api/v1/items/${itemId}`)
+    },
+    getInventoryFilePlayback(
+      fileId: number,
+      options?: { clientProfile?: ClientProfile }
+    ) {
+      const params = new URLSearchParams()
+      if (options?.clientProfile)
+        params.set("client_profile", options.clientProfile)
+      const queryString = params.toString()
+      return request<PlaybackSource>(
+        `/api/v1/inventory-files/${fileId}/playback${queryString ? `?${queryString}` : ""}`
+      )
     },
     getCatalogPerson(personId: number) {
       return request<CatalogPersonPageDetail>(`/api/v1/people/${personId}`)
@@ -2093,6 +2353,46 @@ export function createMiboApi(options: ApiOptions) {
         }
       )
     },
+    previewManualSeriesRestructure(
+      libraryId: number,
+      input: ManualSeriesRestructureInput
+    ) {
+      return request<ManualSeriesRestructureResult>(
+        `/api/v1/libraries/${libraryId}/manual-series-restructure/preview`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    applyManualSeriesRestructure(
+      libraryId: number,
+      input: ManualSeriesRestructureInput
+    ) {
+      return request<ManualSeriesRestructureResult>(
+        `/api/v1/libraries/${libraryId}/manual-series-restructure/apply`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    applyCatalogGovernanceClassificationCorrection(
+      itemId: number,
+      input: {
+        action: "movie_versions" | "independent_movies"
+        root_path?: string
+        title?: string
+      }
+    ) {
+      return request<CatalogGovernanceWorkspace>(
+        `/api/v1/items/${itemId}/governance/classification-corrections`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
     unlinkCatalogGovernanceAsset(
       workspaceItemId: number,
       assetId: number,
@@ -2160,15 +2460,18 @@ export function createMiboApi(options: ApiOptions) {
       })
     },
     reprobeInventoryFile(fileId: number) {
-      return request<Job>(`/api/v1/inventory-files/${fileId}/probe`, {
-        method: "POST",
-      })
+      return request<AcceptedResult>(
+        `/api/v1/inventory-files/${fileId}/probe`,
+        {
+          method: "POST",
+        }
+      )
     },
-    listJobs(filters?: {
+    listWorkflows(filters?: {
       limit?: number
       offset?: number
       status?: string
-      kind?: string
+      library_id?: number
     }) {
       const query = new URLSearchParams()
 
@@ -2181,24 +2484,20 @@ export function createMiboApi(options: ApiOptions) {
       if (filters?.status) {
         query.set("status", filters.status)
       }
-      if (filters?.kind) {
-        query.set("kind", filters.kind)
+      if (typeof filters?.library_id === "number") {
+        query.set("library_id", String(filters.library_id))
       }
 
       const queryString = query.toString()
-      return request<Job[]>(
-        `/api/v1/jobs${queryString ? `?${queryString}` : ""}`
+      return request<WorkflowRunStatusView[]>(
+        `/api/v1/workflows${queryString ? `?${queryString}` : ""}`
       )
     },
-    retryJob(jobId: number) {
-      return request<Job>(`/api/v1/jobs/${jobId}/retry`, {
-        method: "POST",
-      })
+    getWorkflow(workflowId: number) {
+      return request<WorkflowRunStatusView>(`/api/v1/workflows/${workflowId}`)
     },
-    cancelJob(jobId: number) {
-      return request<Job>(`/api/v1/jobs/${jobId}/cancel`, {
-        method: "POST",
-      })
+    getWorkflowDiagnostics() {
+      return request<WorkflowDiagnostics>("/api/v1/workflows/diagnostics")
     },
     listSchedules() {
       return request<Schedule[]>("/api/v1/schedules")
@@ -2245,9 +2544,12 @@ export function createMiboApi(options: ApiOptions) {
       })
     },
     runMissingMediaCleanup() {
-      return request<Job>("/api/v1/settings/cleanup/missing-media/run", {
-        method: "POST",
-      })
+      return request<AcceptedResult>(
+        "/api/v1/settings/cleanup/missing-media/run",
+        {
+          method: "POST",
+        }
+      )
     },
     getCatalogPlayback(
       itemId: number,
@@ -2277,6 +2579,7 @@ export function createMiboApi(options: ApiOptions) {
       position_seconds: number
       duration_seconds?: number
       completed?: boolean
+      progress_frame_data?: string
     }) {
       return request<ProgressState>("/api/v1/me/progress", {
         method: "POST",

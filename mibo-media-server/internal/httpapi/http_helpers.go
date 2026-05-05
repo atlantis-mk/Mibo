@@ -312,21 +312,6 @@ func (r *Router) requirePlaybackUser(req *http.Request) (database.User, error) {
 	return r.auth.Authenticate(req.Context(), token)
 }
 
-func storageRootPath(cfg config.Config) string {
-	if configuredStorageProvider(cfg) == "local" {
-		return cfg.Local.RootPath
-	}
-	return cfg.OpenList.RootPath
-}
-
-func configuredStorageProvider(cfg config.Config) string {
-	providerName := strings.ToLower(strings.TrimSpace(cfg.Storage.Provider))
-	if providerName == "" {
-		return "openlist"
-	}
-	return providerName
-}
-
 func validateManualSearchInput(input metadata.ManualSearchInput) error {
 	if title := strings.TrimSpace(input.Title); len(title) > 512 {
 		return fmt.Errorf("title must be 512 characters or fewer")

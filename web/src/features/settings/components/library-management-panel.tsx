@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CheckCircle2Icon } from "lucide-react"
+import { toast } from "sonner"
 
 import {
   AlertDialog,
@@ -131,7 +132,7 @@ export function LibraryManagementPanel({
       })
     },
     onSuccess: async () => {
-      setActionMessage("媒体源已创建。")
+      toast.success("媒体源已创建。")
       setIsCreateSourceOpen(false)
       setSourceDraft(EMPTY_SOURCE_FORM)
       await invalidateData()
@@ -218,7 +219,7 @@ export function LibraryManagementPanel({
       })
     },
     onSuccess: async () => {
-      setActionMessage("内容来源已添加，Mibo 正在后台扫描。")
+      toast.success("媒体库已创建。")
       setIsCreateLibraryOpen(false)
       setLibraryDraft({ ...EMPTY_LIBRARY_FORM })
       await invalidateData()
@@ -251,12 +252,22 @@ export function LibraryManagementPanel({
   })
 
   const scanLibraryMutation = useMutation({
-    mutationFn: async (libraryId: number) => {
+    mutationFn: async ({
+      libraryId,
+      mode,
+    }: {
+      libraryId: number
+      mode: "full" | "changed"
+    }) => {
       if (!api) throw new Error("当前未登录，无法扫描媒体库。")
-      return api.scanLibrary(libraryId)
+      return api.scanLibrary(libraryId, mode)
     },
-    onSuccess: () => {
-      setActionMessage("媒体库扫描任务已提交。")
+    onSuccess: (result) => {
+      setActionMessage(
+        result.mode === "changed"
+          ? "变化扫描任务已提交。"
+          : "全量扫描任务已提交。"
+      )
     },
     onError: (error) => {
       setActionMessage(
@@ -300,7 +311,9 @@ export function LibraryManagementPanel({
             isScanning={scanLibraryMutation.isPending}
             onCreate={() => setIsCreateLibraryOpen(true)}
             onEdit={setEditingLibrary}
-            onScan={(libraryId) => scanLibraryMutation.mutate(libraryId)}
+            onScan={(libraryId, mode) =>
+              scanLibraryMutation.mutate({ libraryId, mode })
+            }
             onDelete={setDeletingLibrary}
           />
         </div>

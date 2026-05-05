@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,13 +14,13 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/health"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/playback"
 	"github.com/atlan/mibo-media-server/internal/progress"
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
+	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
 
@@ -128,23 +129,22 @@ func TestIgnoreHealthIssue(t *testing.T) {
 func newHealthTestServer(t *testing.T) (http.Handler, string, *gorm.DB, string) {
 	t.Helper()
 	root := t.TempDir()
-	cfg := config.Config{HTTP: config.HTTPConfig{Addr: ":8080"}, Storage: config.StorageConfig{Provider: "local"}, Local: config.LocalStorageConfig{RootPath: root}, OpenList: config.OpenListConfig{BaseURL: "http://127.0.0.1:5244"}, Database: config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")}, Worker: config.WorkerConfig{Enabled: true}}
+	cfg := config.Config{HTTP: config.HTTPConfig{Addr: ":8080"}, Local: config.LocalStorageConfig{RootPath: root}, OpenList: config.OpenListConfig{BaseURL: "http://127.0.0.1:5244"}, Database: config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")}, Worker: config.WorkerConfig{Enabled: true}}
 	db, err := database.Open(cfg.Database)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
 	registry := providers.NewRegistry(cfg)
 	authSvc := auth.NewService(db)
-	jobsSvc := jobs.NewService(db)
-	librarySvc := library.NewService(cfg, db, registry, jobsSvc)
+	librarySvc := library.NewService(cfg, db, registry, nil)
 	searchSvc := search.NewService(db, librarySvc)
 	progressSvc := progress.NewService(db, searchSvc)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	catalogSvc := catalog.NewService(db)
 	playbackSvc := playback.NewService(db, registry)
-	healthSvc := health.NewService(db, registry, librarySvc, jobsSvc, cfg.OpenList.BaseURL)
+	healthSvc := health.NewService(db, registry, librarySvc, cfg.OpenList.BaseURL)
 	authHeader := loginTestUser(t, authSvc, "health-user", "password123")
-	handler := New(cfg, db, registry, authSvc, librarySvc, jobsSvc, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc, healthSvc)
+	handler := New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc, healthSvc)
 	return handler, authHeader, db, root
 }
 
@@ -166,14 +166,30 @@ func createHTTPHealthLibrary(t *testing.T, db *gorm.DB, mediaSourceID uint) data
 	return record
 }
 
-func createHTTPFailedJob(t *testing.T, db *gorm.DB, payloadJSON string, errorMessage string) database.Job {
+func createHTTPFailedJob(t *testing.T, db *gorm.DB, payloadJSON string, errorMessage string) database.WorkflowTask {
 	t.Helper()
 	now := time.Now().UTC()
-	job := database.Job{Kind: library.JobKindTargetedRefresh, Status: jobs.StatusFailed, PayloadJSON: payloadJSON, ErrorMessage: errorMessage, Attempts: 1, AvailableAt: now, CreatedAt: now, UpdatedAt: now, FinishedAt: &now}
-	if err := db.Create(&job).Error; err != nil {
-		t.Fatalf("create failed job: %v", err)
+	run := database.WorkflowRun{RunKey: fmt.Sprintf("http-health-test-%d", now.UnixNano()), LibraryID: libraryIDFromPayload(payloadJSON), Reason: library.WorkflowReasonTargetedRefresh, Status: workflow.RunStatusFailed, ScopeKey: "test", CreatedAt: now, UpdatedAt: now, FinishedAt: &now}
+	if run.LibraryID == 0 {
+		run.LibraryID = 1
 	}
-	return job
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create failed workflow run: %v", err)
+	}
+	task := database.WorkflowTask{RunID: run.ID, LibraryID: run.LibraryID, TaskKey: fmt.Sprintf("http-health-task-%d", now.UnixNano()), TaskType: workflow.TaskTypeScanLibraryPath, Stage: workflow.StageScan, Status: workflow.TaskStatusFailed, ScopeKey: run.ScopeKey, PayloadJSON: payloadJSON, ErrorMessage: errorMessage, Attempts: 1, AvailableAt: now, CreatedAt: now, UpdatedAt: now, FinishedAt: &now}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create failed workflow task: %v", err)
+	}
+	return task
+}
+
+func libraryIDFromPayload(payloadJSON string) uint {
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(payloadJSON), &payload)
+	if value, ok := payload["library_id"].(float64); ok && value > 0 {
+		return uint(value)
+	}
+	return 0
 }
 
 func requestHealthIssues(t *testing.T, handler http.Handler, authHeader string) []health.Issue {

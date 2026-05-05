@@ -225,7 +225,7 @@ export function formatDateTime(value?: string) {
 export function formatLatestResult(schedule: Schedule) {
   if (!schedule.latest_run_status) return '暂无历史'
   const statusMap: Record<string, string> = {
-    queued: '排队中',
+    queued: '待执行',
     running: '运行中',
     completed: '已完成',
     failed: '失败',

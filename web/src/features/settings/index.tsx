@@ -55,7 +55,7 @@ export default function SettingsLayout() {
       <div className="px-4 pt-24 pb-10 sm:px-6 lg:px-8 xl:px-10">
         <div className="space-y-5">
           <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start">
-            <aside className="lg:sticky lg:top-24">
+            <aside className="lg:sticky lg:top-24 lg:h-[calc(100svh-8.5rem)]">
               <SettingsSectionNav sections={SETTINGS_SECTIONS} />
             </aside>
 

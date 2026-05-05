@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/jobs"
 	"github.com/atlan/mibo-media-server/internal/library"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
@@ -41,28 +40,52 @@ func TestPollLibraryWithProviderPlansCreateDeleteAndStableMove(t *testing.T) {
 	assertQueuedRefresh(t, ctx, db, library.JobKindTargetedRefresh)
 }
 
+func TestPollLibraryWithProviderPassesRefreshToProvider(t *testing.T) {
+	t.Parallel()
+
+	svc, _, record := newListenerIntegrationService(t)
+	ctx := context.Background()
+	provider := &pollFakeProvider{name: "openlist", root: record.RootPath}
+
+	if err := svc.PollLibraryWithProvider(ctx, record, provider, true); err != nil {
+		t.Fatalf("poll with refresh: %v", err)
+	}
+	if len(provider.refreshRequests) == 0 {
+		t.Fatalf("expected provider list requests")
+	}
+	for _, refresh := range provider.refreshRequests {
+		if !refresh {
+			t.Fatalf("expected refresh=true for all list requests, got %#v", provider.refreshRequests)
+		}
+	}
+}
+
 func assertQueuedRefresh(t *testing.T, ctx context.Context, db *gorm.DB, kind string) {
 	t.Helper()
-	var queued []database.Job
-	if err := db.WithContext(ctx).Where("kind = ? AND status = ?", kind, jobs.StatusQueued).Find(&queued).Error; err != nil {
-		t.Fatalf("list queued refresh jobs: %v", err)
+	var queued []database.WorkflowRun
+	if err := db.WithContext(ctx).Where("reason = ?", library.WorkflowReasonTargetedRefresh).Find(&queued).Error; err != nil {
+		t.Fatalf("list queued refresh workflows: %v", err)
 	}
 	if len(queued) != 1 {
-		t.Fatalf("expected one queued %s job, got %#v", kind, queued)
+		t.Fatalf("expected one queued %s workflow, got %#v", kind, queued)
 	}
 }
 
 func clearJobs(t *testing.T, ctx context.Context, db *gorm.DB) {
 	t.Helper()
-	if err := db.WithContext(ctx).Where("1 = 1").Delete(&database.Job{}).Error; err != nil {
-		t.Fatalf("clear jobs: %v", err)
+	if err := db.WithContext(ctx).Where("1 = 1").Delete(&database.WorkflowTask{}).Error; err != nil {
+		t.Fatalf("clear workflow tasks: %v", err)
+	}
+	if err := db.WithContext(ctx).Where("1 = 1").Delete(&database.WorkflowRun{}).Error; err != nil {
+		t.Fatalf("clear workflow runs: %v", err)
 	}
 }
 
 type pollFakeProvider struct {
-	name  string
-	root  string
-	files []storage.Object
+	name            string
+	root            string
+	files           []storage.Object
+	refreshRequests []bool
 }
 
 func (p *pollFakeProvider) setFiles(files ...storage.Object) {
@@ -72,6 +95,7 @@ func (p *pollFakeProvider) setFiles(files ...storage.Object) {
 func (p *pollFakeProvider) Name() string { return p.name }
 
 func (p *pollFakeProvider) List(_ context.Context, req storage.ListRequest) ([]storage.Object, error) {
+	p.refreshRequests = append(p.refreshRequests, req.Refresh)
 	if req.Path != p.root {
 		return nil, nil
 	}

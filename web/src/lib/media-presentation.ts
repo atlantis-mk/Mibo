@@ -398,6 +398,13 @@ export function getMediaCardAvailabilityStatus(item: MediaCardItem) {
 }
 
 export function formatMediaCardYearRange(item: MediaCardItem) {
+  if (item.organizing_summary?.message) {
+    return item.organizing_summary.message
+  }
+  if (item.organizing) {
+    if (item.maturity_state === "review_required") return "需要确认"
+    return "整理中"
+  }
   const startYear =
     item.year ??
     yearFromDate(item.first_air_date) ??
@@ -439,6 +446,25 @@ export function getMediaCardBadgeCount(item: MediaCardItem) {
 
 export function isMediaCardPlayable(item: MediaCardItem) {
   return item.availability_status === "available"
+}
+
+export function getMediaCardOrganizingLabel(item: MediaCardItem) {
+  switch (item.organizing_summary?.state) {
+    case "failed":
+      return "整理失败"
+    case "review_required":
+      return "待确认"
+    case "partial_ready":
+      return "部分就绪"
+    case "ready":
+      return "就绪"
+    default:
+      return item.maturity_state === "review_required" ? "待确认" : "整理中"
+  }
+}
+
+export function blocksMediaCardCatalogActions(item: MediaCardItem) {
+  return Boolean(item.source_kind === "inventory_file" || item.organizing)
 }
 
 function stripEpisodeSuffix(input: string) {
