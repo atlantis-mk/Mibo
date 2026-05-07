@@ -77,7 +77,6 @@ export const miboQueryKeys = {
     ["admin", "workflows", token, filters] as const,
   workflowDiagnostics: (token: string) =>
     ["admin", "workflows", "diagnostics", token] as const,
-  cleanupSettings: (token: string) => ["settings", "cleanup", token] as const,
 }
 
 export function createAuthedMiboApi(token: string) {
@@ -422,12 +421,5 @@ export function workflowDiagnosticsQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.workflowDiagnostics(token),
     queryFn: () => createAuthedMiboApi(token).getWorkflowDiagnostics(),
-  })
-}
-
-export function cleanupSettingsQueryOptions(token: string) {
-  return queryOptions({
-    queryKey: miboQueryKeys.cleanupSettings(token),
-    queryFn: () => createAuthedMiboApi(token).getCleanupSettings(),
   })
 }

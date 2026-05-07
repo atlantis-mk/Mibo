@@ -99,35 +99,6 @@ func (s *Service) ReconcileItemByIdentity(ctx context.Context, input IdentityInp
 	return item, existing, true, nil
 }
 
-func (s *Service) BackfillScannerIdentities(ctx context.Context) (int, error) {
-	var items []database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL AND type IN ?", []string{ItemTypeMovie, ItemTypeSeries, ItemTypeSeason, ItemTypeEpisode}).
-		Order("id asc").
-		Find(&items).Error; err != nil {
-		return 0, err
-	}
-
-	created := 0
-	for _, item := range items {
-		identityKey, ok := ScannerIdentityKeyForItem(item)
-		if !ok {
-			continue
-		}
-		if _, err := s.SetIdentity(ctx, IdentityInput{
-			ItemID:       item.ID,
-			Provider:     IdentityProviderScanner,
-			IdentityType: item.Type,
-			IdentityKey:  identityKey,
-			SourcePath:   item.Path,
-		}); err != nil {
-			return created, err
-		}
-		created++
-	}
-	return created, nil
-}
-
 func ScannerIdentityKeyForItem(item database.CatalogItem) (string, bool) {
 	path := strings.TrimSpace(item.Path)
 	itemType := strings.TrimSpace(item.Type)

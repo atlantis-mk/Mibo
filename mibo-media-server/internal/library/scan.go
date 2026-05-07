@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
@@ -76,38 +77,41 @@ type catalogEpisodeSlot struct {
 }
 
 type catalogScanArtifact struct {
-	ItemType             string
-	ItemPath             string
-	SourcePath           string
-	SeriesPath           string
-	SeasonPath           string
-	Title                string
-	OriginalTitle        string
-	SeriesTitle          string
-	Year                 *int
-	Tags                 []string
-	SeasonNumber         *int
-	EpisodeSlots         []catalogEpisodeSlot
-	StorageProvider      string
-	StableIdentityKey    string
-	ProviderName         string
-	HashesJSON           string
-	ThumbnailURL         string
-	ObjectType           string
-	ProviderMeta         map[string]string
-	SizeBytes            int64
-	ModifiedAt           *time.Time
-	Container            string
-	PreferredAssetType   string
-	PreferredAssetRole   string
-	NormalizationVersion string
-	RemovedTokens        []titleclean.RemovedToken
-	FilenameSignals      filenameSignalModel
-	SubtitleSidecars     []catalogScanSidecar
-	MetadataSidecars     []catalogScanMetadataSidecar
-	ImageCandidates      []catalogScanImageCandidate
-	ExternalIDs          []catalogScanExternalID
-	Decisions            []scanDecision
+	ItemType               string
+	ItemPath               string
+	SourcePath             string
+	SeriesPath             string
+	SeasonPath             string
+	Title                  string
+	OriginalTitle          string
+	SeriesTitle            string
+	Year                   *int
+	Tags                   []string
+	SeasonNumber           *int
+	EpisodeSlots           []catalogEpisodeSlot
+	StorageProvider        string
+	StableIdentityKey      string
+	ProviderName           string
+	HashesJSON             string
+	ThumbnailURL           string
+	ObjectType             string
+	ProviderMeta           map[string]string
+	SizeBytes              int64
+	ModifiedAt             *time.Time
+	Container              string
+	PreferredAssetType     string
+	PreferredAssetRole     string
+	NormalizationVersion   string
+	RemovedTokens          []titleclean.RemovedToken
+	FilenameSignals        filenameSignalModel
+	SubtitleSidecars       []catalogScanSidecar
+	MetadataSidecars       []catalogScanMetadataSidecar
+	ImageCandidates        []catalogScanImageCandidate
+	ExternalIDs            []catalogScanExternalID
+	Decisions              []scanDecision
+	ContentShapeProfile    map[string]any
+	ContentShapePlan       map[string]any
+	ContentShapeAssignment map[string]any
 }
 
 type catalogScanImageCandidate struct {
@@ -169,9 +173,50 @@ type scanMode struct {
 	catalogMaterializeFileIDs   []uint
 	inventoryProbeFileIDs       []uint
 	classificationFileIDs       []uint
-	directorySummaries          map[string]scanDirectorySummary
+	discoveredFiles             map[string]database.InventoryFile
 	directorySnapshots          map[string]scanDirectorySnapshot
-	classificationCache        *classificationDirectoryCache
+	decisionSnapshots           map[string]scanDirectorySnapshot
+	pathTreeAssignmentsByPath   map[string]pathTreeWorkGroupAssignment
+	pendingSiblingMovieFiles    map[string][]pendingSiblingMovieFile
+	materializedDirectories     map[string]struct{}
+	skippedDirectories          map[string]error
+}
+
+type pendingSiblingMovieFile struct {
+	Provider           storage.Provider
+	Library            database.Library
+	Object             storage.Object
+	Snapshot           scanDirectorySnapshot
+	DecisionSnapshot   scanDirectorySnapshot
+	DirectorySnapshots map[string]scanDirectorySnapshot
+	SubtitlePolicy     database.LibrarySubtitlePolicy
+	FileID             uint
+}
+
+func (m *scanMode) pathTreeAssignment(storagePath string) pathTreeWorkGroupAssignment {
+	if m == nil || len(m.pathTreeAssignmentsByPath) == 0 {
+		return pathTreeWorkGroupAssignment{}
+	}
+	return m.pathTreeAssignmentsByPath[strings.TrimSpace(storagePath)]
+}
+
+func (m *scanMode) mergePathTreeAssignments(assignments map[string]pathTreeWorkGroupAssignment) {
+	if m == nil || len(assignments) == 0 {
+		return
+	}
+	if m.pathTreeAssignmentsByPath == nil {
+		m.pathTreeAssignmentsByPath = make(map[string]pathTreeWorkGroupAssignment, len(assignments))
+	}
+	for storagePath, assignment := range assignments {
+		m.pathTreeAssignmentsByPath[strings.TrimSpace(storagePath)] = assignment
+	}
+}
+
+func (m *scanMode) allowsMissingCleanup() bool {
+	if m == nil {
+		return true
+	}
+	return !m.partial
 }
 
 func (m *scanMode) recordCatalogMaterializeCandidate(fileID uint) {
@@ -179,22 +224,6 @@ func (m *scanMode) recordCatalogMaterializeCandidate(fileID uint) {
 		return
 	}
 	m.catalogMaterializeFileIDs = append(m.catalogMaterializeFileIDs, fileID)
-}
-
-func (m *scanMode) directorySummary(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot) scanDirectorySummary {
-	if m == nil {
-		return buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
-	}
-	if m.directorySummaries == nil {
-		m.directorySummaries = make(map[string]scanDirectorySummary)
-	}
-	key := strings.TrimSpace(snapshot.Path)
-	if summary, ok := m.directorySummaries[key]; ok {
-		return summary
-	}
-	summary := buildScanDirectorySummary(libraryType, libraryRoot, snapshot)
-	m.directorySummaries[key] = summary
-	return summary
 }
 
 func (m *scanMode) recordDirectorySnapshot(snapshot scanDirectorySnapshot) {
@@ -214,11 +243,69 @@ func (m *scanMode) recordDirectorySnapshot(snapshot scanDirectorySnapshot) {
 	m.directorySnapshots[key] = snapshot
 }
 
+func (m *scanMode) decisionSnapshot(path string) (scanDirectorySnapshot, bool) {
+	if m == nil || m.decisionSnapshots == nil {
+		return scanDirectorySnapshot{}, false
+	}
+	snapshot, ok := m.decisionSnapshots[strings.TrimSpace(path)]
+	return snapshot, ok
+}
+
+func (m *scanMode) recordDecisionSnapshot(snapshot scanDirectorySnapshot) {
+	if m == nil {
+		return
+	}
+	key := strings.TrimSpace(snapshot.Path)
+	if key == "" {
+		return
+	}
+	if m.decisionSnapshots == nil {
+		m.decisionSnapshots = make(map[string]scanDirectorySnapshot)
+	}
+	if _, ok := m.decisionSnapshots[key]; ok {
+		return
+	}
+	m.decisionSnapshots[key] = snapshot
+}
+
+func (m *scanMode) markDirectoryMaterialized(path string) {
+	if m == nil {
+		return
+	}
+	key := strings.TrimSpace(path)
+	if key == "" {
+		return
+	}
+	if m.materializedDirectories == nil {
+		m.materializedDirectories = make(map[string]struct{})
+	}
+	m.materializedDirectories[key] = struct{}{}
+}
+
+func (m *scanMode) directoryMaterialized(path string) bool {
+	if m == nil || m.materializedDirectories == nil {
+		return false
+	}
+	_, ok := m.materializedDirectories[strings.TrimSpace(path)]
+	return ok
+}
+
 func (m *scanMode) recordCatalogMatchCandidate(itemID uint) {
 	if m == nil || itemID == 0 {
 		return
 	}
 	m.catalogMatchItemIDs = append(m.catalogMatchItemIDs, itemID)
+}
+
+func (m *scanMode) recordCatalogMatchCandidateForItem(item database.CatalogItem) {
+	if m == nil || item.ID == 0 {
+		return
+	}
+	if (item.Type == "season" || item.Type == "episode") && item.RootID != nil && *item.RootID != 0 {
+		m.recordCatalogMatchCandidate(*item.RootID)
+		return
+	}
+	m.recordCatalogMatchCandidate(item.ID)
 }
 
 func (m *scanMode) recordInventoryProbeCandidate(fileID uint) {
@@ -228,11 +315,67 @@ func (m *scanMode) recordInventoryProbeCandidate(fileID uint) {
 	m.inventoryProbeFileIDs = append(m.inventoryProbeFileIDs, fileID)
 }
 
+func (m *scanMode) recordDiscoveredFiles(files map[string]database.InventoryFile) {
+	if m == nil || len(files) == 0 {
+		return
+	}
+	if m.discoveredFiles == nil {
+		m.discoveredFiles = make(map[string]database.InventoryFile, len(files))
+	}
+	for _, file := range files {
+		if file.ID == 0 || strings.TrimSpace(file.StoragePath) == "" {
+			continue
+		}
+		m.discoveredFiles[strings.TrimSpace(file.StoragePath)] = file
+	}
+}
+
+func (m *scanMode) discoveredVideoFilesInSnapshot(snapshot scanDirectorySnapshot) []database.InventoryFile {
+	if m == nil || len(m.discoveredFiles) == 0 {
+		return nil
+	}
+	files := make([]database.InventoryFile, 0, len(snapshot.Objects))
+	for _, object := range snapshot.Objects {
+		if object.IsDir || !isVideoFile(object.Path) {
+			continue
+		}
+		if file, ok := m.discoveredFiles[strings.TrimSpace(object.Path)]; ok {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
 func (m *scanMode) recordClassificationValidationCandidate(fileID uint) {
 	if m == nil || fileID == 0 {
 		return
 	}
 	m.classificationFileIDs = append(m.classificationFileIDs, fileID)
+}
+
+func (m *scanMode) recordSkippedDirectory(path string, err error) {
+	if m == nil || err == nil {
+		return
+	}
+	key := strings.TrimSpace(path)
+	if key == "" {
+		return
+	}
+	if m.skippedDirectories == nil {
+		m.skippedDirectories = make(map[string]error)
+	}
+	m.skippedDirectories[key] = err
+}
+
+func (m *scanMode) skippedDirectoryPaths() []string {
+	if m == nil || len(m.skippedDirectories) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(m.skippedDirectories))
+	for path := range m.skippedDirectories {
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 type scanDirectorySnapshot struct {

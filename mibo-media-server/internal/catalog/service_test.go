@@ -71,6 +71,90 @@ func TestCreateItemBuildsSeriesHierarchy(t *testing.T) {
 	}
 }
 
+func TestCreateItemDeferredProjectionSkipsImmediateProjectionRefresh(t *testing.T) {
+	svc, ctx := newTestService(t)
+
+	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Deferred Movie", Path: "/movies/deferred.mkv", SortKey: "Deferred Movie", AvailabilityStatus: AvailabilityAvailable, ProjectionMode: ProjectionModeDeferred})
+	if err != nil {
+		t.Fatalf("create deferred item: %v", err)
+	}
+
+	var rollupCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.ItemRollup{}).Where("item_id = ?", item.ID).Count(&rollupCount).Error; err != nil {
+		t.Fatalf("count deferred rollups: %v", err)
+	}
+	if rollupCount != 0 {
+		t.Fatalf("expected no immediate rollup for deferred projection, got %d", rollupCount)
+	}
+
+	var docCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.CatalogSearchDocument{}).Where("item_id = ?", item.ID).Count(&docCount).Error; err != nil {
+		t.Fatalf("count deferred search docs: %v", err)
+	}
+	if docCount != 0 {
+		t.Fatalf("expected no immediate search doc for deferred projection, got %d", docCount)
+	}
+}
+
+func TestRecordMetadataSourceDeferredProjectionSkipsImmediateProjectionRefresh(t *testing.T) {
+	svc, ctx := newTestService(t)
+
+	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Deferred Source Movie", Path: "/movies/deferred-source.mkv", SortKey: "Deferred Source Movie", AvailabilityStatus: AvailabilityAvailable, ProjectionMode: ProjectionModeDeferred})
+	if err != nil {
+		t.Fatalf("create deferred item: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := svc.RecordMetadataSource(ctx, MetadataSourceInput{ItemID: item.ID, SourceType: SourceTypeLocalFile, SourceName: "scanner", PayloadJSON: `{"title":"Deferred"}`, FetchedAt: now, ProjectionMode: ProjectionModeDeferred}); err != nil {
+		t.Fatalf("record deferred metadata source: %v", err)
+	}
+
+	var rollupCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.ItemRollup{}).Where("item_id = ?", item.ID).Count(&rollupCount).Error; err != nil {
+		t.Fatalf("count deferred rollups: %v", err)
+	}
+	if rollupCount != 0 {
+		t.Fatalf("expected no immediate rollup for deferred metadata source, got %d", rollupCount)
+	}
+
+	var docCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.CatalogSearchDocument{}).Where("item_id = ?", item.ID).Count(&docCount).Error; err != nil {
+		t.Fatalf("count deferred search docs: %v", err)
+	}
+	if docCount != 0 {
+		t.Fatalf("expected no immediate search doc for deferred metadata source, got %d", docCount)
+	}
+}
+
+func TestSetExternalIDDeferredProjectionSkipsImmediateProjectionRefresh(t *testing.T) {
+	svc, ctx := newTestService(t)
+
+	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeMovie, Title: "Deferred External ID Movie", Path: "/movies/deferred-external-id.mkv", SortKey: "Deferred External ID Movie", AvailabilityStatus: AvailabilityAvailable, ProjectionMode: ProjectionModeDeferred})
+	if err != nil {
+		t.Fatalf("create deferred item: %v", err)
+	}
+
+	if _, err := svc.SetExternalID(ctx, ExternalIDInput{ItemID: item.ID, Provider: "tmdb", ProviderType: "movie", ExternalID: "456", IsPrimary: true, ProjectionMode: ProjectionModeDeferred}); err != nil {
+		t.Fatalf("set deferred external id: %v", err)
+	}
+
+	var rollupCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.ItemRollup{}).Where("item_id = ?", item.ID).Count(&rollupCount).Error; err != nil {
+		t.Fatalf("count deferred rollups: %v", err)
+	}
+	if rollupCount != 0 {
+		t.Fatalf("expected no immediate rollup for deferred external id, got %d", rollupCount)
+	}
+
+	var docCount int64
+	if err := svc.db.WithContext(ctx).Model(&database.CatalogSearchDocument{}).Where("item_id = ?", item.ID).Count(&docCount).Error; err != nil {
+		t.Fatalf("count deferred search docs: %v", err)
+	}
+	if docCount != 0 {
+		t.Fatalf("expected no immediate search doc for deferred external id, got %d", docCount)
+	}
+}
+
 func TestApplyFieldRespectsLockedCanonicalValue(t *testing.T) {
 	svc, ctx := newTestService(t)
 	item, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 1, Type: ItemTypeSeries, Title: "Original Title"})
@@ -189,46 +273,6 @@ func TestCatalogIdentityUpsertAndReconcile(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected one scanner identity row, got %d", count)
-	}
-}
-
-func TestBackfillScannerIdentitiesUsesStableItemPath(t *testing.T) {
-	svc, ctx := newTestService(t)
-	movie, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 7, Type: ItemTypeMovie, Title: "Movie", Path: "/movies/Movie (2024)"})
-	if err != nil {
-		t.Fatalf("create movie: %v", err)
-	}
-	series, err := svc.CreateItem(ctx, CreateItemInput{LibraryID: 7, Type: ItemTypeSeries, Title: "Show", Path: "/tv/Show"})
-	if err != nil {
-		t.Fatalf("create series: %v", err)
-	}
-
-	count, err := svc.BackfillScannerIdentities(ctx)
-	if err != nil {
-		t.Fatalf("backfill scanner identities: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("expected two backfilled identities, got %d", count)
-	}
-
-	for _, item := range []database.CatalogItem{movie, series} {
-		key, ok := ScannerIdentityKeyForItem(item)
-		if !ok {
-			t.Fatalf("expected scanner identity key for %#v", item)
-		}
-		resolved, _, err := svc.FindItemByIdentity(ctx, IdentityProviderScanner, item.Type, key)
-		if err != nil {
-			t.Fatalf("find item by identity %q: %v", key, err)
-		}
-		if resolved.ID != item.ID {
-			t.Fatalf("expected identity %q to resolve item %d, got %d", key, item.ID, resolved.ID)
-		}
-	}
-
-	if count, err = svc.BackfillScannerIdentities(ctx); err != nil {
-		t.Fatalf("repeat backfill scanner identities: %v", err)
-	} else if count != 2 {
-		t.Fatalf("expected repeat backfill to process two identities without duplicates, got %d", count)
 	}
 }
 

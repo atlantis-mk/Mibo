@@ -2,9 +2,11 @@ package library
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -18,7 +20,7 @@ import (
 
 func TestQueueLibraryWorkflowCreatesPathScopedScanTasks(t *testing.T) {
 	ctx, db, svc := newWorkflowScanHarness(t)
-	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies)
+	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto)
 
 	run, reused, err := svc.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryRecord.ID, Reason: WorkflowReasonManualScan, Priority: 10})
 	if err != nil {
@@ -41,7 +43,7 @@ func TestQueueLibraryWorkflowCreatesPathScopedScanTasks(t *testing.T) {
 
 func TestRunWorkflowScanLibraryPathCreatesMaterializeAndProjectionTasks(t *testing.T) {
 	ctx, db, svc := newWorkflowScanHarness(t)
-	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies)
+	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto)
 	mustWriteFixtureFile(t, filepath.Join(libraryRecord.RootPath, "Movie A.2024.mkv"))
 	run, _, err := svc.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryRecord.ID, Reason: WorkflowReasonManualScan, Priority: 10})
 	if err != nil {
@@ -73,7 +75,7 @@ func TestRunWorkflowScanLibraryPathCreatesMaterializeAndProjectionTasks(t *testi
 
 func TestRunWorkflowScanLibraryPathAcceptsScopedSubdirectory(t *testing.T) {
 	ctx, db, svc := newWorkflowScanHarness(t)
-	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies)
+	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto)
 	scopedRoot := filepath.Join(libraryRecord.RootPath, "Movie Pack")
 	mustWriteFixtureFile(t, filepath.Join(scopedRoot, "Movie A.2024.mkv"))
 	run, _, err := svc.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryRecord.ID, RootPath: scopedRoot, Reason: WorkflowReasonTargetedRefresh, Priority: 10})
@@ -99,7 +101,7 @@ func TestRunWorkflowScanLibraryPathAcceptsScopedSubdirectory(t *testing.T) {
 
 func TestQueueLibraryScanWithReasonReturnsWorkflowCompatibilityJob(t *testing.T) {
 	ctx, _, svc := newWorkflowScanHarness(t)
-	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies)
+	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto)
 
 	job, err := svc.QueueLibraryScanWithReason(ctx, libraryRecord.ID, WorkflowReasonManualScan)
 	if err != nil {
@@ -108,6 +110,83 @@ func TestQueueLibraryScanWithReasonReturnsWorkflowCompatibilityJob(t *testing.T)
 	if job.ID == 0 || job.Kind != JobKindSyncLibrary || job.Status != workflow.RunStatusQueued {
 		t.Fatalf("unexpected compatibility job: %#v", job)
 	}
+}
+
+func TestRunInventoryProbeBatchUsesInjectedExecutor(t *testing.T) {
+	_, _, svc := newWorkflowScanHarness(t)
+	var probed []uint
+	svc.SetInventoryProbeExecutor(func(ctx context.Context, fileID uint) error {
+		probed = append(probed, fileID)
+		return nil
+	})
+
+	err := svc.RunInventoryProbeBatch(context.Background(), InventoryProbeBatchPayload{FileIDs: []uint{4, 2, 4, 0, 1}})
+	if err != nil {
+		t.Fatalf("run probe batch: %v", err)
+	}
+	if !reflect.DeepEqual(probed, []uint{1, 2, 4}) {
+		t.Fatalf("unexpected probed ids: %#v", probed)
+	}
+}
+
+func TestRunWorkflowInventoryFileProbeUsesBatchExecutor(t *testing.T) {
+	_, _, svc := newWorkflowScanHarness(t)
+	var probed []uint
+	svc.SetInventoryProbeExecutor(func(ctx context.Context, fileID uint) error {
+		probed = append(probed, fileID)
+		return nil
+	})
+
+	err := svc.RunWorkflowInventoryFileProbe(context.Background(), database.WorkflowTask{LibraryID: 7, PayloadJSON: `{"inventory_file_id":42}`})
+	if err != nil {
+		t.Fatalf("run single file probe workflow: %v", err)
+	}
+	if !reflect.DeepEqual(probed, []uint{42}) {
+		t.Fatalf("unexpected probed ids: %#v", probed)
+	}
+}
+
+func TestRunCatalogMatchBatchUsesInjectedExecutor(t *testing.T) {
+	_, _, svc := newWorkflowScanHarness(t)
+	var matched []uint
+	svc.SetCatalogMatchExecutor(func(ctx context.Context, itemID uint) error {
+		matched = append(matched, itemID)
+		return nil
+	})
+
+	err := svc.RunCatalogMatchBatch(context.Background(), CatalogMatchBatchPayload{ItemIDs: []uint{9, 3, 9, 0, 1}})
+	if err != nil {
+		t.Fatalf("run match batch: %v", err)
+	}
+	if !reflect.DeepEqual(matched, []uint{1, 3, 9}) {
+		t.Fatalf("unexpected matched ids: %#v", matched)
+	}
+}
+
+func TestRegisterWorkflowHandlersRegistersProbeAndMatchHandlers(t *testing.T) {
+	ctx, _, svc := newWorkflowScanHarness(t)
+	runner := workflow.NewRunner(workflow.NewService(svc.db), workflow.RunnerConfig{Enabled: true})
+	svc.SetInventoryProbeExecutor(func(ctx context.Context, fileID uint) error { return nil })
+	svc.SetCatalogMatchExecutor(func(ctx context.Context, itemID uint) error { return nil })
+	svc.RegisterWorkflowHandlers(runner)
+
+	probePayload := workflowPayloadJSON(t, InventoryProbeBatchPayload{LibraryID: 1, FileIDs: []uint{5}})
+	if err := runner.HandleTaskForTest(ctx, database.WorkflowTask{TaskType: workflow.TaskTypeProbeInventory, PayloadJSON: probePayload}); err != nil {
+		t.Fatalf("probe handler unavailable: %v", err)
+	}
+	matchPayload := workflowPayloadJSON(t, CatalogMatchBatchPayload{LibraryID: 1, ItemIDs: []uint{8}})
+	if err := runner.HandleTaskForTest(ctx, database.WorkflowTask{TaskType: workflow.TaskTypeMatchMetadata, PayloadJSON: matchPayload}); err != nil {
+		t.Fatalf("match handler unavailable: %v", err)
+	}
+}
+
+func workflowPayloadJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	return string(encoded)
 }
 
 func newWorkflowScanHarness(t *testing.T) (context.Context, *gorm.DB, *Service) {
@@ -135,7 +214,7 @@ func createWorkflowScanLibrary(t *testing.T, ctx context.Context, svc *Service, 
 	if err != nil {
 		t.Fatalf("create media source: %v", err)
 	}
-	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: name, Type: libraryType, MediaSourceID: source.ID, RootPath: rootPath})
+	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: name, MediaSourceID: source.ID, RootPath: rootPath})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}

@@ -68,6 +68,46 @@ func TestValidateCatalogKernelUniquenessIgnoresSoftDeletedInventoryDuplicates(t 
 	}
 }
 
+func TestRepairSQLiteContentShapePlanScopeIndexRebuildsStaleDefinition(t *testing.T) {
+	db := openConstraintTestDB(t)
+
+	if err := db.Exec(`
+		CREATE TABLE content_shape_plans (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			library_id INTEGER NOT NULL,
+			storage_provider TEXT NOT NULL,
+			root_path TEXT NOT NULL,
+			directory_path TEXT NOT NULL,
+			classifier_version TEXT NOT NULL,
+			review_state TEXT,
+			deleted_scope BOOLEAN
+		)
+	`).Error; err != nil {
+		t.Fatalf("create content_shape_plans table: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX idx_content_shape_plan_scope ON content_shape_plans(storage_provider, root_path, directory_path, classifier_version)`).Error; err != nil {
+		t.Fatalf("create stale content_shape_plan_scope index: %v", err)
+	}
+
+	if err := repairSQLiteConflictIndexes(db); err != nil {
+		t.Fatalf("repair sqlite conflict indexes: %v", err)
+	}
+		exists, unique, columns, err := sqliteIndexDefinition(db, "content_shape_plans", "idx_content_shape_plan_scope")
+	if err != nil {
+		t.Fatalf("load repaired sqlite index definition: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected repaired idx_content_shape_plan_scope to exist")
+	}
+	if !unique {
+		t.Fatal("expected repaired idx_content_shape_plan_scope to remain unique")
+	}
+	expected := []string{"library_id", "storage_provider", "root_path", "directory_path", "classifier_version"}
+	if !sameStringSlice(columns, expected) {
+		t.Fatalf("expected repaired idx_content_shape_plan_scope columns %v, got %v", expected, columns)
+	}
+}
+
 func openConstraintTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 

@@ -2,11 +2,16 @@ package library
 
 import (
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
+
+var leadingNumericTokenProfilePattern = regexp.MustCompile(`^0*([1-9]\d{0,2})(?:$|[\s._-]+.*)`)
+var bareSxETokenProfilePattern = regexp.MustCompile(`(?i)^s0*(\d{1,2})e0*(\d{1,3})(?:$|[\s._-]+.*)`)
+var bracketWebsiteTokenProfilePattern = regexp.MustCompile(`(?i)[\[【(（]([^\]】)）]*(?:网站|www\.|\.com|\.net|\.org)[^\]】)）]*)[\]】)）]`)
 
 const (
 	filenameSignalKindQuality               = "quality"
@@ -25,20 +30,20 @@ const (
 	filenameSignalKindTitle                 = "title"
 	filenameSignalKindPath                  = "path"
 
-	filenameSignalReasonQualityNoise               = "quality_noise"
-	filenameSignalReasonSourceNoise                = "source_noise"
-	filenameSignalReasonCodecNoise                 = "codec_noise"
-	filenameSignalReasonAudioNoise                 = "audio_noise"
-	filenameSignalReasonSubtitleNoise              = "subtitle_noise"
-	filenameSignalReasonHDRNoise                   = "hdr_noise"
-	filenameSignalReasonEditionHint                = "edition_hint"
-	filenameSignalReasonReleaseGroupHint           = "release_group_hint"
-	filenameSignalReasonYearHint                   = "year_hint"
-	filenameSignalReasonEpisodeMarker              = "episode_marker"
-	filenameSignalReasonRoleHint                   = "role_hint"
-	filenameSignalReasonRemovedFromTitle           = "removed_from_title"
-	filenameSignalReasonSuppressWeakEpisodeNumber  = "suppress_weak_episode_number"
-	filenameSignalReasonDirectoryTitleHint         = "directory_title_hint"
+	filenameSignalReasonQualityNoise              = "quality_noise"
+	filenameSignalReasonSourceNoise               = "source_noise"
+	filenameSignalReasonCodecNoise                = "codec_noise"
+	filenameSignalReasonAudioNoise                = "audio_noise"
+	filenameSignalReasonSubtitleNoise             = "subtitle_noise"
+	filenameSignalReasonHDRNoise                  = "hdr_noise"
+	filenameSignalReasonEditionHint               = "edition_hint"
+	filenameSignalReasonReleaseGroupHint          = "release_group_hint"
+	filenameSignalReasonYearHint                  = "year_hint"
+	filenameSignalReasonEpisodeMarker             = "episode_marker"
+	filenameSignalReasonRoleHint                  = "role_hint"
+	filenameSignalReasonRemovedFromTitle          = "removed_from_title"
+	filenameSignalReasonSuppressWeakEpisodeNumber = "suppress_weak_episode_number"
+	filenameSignalReasonDirectoryTitleHint        = "directory_title_hint"
 	filenameSignalReasonWebsiteNoise              = "website_noise"
 	filenameSignalReasonGenericNameHint           = "generic_name_hint"
 )
@@ -64,6 +69,7 @@ type filenameIdentitySignals struct {
 	EpisodeEnd     *int
 	EpisodeNumbers []int
 	EpisodeSource  string
+	LeadingNumber  *int
 }
 
 type filenameReleaseHints struct {
@@ -125,7 +131,7 @@ func extractFilenameSignalModel(itemPath string) filenameSignalModel {
 	normalized := titleclean.Normalize(titleclean.NormalizeInput{RawTitle: rawTitle})
 	model := filenameSignalModel{
 		RawPathData: filenameRawPathData{Path: cleanPath, Directory: path.Dir(cleanPath), Basename: fileName, Extension: ext, Segments: segments},
-		Identity: filenameIdentitySignals{TitleCandidate: normalized.Title, Year: normalized.Year},
+		Identity:    filenameIdentitySignals{TitleCandidate: normalized.Title, Year: normalized.Year},
 		ReleaseHints: filenameReleaseHints{
 			Quality:      qualitySignal(rawTitle),
 			SourceTags:   sourceTagSignals(rawTitle),
@@ -135,7 +141,7 @@ func extractFilenameSignalModel(itemPath string) filenameSignalModel {
 			HDR:          firstSignalByReason(normalized.RemovedTokens, "hdr"),
 			Edition:      editionSignal(rawTitle),
 			ReleaseGroup: releaseGroupSignal(rawTitle),
-			Website:      firstSignalByReason(normalized.RemovedTokens, "website"),
+			Website:      firstNonEmptyString(firstSignalByReason(normalized.RemovedTokens, "website"), bracketWebsiteTokenProfile(rawTitle)),
 			GenericNoise: genericFilenameNoiseSignal(rawTitle),
 		},
 		RoleHints:       filenameRoleHints{Role: videoFileRoleSignal(cleanPath)},
@@ -166,6 +172,13 @@ func extractFilenameSignalModel(itemPath string) filenameSignalModel {
 		model.Identity.EpisodeNumber = episode
 		model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
 		model.Identity.EpisodeSource = "explicit"
+	} else if groups := bareSxETokenProfilePattern.FindStringSubmatch(rawTitle); len(groups) >= 3 {
+		season := parseOrdinalToken(groups[1])
+		episode := parseOrdinalToken(groups[2])
+		model.Identity.SeasonNumber = season
+		model.Identity.EpisodeNumber = episode
+		model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
+		model.Identity.EpisodeSource = "explicit"
 	} else if episode := parseEmbeddedEpisodeNumber(rawTitle); episode != nil {
 		model.Identity.EpisodeNumber = episode
 		model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
@@ -177,6 +190,14 @@ func extractFilenameSignalModel(itemPath string) filenameSignalModel {
 			model.Identity.EpisodeSource = "explicit"
 		}
 	}
+	if leading := leadingNumericTokenProfile(rawTitle); leading != nil {
+		model.Identity.LeadingNumber = leading
+		if model.Identity.EpisodeNumber == nil && weakEpisodeNumberAllowed(rawTitle) {
+			model.Identity.EpisodeNumber = leading
+			model.Identity.EpisodeNumbers = episodeNumbersFromPointer(leading)
+			model.Identity.EpisodeSource = "leading_numeric"
+		}
+	}
 	for idx := len(segments) - 2; idx >= 0; idx-- {
 		if season := parseSeasonDirectoryNumber(segments[idx]); season != nil {
 			model.PathHints.SeasonNumber = season
@@ -185,6 +206,22 @@ func extractFilenameSignalModel(itemPath string) filenameSignalModel {
 	}
 	model.Evidence = filenameEvidenceSummariesFromModel(model, rawTitle)
 	return model
+}
+
+func bracketWebsiteTokenProfile(rawTitle string) string {
+	match := bracketWebsiteTokenProfilePattern.FindStringSubmatch(strings.TrimSpace(rawTitle))
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func leadingNumericTokenProfile(rawTitle string) *int {
+	match := leadingNumericTokenProfilePattern.FindStringSubmatch(strings.TrimSpace(rawTitle))
+	if len(match) < 2 {
+		return nil
+	}
+	return parseOrdinalToken(match[1])
 }
 
 func cleanupEvidenceFromRemovedTokens(tokens []titleclean.RemovedToken) []filenameCleanupEvidence {
@@ -228,10 +265,26 @@ func filenameTitleTokens(rawTitle string, removed []filenameCleanupEvidence) []f
 		if trimmed == "" {
 			continue
 		}
-		_, removed := removedValues[strings.ToLower(trimmed)]
-		items = append(items, filenameTitleToken{Value: trimmed, Kept: !removed})
+		normalized := strings.ToLower(trimmed)
+		_, removed := removedValues[normalized]
+		items = append(items, filenameTitleToken{Value: trimmed, Kept: !removed && !suppressedFilenameProfileToken(trimmed)})
 	}
 	return items
+}
+
+func suppressedFilenameProfileToken(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	if qualitySignalPattern.MatchString(trimmed) || audioChannelPattern.MatchString(lower) || scanNoisePattern.MatchString(trimmed) {
+		return true
+	}
+	if lower == "trailer" || lower == "sample" || lower == "preview" || lower == "featurette" || lower == "extra" || lower == "extras" || lower == "behind" || lower == "scenes" || lower == "pv" {
+		return true
+	}
+	return false
 }
 
 func (summary filenameEvidenceSummary) scanDecisionEvidence() scanDecisionEvidence {
@@ -293,6 +346,11 @@ func filenameEvidenceSummariesFromModel(model filenameSignalModel, rawTitle stri
 	}
 	if !weakEpisodeNumberAllowed(rawTitle) {
 		items = append(items, filenameEvidenceSummary{Kind: filenameSignalKindAntiMisclassification, Source: "filename", Value: rawTitle, Reason: filenameSignalReasonSuppressWeakEpisodeNumber})
+	}
+	for _, token := range model.TitleTokens {
+		if !token.Kept {
+			items = append(items, filenameEvidenceSummary{Kind: filenameSignalKindAntiMisclassification, Source: "filename", Value: token.Value, Reason: filenameSignalReasonSuppressWeakEpisodeNumber})
+		}
 	}
 	return items
 }

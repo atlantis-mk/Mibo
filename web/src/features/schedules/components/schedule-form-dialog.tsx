@@ -153,7 +153,6 @@ export function ScheduleFormDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="scan">媒体扫描</SelectItem>
-                  <SelectItem value="library_cleanup">库清理</SelectItem>
                   <SelectItem value="invalid_link_check">
                     失效链接检查
                   </SelectItem>

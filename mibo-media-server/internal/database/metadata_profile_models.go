@@ -12,10 +12,7 @@ const (
 	MetadataProviderAvailabilityUnavailable = "unavailable"
 	MetadataProviderAvailabilityCooldown    = "cooldown"
 
-	MigratedDefaultTMDBProviderInstanceName = "TMDB"
-	BuiltInLocalScanProviderInstanceName    = "local_scan"
-	MigratedDefaultOnlineProfileName        = "TMDB"
-	MigratedDefaultLocalProfileName         = "local-only"
+	BuiltInLocalScanProviderInstanceName = "local_scan"
 )
 
 type MetadataProviderInstance struct {

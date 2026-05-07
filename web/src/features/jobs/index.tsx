@@ -31,9 +31,6 @@ import type { WorkflowRunStatusView } from "#/lib/mibo-api"
 import { workflowsQueryOptions } from "#/lib/mibo-query"
 import { useAuthStore } from "#/stores/auth-store"
 
-import { SettingsPageShell } from "#/features/settings/components/settings-page-shell"
-import { SETTINGS_SECTIONS } from "#/features/settings/sections"
-
 type WorkflowStatusFilter =
   | "all"
   | "queued"
@@ -55,7 +52,6 @@ export default function JobsPage() {
     offset: (page - 1) * pageSize,
     status: status === "all" ? undefined : status,
   }
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === "jobs")
   const workflowsQuery = useQuery({
     ...workflowsQueryOptions(queryToken, filters),
     enabled: !!token,
@@ -65,26 +61,8 @@ export default function JobsPage() {
   const hasNextPage = loadedWorkflows.length > pageSize
   const hasPreviousPage = page > 1
 
-  if (!section) return null
-
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
-      actions={
-        <Button
-          variant="outline"
-          onClick={() => workflowsQuery.refetch()}
-          disabled={workflowsQuery.isFetching}
-        >
-          <RefreshCwIcon
-            className={workflowsQuery.isFetching ? "size-4 animate-spin" : "size-4"}
-          />
-          刷新
-        </Button>
-      }
-    >
+    <div className="space-y-4">
       <Card className="bg-card/80 shadow-sm">
         <CardHeader className="gap-3 sm:flex sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -93,21 +71,35 @@ export default function JobsPage() {
               查看资源感知 Workflow DAG 的扫描、物化、探测和元数据任务状态。
             </CardDescription>
           </div>
-          <NativeSelect
-            value={status}
-            onChange={(event) => {
-              setPage(1)
-              setStatus(event.target.value as WorkflowStatusFilter)
-            }}
-          >
-            <NativeSelectOption value="all">全部状态</NativeSelectOption>
-            <NativeSelectOption value="queued">待执行</NativeSelectOption>
-            <NativeSelectOption value="running">运行中</NativeSelectOption>
-            <NativeSelectOption value="cancelled">已取消</NativeSelectOption>
-            <NativeSelectOption value="completed">已完成</NativeSelectOption>
-            <NativeSelectOption value="failed">失败</NativeSelectOption>
-            <NativeSelectOption value="superseded">已替代</NativeSelectOption>
-          </NativeSelect>
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <NativeSelect
+              value={status}
+              onChange={(event) => {
+                setPage(1)
+                setStatus(event.target.value as WorkflowStatusFilter)
+              }}
+            >
+              <NativeSelectOption value="all">全部状态</NativeSelectOption>
+              <NativeSelectOption value="queued">待执行</NativeSelectOption>
+              <NativeSelectOption value="running">运行中</NativeSelectOption>
+              <NativeSelectOption value="cancelled">已取消</NativeSelectOption>
+              <NativeSelectOption value="completed">已完成</NativeSelectOption>
+              <NativeSelectOption value="failed">失败</NativeSelectOption>
+              <NativeSelectOption value="superseded">已替代</NativeSelectOption>
+            </NativeSelect>
+            <Button
+              variant="outline"
+              onClick={() => workflowsQuery.refetch()}
+              disabled={workflowsQuery.isFetching}
+            >
+              <RefreshCwIcon
+                className={
+                  workflowsQuery.isFetching ? "size-4 animate-spin" : "size-4"
+                }
+              />
+              刷新
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {workflowsQuery.isLoading ? (
@@ -212,7 +204,7 @@ export default function JobsPage() {
           ) : null}
         </CardContent>
       </Card>
-    </SettingsPageShell>
+    </div>
   )
 }
 

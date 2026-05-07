@@ -7,7 +7,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 )
 
-func TestBackfillLibraryPathsAndPoliciesCreatesDefaults(t *testing.T) {
+func TestEnsureLibraryPolicyDefaultsCreatesDefaults(t *testing.T) {
 	db, err := Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -21,16 +21,8 @@ func TestBackfillLibraryPathsAndPoliciesCreatesDefaults(t *testing.T) {
 		t.Fatalf("create library: %v", err)
 	}
 
-	if err := BackfillLibraryPathsAndPolicies(db); err != nil {
-		t.Fatalf("backfill library paths and policies: %v", err)
-	}
-
-	var path LibraryPath
-	if err := db.Where("library_id = ?", library.ID).First(&path).Error; err != nil {
-		t.Fatalf("load library path: %v", err)
-	}
-	if path.MediaSourceID != source.ID || path.RootPath != "/media/movies" || !path.Enabled {
-		t.Fatalf("unexpected path backfill: %#v", path)
+	if err := EnsureLibraryPolicyDefaults(db, library.ID); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
 	}
 
 	var scan LibraryScanPolicy
@@ -63,7 +55,7 @@ func TestBackfillLibraryPathsAndPoliciesCreatesDefaults(t *testing.T) {
 	}
 }
 
-func TestBackfillLibraryPathsAndPoliciesPreservesExistingPath(t *testing.T) {
+func TestEnsureLibraryPolicyDefaultsPreservesExistingScanPolicy(t *testing.T) {
 	db, err := Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -76,19 +68,19 @@ func TestBackfillLibraryPathsAndPoliciesPreservesExistingPath(t *testing.T) {
 	if err := db.Create(&library).Error; err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	custom := LibraryPath{LibraryID: library.ID, MediaSourceID: source.ID, RootPath: "/media/custom", Enabled: true}
+	custom := LibraryScanPolicy{LibraryID: library.ID, ScannerEnabled: false, RefreshIntervalHours: 12}
 	if err := db.Create(&custom).Error; err != nil {
-		t.Fatalf("create custom path: %v", err)
+		t.Fatalf("create custom scan policy: %v", err)
 	}
 
-	if err := BackfillLibraryPathsAndPolicies(db); err != nil {
-		t.Fatalf("backfill library paths and policies: %v", err)
+	if err := EnsureLibraryPolicyDefaults(db, library.ID); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
 	}
 	var count int64
-	if err := db.Model(&LibraryPath{}).Where("library_id = ?", library.ID).Count(&count).Error; err != nil {
-		t.Fatalf("count paths: %v", err)
+	if err := db.Model(&LibraryScanPolicy{}).Where("library_id = ?", library.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count scan policies: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("expected existing path to be preserved without duplicate, got %d", count)
+		t.Fatalf("expected existing scan policy to be preserved without duplicate, got %d", count)
 	}
 }

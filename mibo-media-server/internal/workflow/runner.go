@@ -50,7 +50,14 @@ func (r *Runner) Register(taskType string, handler Handler) {
 	if taskType == "" || handler == nil {
 		return
 	}
+	if _, exists := r.handlers[taskType]; exists {
+		panic(fmt.Sprintf("workflow handler already registered for task type %q", taskType))
+	}
 	r.handlers[taskType] = handler
+}
+
+func (r *Runner) HandleTaskForTest(ctx context.Context, task database.WorkflowTask) error {
+	return r.handleTask(ctx, task)
 }
 
 func (r *Runner) Run(ctx context.Context) {

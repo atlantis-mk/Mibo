@@ -37,17 +37,9 @@ func TestScheduledScanRespectsScope(t *testing.T) {
 	}
 }
 
-func TestScheduledCleanupAndInvalidLinkChecks(t *testing.T) {
+func TestScheduledInvalidLinkChecks(t *testing.T) {
 	ctx := context.Background()
 	db, svc, firstLibrary, _ := newScheduledLibraryService(t)
-
-	cleanupResult, err := svc.RunScheduledCleanup(ctx, schedule.DueSchedule{Kind: schedule.KindLibraryCleanup, ScopeKind: schedule.ScopeLibrary, LibraryID: &firstLibrary.ID})
-	if err != nil {
-		t.Fatalf("run scheduled cleanup: %v", err)
-	}
-	if cleanupResult.LibrariesProcessed != 1 {
-		t.Fatalf("expected cleanup to process 1 library, got %d", cleanupResult.LibrariesProcessed)
-	}
 
 	missingPath := filepath.Join(firstLibrary.RootPath, "missing-file.mkv")
 	file := database.InventoryFile{LibraryID: firstLibrary.ID, StoragePath: missingPath}

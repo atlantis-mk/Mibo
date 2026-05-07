@@ -245,40 +245,6 @@ func (r *Router) handleAdminConsoleScanLibraries(w http.ResponseWriter, req *htt
 	writeJSON(req.Context(), w, http.StatusAccepted, map[string]any{"queued": queued})
 }
 
-func (r *Router) handleAdminConsoleCatalogConsistency(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
-		return
-	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, fmt.Errorf("catalog service unavailable"))
-		return
-	}
-	report, err := r.catalog.CheckConsistency(req.Context(), nil)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(req.Context(), w, http.StatusOK, report)
-}
-
-func (r *Router) handleAdminConsoleRebuildProjections(w http.ResponseWriter, req *http.Request) {
-	if _, err := r.requireUser(req); err != nil {
-		writeError(req.Context(), w, http.StatusUnauthorized, err)
-		return
-	}
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, fmt.Errorf("catalog service unavailable"))
-		return
-	}
-	result, err := r.catalog.RebuildDerivedData(req.Context(), nil)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(req.Context(), w, http.StatusOK, result)
-}
-
 func configuredMediaSourceProviders(ctx context.Context, r *Router) ([]string, error) {
 	providers := []string{}
 	if err := r.db.WithContext(ctx).Model(&database.MediaSource{}).Distinct("provider").Order("provider asc").Pluck("provider", &providers).Error; err != nil {
@@ -307,8 +273,6 @@ func buildAdminConsoleQuickActions() []adminConsoleQuickAction {
 		{ID: "open-settings", Label: "打开设置", Description: "进入现有设置区域", Kind: "route", Route: "/settings", Risk: "safe"},
 		{ID: "open-libraries", Label: "媒体库管理", Description: "管理媒体库与来源", Kind: "route", Route: "/settings/library", Risk: "safe"},
 		{ID: "scan-libraries", Label: "扫描媒体库", Description: "为所有媒体库排队扫描任务", Kind: "mutation", Method: "POST", Endpoint: "/api/v1/admin/console/actions/scan-libraries", Risk: "expensive", Confirm: true},
-		{ID: "catalog-consistency", Label: "一致性检查", Description: "检查目录投影和库存关系", Kind: "mutation", Method: "POST", Endpoint: "/api/v1/admin/console/actions/catalog-consistency", Risk: "expensive", Confirm: true},
-		{ID: "rebuild-projections", Label: "重建投影", Description: "重建目录派生数据", Kind: "mutation", Method: "POST", Endpoint: "/api/v1/admin/console/actions/rebuild-projections", Risk: "danger", Confirm: true},
 		{ID: "open-logs", Label: "查看日志", Description: "日志查看尚未实现", Kind: "unsupported", Disabled: true, DisabledReason: "日志页面尚未实现", Risk: "safe"},
 		{ID: "shutdown", Label: "关闭服务器", Description: "服务器生命周期控制尚未实现", Kind: "unsupported", Disabled: true, DisabledReason: "未提供安全关闭接口", Risk: "danger"},
 	}

@@ -457,7 +457,7 @@ func uniqueCatalogScanTags(tags []string) []string {
 	return result
 }
 
-func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, rootPath string, seen map[string]struct{}) error {
+func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, rootPath string, seen map[string]struct{}, skippedDirectories []string) error {
 	var dirtyMissingFileIDs []uint
 	var dirtyProjectionItemIDs []uint
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -465,6 +465,7 @@ func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, roo
 		fileQuery := tx.WithContext(ctx).
 			Where("library_id = ? AND deleted_at IS NULL", libraryID)
 		fileQuery = applyScopedPathFilter(fileQuery, "storage_path", rootPath)
+		fileQuery = applySkippedDirectoryFilter(fileQuery, "storage_path", skippedDirectories)
 		if err := fileQuery.Order("id asc").Find(&files).Error; err != nil {
 			return err
 		}
@@ -492,7 +493,7 @@ func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, roo
 			dirtyMissingFileIDs = append(dirtyMissingFileIDs, missingFileIDs...)
 		}
 
-		assetIDs, err := scopedCatalogAssetIDs(ctx, tx, libraryID, rootPath)
+		assetIDs, err := scopedCatalogAssetIDs(ctx, tx, libraryID, rootPath, skippedDirectories)
 		if err != nil {
 			return err
 		}
@@ -509,7 +510,7 @@ func (s *Service) cleanupMissingCatalog(ctx context.Context, libraryID uint, roo
 			}
 		}
 
-		itemIDs, err := scopedCatalogItemAndAncestorIDs(ctx, tx, libraryID, rootPath)
+		itemIDs, err := scopedCatalogItemAndAncestorIDs(ctx, tx, libraryID, rootPath, skippedDirectories)
 		if err != nil {
 			return err
 		}
@@ -561,6 +562,96 @@ func missingAwareCatalogUpdates(availability string) map[string]any {
 	return updates
 }
 
+type inventoryFileStableIdentityReuseInput struct {
+	LibraryID         uint
+	StorageProvider   string
+	StableIdentityKey string
+	StoragePath       string
+	HashesJSON        string
+	ThumbnailURL      string
+	SizeBytes         int64
+	ModifiedAt        *time.Time
+	Container         string
+	ContentClass      string
+	Status            string
+	ScanState         string
+}
+
+func loadInventoryFilesByStableIdentity(ctx context.Context, db *gorm.DB, libraryID uint, storageProvider string, stableIdentityKeys []string) ([]database.InventoryFile, error) {
+	keys := make([]string, 0, len(stableIdentityKeys))
+	seen := make(map[string]struct{}, len(stableIdentityKeys))
+	for _, key := range stableIdentityKeys {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		keys = append(keys, trimmed)
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	files := make([]database.InventoryFile, 0, len(keys))
+	for _, batch := range chunkStrings(keys, sqliteVariableChunkSize) {
+		var partial []database.InventoryFile
+		if err := db.WithContext(ctx).
+			Where("library_id = ? AND storage_provider = ? AND stable_identity_key IN ? AND deleted_at IS NULL", libraryID, strings.TrimSpace(storageProvider), batch).
+			Order("id asc").
+			Find(&partial).Error; err != nil {
+			return nil, err
+		}
+		files = append(files, partial...)
+	}
+	return files, nil
+}
+
+func reuseInventoryFileByStableIdentity(ctx context.Context, db *gorm.DB, input inventoryFileStableIdentityReuseInput) (database.InventoryFile, bool, error) {
+	stableIdentityKey := strings.TrimSpace(input.StableIdentityKey)
+	if stableIdentityKey == "" {
+		return database.InventoryFile{}, false, nil
+	}
+	files, err := loadInventoryFilesByStableIdentity(ctx, db, input.LibraryID, input.StorageProvider, []string{stableIdentityKey})
+	if err != nil {
+		return database.InventoryFile{}, false, err
+	}
+	if len(files) == 0 {
+		return database.InventoryFile{}, false, nil
+	}
+	file := files[0]
+	if err := applyInventoryFileStableIdentityReuseUpdate(ctx, db, file.ID, input); err != nil {
+		return database.InventoryFile{}, false, err
+	}
+	var refreshed database.InventoryFile
+	if err := db.WithContext(ctx).First(&refreshed, file.ID).Error; err != nil {
+		return database.InventoryFile{}, false, err
+	}
+	return refreshed, true, nil
+}
+
+func applyInventoryFileStableIdentityReuseUpdate(ctx context.Context, db *gorm.DB, fileID uint, input inventoryFileStableIdentityReuseInput) error {
+	updates := map[string]any{
+		"storage_path":  strings.TrimSpace(input.StoragePath),
+		"hashes_json":   strings.TrimSpace(input.HashesJSON),
+		"thumbnail_url": strings.TrimSpace(input.ThumbnailURL),
+		"size_bytes":    input.SizeBytes,
+		"modified_at":   input.ModifiedAt,
+		"container":     strings.TrimSpace(input.Container),
+		"content_class": strings.TrimSpace(input.ContentClass),
+		"status":        strings.TrimSpace(input.Status),
+		"scan_state":    strings.TrimSpace(input.ScanState),
+		"missing_since": gorm.Expr("NULL"),
+		"deleted_at":    gorm.Expr("NULL"),
+	}
+	return db.WithContext(ctx).
+		Model(&database.InventoryFile{}).
+		Where("id = ?", fileID).
+		Select("storage_path", "hashes_json", "thumbnail_url", "size_bytes", "modified_at", "container", "content_class", "status", "scan_state", "missing_since", "deleted_at").
+		Updates(updates).Error
+}
+
 func upsertCatalogScanFile(ctx context.Context, tx *gorm.DB, inventorySvc *inventory.Service, libraryID uint, artifact catalogScanArtifact) (database.InventoryFile, error) {
 	storagePath := strings.TrimSpace(artifact.SourcePath)
 	if storagePath == "" {
@@ -574,7 +665,20 @@ func upsertCatalogScanFile(ctx context.Context, tx *gorm.DB, inventorySvc *inven
 	if container == "" {
 		container = strings.TrimPrefix(strings.ToLower(path.Ext(storagePath)), ".")
 	}
-	if reused, reusedExisting, err := reuseInventoryFileByStableIdentity(ctx, tx, libraryID, storageProvider, storagePath, container, artifact); err != nil {
+	if reused, reusedExisting, err := reuseInventoryFileByStableIdentity(ctx, tx, inventoryFileStableIdentityReuseInput{
+		LibraryID:         libraryID,
+		StorageProvider:   storageProvider,
+		StableIdentityKey: strings.TrimSpace(artifact.StableIdentityKey),
+		StoragePath:       storagePath,
+		HashesJSON:        strings.TrimSpace(artifact.HashesJSON),
+		ThumbnailURL:      strings.TrimSpace(artifact.ThumbnailURL),
+		SizeBytes:         artifact.SizeBytes,
+		ModifiedAt:        artifact.ModifiedAt,
+		Container:         container,
+		ContentClass:      SourceContentClassVideo,
+		Status:            inventory.FileStatusAvailable,
+		ScanState:         catalogScanFileScanState(artifact),
+	}); err != nil {
 		return database.InventoryFile{}, err
 	} else if reusedExisting {
 		return reused, nil
@@ -601,43 +705,6 @@ func catalogScanFileScanState(artifact catalogScanArtifact) string {
 		return inventory.FileScanStateReviewRequired
 	}
 	return inventory.FileScanStateClassified
-}
-
-func reuseInventoryFileByStableIdentity(ctx context.Context, db *gorm.DB, libraryID uint, storageProvider string, storagePath string, container string, artifact catalogScanArtifact) (database.InventoryFile, bool, error) {
-	stableIdentityKey := strings.TrimSpace(artifact.StableIdentityKey)
-	if stableIdentityKey == "" {
-		return database.InventoryFile{}, false, nil
-	}
-	var file database.InventoryFile
-	err := db.WithContext(ctx).
-		Where("library_id = ? AND storage_provider = ? AND stable_identity_key = ? AND deleted_at IS NULL", libraryID, storageProvider, stableIdentityKey).
-		Order("id asc").
-		First(&file).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return database.InventoryFile{}, false, nil
-	}
-	if err != nil {
-		return database.InventoryFile{}, false, err
-	}
-	updates := map[string]any{
-		"storage_path":  storagePath,
-		"hashes_json":   strings.TrimSpace(artifact.HashesJSON),
-		"thumbnail_url": strings.TrimSpace(artifact.ThumbnailURL),
-		"size_bytes":    artifact.SizeBytes,
-		"modified_at":   artifact.ModifiedAt,
-		"container":     container,
-		"status":        inventory.FileStatusAvailable,
-		"scan_state":    catalogScanFileScanState(artifact),
-		"missing_since": nil,
-		"deleted_at":    nil,
-	}
-	if err := db.WithContext(ctx).Model(&database.InventoryFile{}).Where("id = ?", file.ID).Updates(updates).Error; err != nil {
-		return database.InventoryFile{}, false, err
-	}
-	if err := db.WithContext(ctx).First(&file, file.ID).Error; err != nil {
-		return database.InventoryFile{}, false, err
-	}
-	return file, true, nil
 }
 
 func bindCatalogScanSubtitleSidecars(ctx context.Context, tx *gorm.DB, inventorySvc *inventory.Service, libraryID uint, assetID uint, artifact catalogScanArtifact) error {
@@ -996,7 +1063,34 @@ func createOrReuseCatalogItem(ctx context.Context, tx *gorm.DB, catalogSvc *cata
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		batchCache.rememberPlannedItem(input)
-		created, err := catalogSvc.CreateItem(ctx, input)
+		created, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{
+			LibraryID:          input.LibraryID,
+			Type:               input.Type,
+			ParentID:           input.ParentID,
+			Path:               input.Path,
+			SortKey:            input.SortKey,
+			DisplayOrder:       input.DisplayOrder,
+			IndexNumber:        input.IndexNumber,
+			IndexNumberEnd:     input.IndexNumberEnd,
+			ParentIndexNumber:  input.ParentIndexNumber,
+			AbsoluteNumber:     input.AbsoluteNumber,
+			Title:              input.Title,
+			OriginalTitle:      input.OriginalTitle,
+			SortTitle:          input.SortTitle,
+			Overview:           input.Overview,
+			ReleaseDate:        input.ReleaseDate,
+			FirstAirDate:       input.FirstAirDate,
+			LastAirDate:        input.LastAirDate,
+			Year:               input.Year,
+			EndYear:            input.EndYear,
+			RuntimeSeconds:     input.RuntimeSeconds,
+			CommunityRating:    input.CommunityRating,
+			OfficialRating:     input.OfficialRating,
+			SeriesStatus:       input.SeriesStatus,
+			AvailabilityStatus: input.AvailabilityStatus,
+			GovernanceStatus:   input.GovernanceStatus,
+			ProjectionMode:     catalog.ProjectionModeDeferred,
+		})
 		if err != nil {
 			return database.CatalogItem{}, err
 		}
@@ -1209,11 +1303,12 @@ func recordCatalogScanMetadataSource(ctx context.Context, tx *gorm.DB, catalogSv
 		First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		source, err := catalogSvc.RecordMetadataSource(ctx, catalog.MetadataSourceInput{
-			ItemID:      itemID,
-			SourceType:  catalog.SourceTypeLocalFile,
-			SourceName:  "scanner",
-			PayloadJSON: payloadJSON,
-			FetchedAt:   now,
+			ItemID:         itemID,
+			SourceType:     catalog.SourceTypeLocalFile,
+			SourceName:     "scanner",
+			PayloadJSON:    payloadJSON,
+			FetchedAt:      now,
+			ProjectionMode: catalog.ProjectionModeDeferred,
 		})
 		return source, err
 	}
@@ -1244,7 +1339,7 @@ func applyCatalogScanExternalIDs(ctx context.Context, catalogSvc *catalog.Servic
 		if provider == "" || providerType == "" || value == "" {
 			continue
 		}
-		if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: item.ID, Provider: provider, ProviderType: providerType, ExternalID: value, IsPrimary: true, Source: "scanner", Confidence: externalID.Confidence}); err != nil {
+		if _, err := catalogSvc.SetExternalID(ctx, catalog.ExternalIDInput{ItemID: item.ID, Provider: provider, ProviderType: providerType, ExternalID: value, IsPrimary: true, Source: "scanner", Confidence: externalID.Confidence, ProjectionMode: catalog.ProjectionModeDeferred}); err != nil {
 			return err
 		}
 	}
@@ -1294,6 +1389,15 @@ func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumber
 	}
 	if len(artifact.Decisions) > 0 {
 		payload["resolver_decisions"] = resolverDecisionEvidencePayload(artifact.Decisions)
+	}
+	if len(artifact.ContentShapeProfile) > 0 {
+		payload["content_shape_profile"] = artifact.ContentShapeProfile
+	}
+	if len(artifact.ContentShapePlan) > 0 {
+		payload["content_shape_plan"] = artifact.ContentShapePlan
+	}
+	if len(artifact.ContentShapeAssignment) > 0 {
+		payload["content_shape_assignment"] = artifact.ContentShapeAssignment
 	}
 	if strings.TrimSpace(artifact.SeriesTitle) != "" {
 		payload["series_title"] = strings.TrimSpace(artifact.SeriesTitle)
@@ -1619,7 +1723,7 @@ func governanceStatusForScanUpdate(existingStatus string, desiredStatus string) 
 	return defaultCatalogState(trimmedDesired, catalog.GovernancePending)
 }
 
-func scopedCatalogAssetIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string) ([]uint, error) {
+func scopedCatalogAssetIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string, skippedDirectories []string) ([]uint, error) {
 	var assetIDs []uint
 	query := tx.WithContext(ctx).
 		Table("asset_files").
@@ -1627,6 +1731,7 @@ func scopedCatalogAssetIDs(ctx context.Context, tx *gorm.DB, libraryID uint, roo
 		Joins("JOIN inventory_files ON inventory_files.id = asset_files.file_id").
 		Where("inventory_files.library_id = ? AND inventory_files.deleted_at IS NULL", libraryID)
 	query = applyScopedPathFilter(query, "inventory_files.storage_path", rootPath)
+	query = applySkippedDirectoryFilter(query, "inventory_files.storage_path", skippedDirectories)
 	if err := query.Order("asset_files.asset_id asc").Pluck("asset_files.asset_id", &assetIDs).Error; err != nil {
 		return nil, err
 	}
@@ -1649,7 +1754,7 @@ func catalogAssetAvailabilityStatus(ctx context.Context, tx *gorm.DB, assetID ui
 	return inventory.AssetStatusMissing, nil
 }
 
-func scopedCatalogItemIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string) ([]uint, error) {
+func scopedCatalogItemIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string, skippedDirectories []string) ([]uint, error) {
 	var itemIDs []uint
 	query := tx.WithContext(ctx).
 		Table("asset_items").
@@ -1660,7 +1765,43 @@ func scopedCatalogItemIDs(ctx context.Context, tx *gorm.DB, libraryID uint, root
 		Joins("JOIN catalog_items ON catalog_items.id = asset_items.item_id").
 		Where("catalog_items.library_id = ? AND catalog_items.deleted_at IS NULL AND inventory_files.deleted_at IS NULL", libraryID)
 	query = applyScopedPathFilter(query, "inventory_files.storage_path", rootPath)
+	query = applySkippedDirectoryFilter(query, "inventory_files.storage_path", skippedDirectories)
 	if err := query.Order("asset_items.item_id asc").Pluck("asset_items.item_id", &itemIDs).Error; err != nil {
+		return nil, err
+	}
+
+	orphanIDs, err := scopedScannerOrphanCatalogItemIDs(ctx, tx, libraryID, rootPath, skippedDirectories)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[uint]struct{}, len(itemIDs)+len(orphanIDs))
+	for _, itemID := range itemIDs {
+		ids[itemID] = struct{}{}
+	}
+	for _, itemID := range orphanIDs {
+		ids[itemID] = struct{}{}
+	}
+	result := make([]uint, 0, len(ids))
+	for itemID := range ids {
+		result = append(result, itemID)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result, nil
+}
+
+func scopedScannerOrphanCatalogItemIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string, skippedDirectories []string) ([]uint, error) {
+	var itemIDs []uint
+	query := tx.WithContext(ctx).
+		Table("catalog_items").
+		Distinct("catalog_items.id").
+		Joins("JOIN catalog_identities ON catalog_identities.item_id = catalog_items.id").
+		Where("catalog_items.library_id = ? AND catalog_items.deleted_at IS NULL", libraryID).
+		Where("catalog_items.type IN ?", []string{catalog.ItemTypeSeries, catalog.ItemTypeSeason, catalog.ItemTypeEpisode}).
+		Where("catalog_identities.provider = ?", catalog.IdentityProviderScanner).
+		Where("NOT EXISTS (SELECT 1 FROM asset_items WHERE asset_items.item_id = catalog_items.id)")
+	query = applyScopedPathFilter(query, "catalog_identities.source_path", rootPath)
+	query = applySkippedDirectoryFilter(query, "catalog_identities.source_path", skippedDirectories)
+	if err := query.Order("catalog_items.id asc").Pluck("catalog_items.id", &itemIDs).Error; err != nil {
 		return nil, err
 	}
 	return itemIDs, nil
@@ -1674,8 +1815,19 @@ func applyScopedPathFilter(query *gorm.DB, column string, rootPath string) *gorm
 	return query.Where(column+" = ? OR "+column+" LIKE ?", scope, scope+"/%")
 }
 
-func scopedCatalogItemAndAncestorIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string) ([]uint, error) {
-	itemIDs, err := scopedCatalogItemIDs(ctx, tx, libraryID, rootPath)
+func applySkippedDirectoryFilter(query *gorm.DB, column string, skippedDirectories []string) *gorm.DB {
+	for _, skipped := range skippedDirectories {
+		scope := strings.TrimRight(strings.TrimSpace(skipped), "/")
+		if scope == "" {
+			continue
+		}
+		query = query.Where(column+" <> ? AND "+column+" NOT LIKE ?", scope, scope+"/%")
+	}
+	return query
+}
+
+func scopedCatalogItemAndAncestorIDs(ctx context.Context, tx *gorm.DB, libraryID uint, rootPath string, skippedDirectories []string) ([]uint, error) {
+	itemIDs, err := scopedCatalogItemIDs(ctx, tx, libraryID, rootPath, skippedDirectories)
 	if err != nil || len(itemIDs) == 0 {
 		return itemIDs, err
 	}

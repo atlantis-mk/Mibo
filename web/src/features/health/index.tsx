@@ -1,6 +1,5 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -380,10 +379,8 @@ function IssueCard({
                 action={action}
                 validatePending={validatePending}
                 rescanPending={rescanPending}
-                ignorePending={ignorePending}
                 onValidate={onValidate}
                 onRescan={onRescan}
-                onIgnore={onIgnore}
               />
             ))}
           <Button
@@ -523,19 +520,15 @@ function IssueActionButton({
   action,
   validatePending,
   rescanPending,
-  ignorePending,
   onValidate,
   onRescan,
-  onIgnore,
 }: {
   issue: HealthIssue
   action: HealthAction
   validatePending: boolean
   rescanPending: boolean
-  ignorePending: boolean
   onValidate: (mediaSourceId: number) => void
   onRescan: (issueId: string) => void
-  onIgnore: (issueId: string) => void
 }) {
   if (action.type === "open_external_admin" && action.href) {
     return (

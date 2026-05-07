@@ -133,7 +133,7 @@ type MetadataExecutionFallbackSummary struct {
 }
 
 func (s *Service) ListMetadataProviderInstances(ctx context.Context) ([]MetadataProviderInstance, error) {
-	if err := database.BackfillLibraryMetadataStrategies(s.db.WithContext(ctx)); err != nil {
+	if err := database.EnsureBuiltInMetadataProviders(s.db.WithContext(ctx)); err != nil {
 		return nil, err
 	}
 	var records []database.MetadataProviderInstance
@@ -220,33 +220,11 @@ func (s *Service) UpsertMetadataProviderInstance(ctx context.Context, id uint, i
 	} else if err := s.db.WithContext(ctx).Save(&record).Error; err != nil {
 		return MetadataProviderInstance{}, err
 	}
-	if record.Name == database.MigratedDefaultTMDBProviderInstanceName {
-		if err := s.syncMigratedDefaultProfileProvider(ctx, record); err != nil {
-			return MetadataProviderInstance{}, err
-		}
-	}
 	return s.metadataProviderInstanceView(record), nil
 }
 
-func (s *Service) syncMigratedDefaultProfileProvider(ctx context.Context, provider database.MetadataProviderInstance) error {
-	var profile database.MetadataProfile
-	if err := s.db.WithContext(ctx).Where("name = ?", database.MigratedDefaultOnlineProfileName).First(&profile).Error; err != nil {
-		return err
-	}
-	providerIDs := marshalUintList([]uint{provider.ID})
-	resolved := s.resolveTMDBProviderInstanceConfig(provider)
-	return s.db.WithContext(ctx).Model(&database.MetadataProfile{}).Where("id = ?", profile.ID).Updates(map[string]any{
-		"search_providers_json":       providerIDs,
-		"detail_providers_json":       providerIDs,
-		"image_providers_json":        providerIDs,
-		"people_providers_json":       providerIDs,
-		"hierarchy_providers_json":    providerIDs,
-		"preferred_metadata_language": strings.TrimSpace(resolved.Language),
-	}).Error
-}
-
 func (s *Service) ListMetadataProfiles(ctx context.Context) ([]MetadataProfile, error) {
-	if err := database.BackfillLibraryMetadataStrategies(s.db.WithContext(ctx)); err != nil {
+	if err := database.EnsureBuiltInMetadataProviders(s.db.WithContext(ctx)); err != nil {
 		return nil, err
 	}
 	var records []database.MetadataProfile
@@ -255,9 +233,6 @@ func (s *Service) ListMetadataProfiles(ctx context.Context) ([]MetadataProfile, 
 	}
 	items := make([]MetadataProfile, 0, len(records))
 	for _, record := range records {
-		if isLegacyLocalOnlyProfile(record) {
-			continue
-		}
 		items = append(items, metadataProfileView(record))
 	}
 	return items, nil
@@ -328,11 +303,7 @@ func (s *Service) GetLibraryMetadataStrategy(ctx context.Context, libraryID uint
 	if record.MetadataProfileID != nil && *record.MetadataProfileID != 0 {
 		var profile database.MetadataProfile
 		if err := s.db.WithContext(ctx).First(&profile, *record.MetadataProfileID).Error; err == nil {
-			if isLegacyLocalOnlyProfile(profile) {
-				templateProfileID = 0
-			} else {
-				templateName = strings.TrimSpace(profile.Name)
-			}
+			templateName = strings.TrimSpace(profile.Name)
 		}
 	}
 	return LibraryMetadataStrategy{LibraryID: record.LibraryID, TemplateProfileID: templateProfileID, TemplateProfileName: templateName, SearchProviderIDs: unmarshalUintList(record.SearchProvidersJSON), DetailProviderIDs: unmarshalUintList(record.DetailProvidersJSON), ImageProviderIDs: unmarshalUintList(record.ImageProvidersJSON), PeopleProviderIDs: unmarshalUintList(record.PeopleProvidersJSON), HierarchyProviderIDs: unmarshalUintList(record.HierarchyProvidersJSON), PreferredMetadataLanguage: strings.TrimSpace(record.PreferredMetadataLanguage), PreferredImageLanguage: strings.TrimSpace(record.PreferredImageLanguage), MetadataCountryCode: strings.TrimSpace(record.MetadataCountryCode)}, nil
@@ -432,10 +403,6 @@ func isLockedMetadataProfile(record database.MetadataProfile) bool {
 	return isSystemMetadataProfile(record)
 }
 
-func isLegacyLocalOnlyProfile(record database.MetadataProfile) bool {
-	return strings.TrimSpace(record.Name) == database.MigratedDefaultLocalProfileName
-}
-
 func (s *Service) resolveProviderStage(ctx context.Context, raw string) ([]ResolvedMetadataProviderInstance, error) {
 	ids := unmarshalUintList(raw)
 	return s.resolveProviderIDs(ctx, ids)
@@ -484,7 +451,7 @@ func (s *Service) withLocalScanDetailFallback(ctx context.Context, ids []uint) (
 }
 
 func (s *Service) localScanProviderID(ctx context.Context) (uint, error) {
-	if err := database.BackfillMetadataProfiles(s.db.WithContext(ctx)); err != nil {
+	if err := database.EnsureBuiltInMetadataProviders(s.db.WithContext(ctx)); err != nil {
 		return 0, err
 	}
 	var record database.MetadataProviderInstance

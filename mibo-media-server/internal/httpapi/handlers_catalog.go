@@ -128,29 +128,6 @@ func (r *Router) handleGetCatalogItem(w http.ResponseWriter, req *http.Request) 
 	writeJSON(req.Context(), w, http.StatusOK, detail)
 }
 
-func (r *Router) handleGetMediaItem(w http.ResponseWriter, req *http.Request) {
-	if r.catalog == nil {
-		writeError(req.Context(), w, http.StatusInternalServerError, errors.New("catalog service unavailable"))
-		return
-	}
-	itemID, err := parseUintPathValue(req, "id")
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	var userID *uint
-	if user, err := r.optionalUser(req); err == nil && user != nil {
-		id := user.ID
-		userID = &id
-	}
-	detail, err := r.catalog.GetMediaItemDTO(req.Context(), itemID, userID)
-	if err != nil {
-		writeError(req.Context(), w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(req.Context(), w, http.StatusOK, detail)
-}
-
 func (r *Router) handleGetCatalogPerson(w http.ResponseWriter, req *http.Request) {
 	if _, err := r.requireUser(req); err != nil {
 		writeError(req.Context(), w, http.StatusUnauthorized, err)

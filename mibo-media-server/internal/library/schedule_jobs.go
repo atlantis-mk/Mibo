@@ -7,19 +7,14 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/schedule"
-	"github.com/atlan/mibo-media-server/internal/settings"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
 type ScheduledJobResult struct {
-	LibrariesProcessed   int    `json:"libraries_processed"`
-	ItemsChecked         int    `json:"items_checked,omitempty"`
-	Failures             int    `json:"failures,omitempty"`
-	FilesDeleted         int    `json:"files_deleted,omitempty"`
-	AssetsDeleted        int    `json:"assets_deleted,omitempty"`
-	CatalogItemsDeleted  int    `json:"catalog_items_deleted,omitempty"`
-	DependentRowsDeleted int    `json:"dependent_rows_deleted,omitempty"`
-	Summary              string `json:"summary"`
+	LibrariesProcessed int    `json:"libraries_processed"`
+	ItemsChecked       int    `json:"items_checked,omitempty"`
+	Failures           int    `json:"failures,omitempty"`
+	Summary            string `json:"summary"`
 }
 
 func (s *Service) RunScheduledScan(ctx context.Context, due schedule.DueSchedule) (ScheduledJobResult, error) {
@@ -42,29 +37,6 @@ func (s *Service) RunScheduledScan(ctx context.Context, due schedule.DueSchedule
 		_, err := s.scanLibrary(ctx, provider, libraryForPath, pathRecord.RootPath)
 		return err
 	})
-}
-
-func (s *Service) RunScheduledCleanup(ctx context.Context, due schedule.DueSchedule) (ScheduledJobResult, error) {
-	cleanupSettings, err := settings.ResolveCleanupSettings(ctx, s.db, s.cfg.Cleanup)
-	if err != nil {
-		return ScheduledJobResult{}, err
-	}
-	if !cleanupSettings.MissingCleanupEnabled {
-		libraries, err := s.resolveScheduledLibraries(ctx, due)
-		if err != nil {
-			return ScheduledJobResult{}, err
-		}
-		return ScheduledJobResult{LibrariesProcessed: len(libraries), Summary: "missing cleanup disabled"}, nil
-	}
-	libraries, err := s.resolveScheduledLibraries(ctx, due)
-	if err != nil {
-		return ScheduledJobResult{}, err
-	}
-	libraryIDs := make([]uint, 0, len(libraries))
-	for _, libraryRecord := range libraries {
-		libraryIDs = append(libraryIDs, libraryRecord.ID)
-	}
-	return s.runMissingMediaCleanupForLibraries(ctx, libraryIDs, "")
 }
 
 func (s *Service) RunScheduledInvalidLinkCheck(ctx context.Context, due schedule.DueSchedule) (ScheduledJobResult, error) {

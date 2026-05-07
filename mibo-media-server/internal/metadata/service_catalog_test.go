@@ -14,6 +14,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/settings"
+	"gorm.io/gorm"
 )
 
 func TestMatchCatalogItemMatchesMovieItem(t *testing.T) {
@@ -37,7 +38,7 @@ func TestMatchCatalogItemMatchesMovieItem(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -122,7 +123,7 @@ func TestMatchCatalogItemOperationDocumentsAutomatedTMDBMovieBaseline(t *testing
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -157,7 +158,7 @@ func TestMatchCatalogItemOperationDocumentsAutomatedTMDBMovieBaseline(t *testing
 	if err := db.WithContext(ctx).Where("item_id = ? AND source_type = ? AND source_name = ?", item.ID, catalog.SourceTypeProvider, "tmdb").First(&source).Error; err != nil {
 		t.Fatalf("load provider metadata source: %v", err)
 	}
-	if source.ExternalID != "movie:202" || source.ProviderInstanceName != database.MigratedDefaultTMDBProviderInstanceName {
+	if source.ExternalID != "movie:202" || source.ProviderInstanceName != "tmdb-catalog" {
 		t.Fatalf("unexpected provider source: %#v", source)
 	}
 
@@ -191,7 +192,7 @@ func TestMatchCatalogItemSyncsTMDBMovieRichMetadata(t *testing.T) {
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 	catalogSvc := catalog.NewService(db)
@@ -255,7 +256,7 @@ func TestMatchCatalogItemUsesExistingExternalIDForDetail(t *testing.T) {
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 	catalogSvc := catalog.NewService(db)
@@ -308,7 +309,7 @@ func TestMatchCatalogItemIgnoresLowConfidenceExistingExternalID(t *testing.T) {
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 	catalogSvc := catalog.NewService(db)
@@ -337,10 +338,10 @@ func TestMatchCatalogItemIgnoresLowConfidenceExistingExternalID(t *testing.T) {
 	}
 }
 
-func configureTestTMDBProvider(ctx context.Context, settingsSvc *settings.Service, baseURL string, apiKey string) error {
+func configureTestTMDBProvider(ctx context.Context, db *gorm.DB, settingsSvc *settings.Service, baseURL string, apiKey string) error {
 	enabled := true
-	_, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{
-		Name:               database.MigratedDefaultTMDBProviderInstanceName,
+	provider, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{
+		Name:               "tmdb-catalog",
 		ProviderType:       database.MetadataProviderTypeTMDB,
 		Enabled:            &enabled,
 		AvailabilityStatus: database.MetadataProviderAvailabilityAvailable,
@@ -351,6 +352,19 @@ func configureTestTMDBProvider(ctx context.Context, settingsSvc *settings.Servic
 			Language:     "en-US",
 			Timeout:      "1s",
 		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		return err
+	}
+	_, err = settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{
+		SearchProviderIDs:    []uint{provider.ID},
+		DetailProviderIDs:    []uint{provider.ID},
+		ImageProviderIDs:     []uint{provider.ID},
+		PeopleProviderIDs:    []uint{provider.ID},
+		HierarchyProviderIDs: []uint{provider.ID},
 	})
 	return err
 }
@@ -634,7 +648,7 @@ func TestMatchCatalogItemUsesLibraryMetadataLanguagePolicy(t *testing.T) {
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
@@ -672,7 +686,7 @@ func TestMatchCatalogItemRespectsDisabledTMDBPolicy(t *testing.T) {
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
@@ -718,7 +732,7 @@ func TestMatchCatalogItemPrefersRemoteImagesOverGeneratedCatalogFallback(t *test
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -772,7 +786,7 @@ func TestApplyCatalogCandidateReplacesPreviouslySelectedRemoteImages(t *testing.
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -833,7 +847,7 @@ func TestMatchCatalogItemMarksItemUnmatchedWhenSearchReturnsNoResults(t *testing
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -879,7 +893,7 @@ func TestMatchCatalogItemRoutesEpisodeToSeriesRoot(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -1088,7 +1102,7 @@ func TestMatchCatalogItemOperationDocumentsAutomatedTMDBSeriesHierarchyBaseline(
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -1168,7 +1182,7 @@ func TestMatchCatalogItemSyncsTMDBTVRichMetadata(t *testing.T) {
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 	catalogSvc := catalog.NewService(db)
@@ -1254,7 +1268,7 @@ func TestMatchCatalogEpisodeReportsProviderSlotMissing(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 
@@ -1321,7 +1335,7 @@ func TestRefetchCatalogItemRespectsLockedFields(t *testing.T) {
 
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	if err := configureTestTMDBProvider(ctx, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
+	if err := configureTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL, "catalog-key"); err != nil {
 		t.Fatalf("configure tmdb provider instance: %v", err)
 	}
 

@@ -126,10 +126,62 @@ func (s *Service) SearchItems(ctx context.Context, libraryID uint, query string,
 
 func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (BrowseItemsResult, error) {
 	input = normalizeBrowseItemsInput(input)
+	return s.browseItemsWithCatalogPrefix(ctx, input)
+}
+
+func (s *Service) browseItemsWithCatalogPrefix(ctx context.Context, input BrowseItemsInput) (BrowseItemsResult, error) {
+	catalogLimit := input.Offset + input.Limit
+	catalogEntries, catalogTotal, err := s.catalogBrowseEntries(ctx, input, catalogLimit)
+	if err != nil {
+		return BrowseItemsResult{}, err
+	}
+	discovered, err := s.discoveredBrowseEntries(ctx, input)
+	if err != nil {
+		return BrowseItemsResult{}, err
+	}
+	entries := make([]browseListEntry, 0, len(catalogEntries)+len(discovered))
+	entries = append(entries, catalogEntries...)
+	entries = append(entries, discovered...)
+	applyBrowseListEntryOrder(entries, input)
+	return buildBrowseItemsResult(entries, catalogTotal+int64(len(discovered)), input), nil
+}
+
+func (s *Service) catalogBrowseEntries(ctx context.Context, input BrowseItemsInput, limit int) ([]browseListEntry, int64, error) {
+	countQuery := s.buildBrowseCatalogQuery(ctx, input, false)
+	var total int64
+	if err := countQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []browseListEntry{}, 0, nil
+	}
+	query := applyBrowseItemsOrder(s.buildBrowseCatalogQuery(ctx, input, true), input)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var items []database.CatalogItem
+	if err := query.Find(&items).Error; err != nil {
+		return nil, 0, err
+	}
+	mapped, err := s.buildCatalogListItems(ctx, items)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.attachOrganizingSummaries(ctx, mapped); err != nil {
+		return nil, 0, err
+	}
+	return buildCatalogBrowseEntries(mapped, items), total, nil
+}
+
+func (s *Service) buildBrowseCatalogQuery(ctx context.Context, input BrowseItemsInput, selectItems bool) *gorm.DB {
 	db := s.db.WithContext(ctx).
-		Model(&database.CatalogItem{}).
-		Where("catalog_items.deleted_at IS NULL").
-		Where("catalog_items.availability_status = ?", AvailabilityAvailable)
+		Model(&database.CatalogItem{})
+	if selectItems {
+		db = db.Select("catalog_items.*")
+	}
+	db = db.
+		Joins("LEFT JOIN catalog_search_documents AS browse_docs ON browse_docs.item_id = catalog_items.id").
+		Where("catalog_items.deleted_at IS NULL")
 	if input.LibraryID != 0 {
 		db = db.Where("catalog_items.library_id = ?", input.LibraryID)
 	}
@@ -154,27 +206,15 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 		db = db.Where(`(LOWER(catalog_items.title) LIKE ?
 			OR LOWER(catalog_items.original_title) LIKE ?
 			OR LOWER(catalog_items.sort_title) LIKE ?
-			OR EXISTS (
-				SELECT 1 FROM catalog_search_documents
-				WHERE catalog_search_documents.item_id = catalog_items.id
-				AND (LOWER(catalog_search_documents.people_text) LIKE ?
-					OR LOWER(catalog_search_documents.tags_text) LIKE ?
-					OR LOWER(catalog_search_documents.provider_ids_text) LIKE ?)
-			))`, like, like, like, like, like, like)
+			OR LOWER(browse_docs.people_text) LIKE ?
+			OR LOWER(browse_docs.tags_text) LIKE ?
+			OR LOWER(browse_docs.provider_ids_text) LIKE ?)`, like, like, like, like, like, like)
 	}
 	if genre := strings.TrimSpace(input.Genre); genre != "" {
-		db = db.Where(`EXISTS (
-			SELECT 1 FROM catalog_search_documents
-			WHERE catalog_search_documents.item_id = catalog_items.id
-			AND LOWER(catalog_search_documents.tags_text) LIKE ?
-		)`, "%"+strings.ToLower(genre)+"%")
+		db = db.Where("LOWER(browse_docs.tags_text) LIKE ?", "%"+strings.ToLower(genre)+"%")
 	}
 	if region := strings.TrimSpace(input.Region); region != "" {
-		db = db.Where(`EXISTS (
-			SELECT 1 FROM catalog_search_documents
-			WHERE catalog_search_documents.item_id = catalog_items.id
-			AND LOWER(catalog_search_documents.tags_text) LIKE ?
-		)`, "%"+strings.ToLower(region)+"%")
+		db = db.Where("LOWER(browse_docs.tags_text) LIKE ?", "%"+strings.ToLower(region)+"%")
 	}
 	if input.WatchedState != "all" {
 		db = db.Joins("LEFT JOIN user_item_data browse_user_item_data ON browse_user_item_data.item_id = catalog_items.id AND browse_user_item_data.asset_id IS NULL AND browse_user_item_data.user_id = ?", input.UserID)
@@ -187,30 +227,66 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 			db = db.Where("browse_user_item_data.id IS NULL OR (browse_user_item_data.completed_at IS NULL AND browse_user_item_data.position_seconds = 0)")
 		}
 	}
+	if input.OrganizingState != "all" {
+		db = db.Joins("LEFT JOIN ingest_conditions browse_review_required_condition ON browse_review_required_condition.catalog_item_id = catalog_items.id AND browse_review_required_condition.condition_type = ?", ingest.ConditionReviewRequired)
+		db = db.Joins("LEFT JOIN ingest_conditions browse_materialized_condition ON browse_materialized_condition.catalog_item_id = catalog_items.id AND browse_materialized_condition.condition_type = ?", ingest.ConditionMaterialized)
+		db = db.Joins("LEFT JOIN ingest_conditions browse_probe_condition ON browse_probe_condition.catalog_item_id = catalog_items.id AND browse_probe_condition.condition_type = ?", ingest.ConditionProbed)
+		db = db.Joins("LEFT JOIN ingest_conditions browse_metadata_condition ON browse_metadata_condition.catalog_item_id = catalog_items.id AND browse_metadata_condition.condition_type = ?", ingest.ConditionMetadataMatched)
+		db = db.Joins("LEFT JOIN ingest_conditions browse_projection_condition ON browse_projection_condition.catalog_item_id = catalog_items.id AND browse_projection_condition.condition_type = ?", ingest.ConditionProjectionCurrent)
+		db = db.Joins("LEFT JOIN ingest_conditions browse_visible_condition ON browse_visible_condition.catalog_item_id = catalog_items.id AND browse_visible_condition.condition_type = ?", ingest.ConditionVisible)
+		isOrganizingExpr := `CASE WHEN (
+			browse_review_required_condition.status = ?
+			OR browse_metadata_condition.status = ?
+			OR (browse_metadata_condition.status = ? AND browse_metadata_condition.reason = ?)
+			OR browse_review_required_condition.status = ?
+			OR browse_materialized_condition.status = ?
+			OR browse_probe_condition.status = ?
+			OR browse_metadata_condition.status = ?
+			OR browse_projection_condition.status = ?
+			OR browse_visible_condition.status = ?
+			OR browse_review_required_condition.status IN (?, ?, ?)
+			OR browse_materialized_condition.status IN (?, ?, ?)
+			OR browse_visible_condition.status IN (?, ?, ?)
+			OR (browse_materialized_condition.status <> ? AND browse_probe_condition.status IN (?, ?, ?))
+			OR (browse_materialized_condition.status <> ? AND browse_metadata_condition.status IN (?, ?, ?))
+			OR (browse_materialized_condition.status <> ? AND browse_projection_condition.status IN (?, ?, ?))
+		) THEN 1 ELSE 0 END`
+		organizingArgs := []any{
+			ingest.ConditionStatusReviewRequired,
+			ingest.ConditionStatusReviewRequired,
+			ingest.ConditionStatusFalse, "no_candidate",
+			ingest.ConditionStatusFailed,
+			ingest.ConditionStatusFailed,
+			ingest.ConditionStatusFailed,
+			ingest.ConditionStatusFailed,
+			ingest.ConditionStatusFailed,
+			ingest.ConditionStatusFailed,
+			ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
+			ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
+			ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
+			ingest.ConditionStatusTrue, ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
+			ingest.ConditionStatusTrue, ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
+			ingest.ConditionStatusTrue, ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
+		}
+		switch input.OrganizingState {
+		case "organized":
+			db = db.Where(isOrganizingExpr+" = 0", organizingArgs...)
+		case "unorganized":
+			db = db.Where(isOrganizingExpr+" = 1", organizingArgs...)
+		}
+	}
+	return db
+}
 
-	var items []database.CatalogItem
-	if err := applyBrowseItemsOrder(db, input).Find(&items).Error; err != nil {
-		return BrowseItemsResult{}, err
-	}
-	mapped, err := s.buildCatalogListItems(ctx, items)
-	if err != nil {
-		return BrowseItemsResult{}, err
-	}
-	if err := s.attachOrganizingSummaries(ctx, mapped); err != nil {
-		return BrowseItemsResult{}, err
-	}
+func buildCatalogBrowseEntries(mapped []CatalogListItem, items []database.CatalogItem) []browseListEntry {
 	entries := make([]browseListEntry, 0, len(mapped))
 	for idx, item := range mapped {
 		entries = append(entries, browseListEntry{Item: item, TitleKey: catalogListItemTitleKey(item), Year: item.Year, CreatedAt: items[idx].CreatedAt.Format("2006-01-02T15:04:05.000000000Z07:00"), StableID: item.ID})
 	}
-	discovered, err := s.discoveredBrowseEntries(ctx, input)
-	if err != nil {
-		return BrowseItemsResult{}, err
-	}
-	entries = append(entries, discovered...)
-	entries = filterBrowseListEntriesByOrganizing(entries, input.OrganizingState)
-	applyBrowseListEntryOrder(entries, input)
-	total := int64(len(entries))
+	return entries
+}
+
+func buildBrowseItemsResult(entries []browseListEntry, total int64, input BrowseItemsInput) BrowseItemsResult {
 	start := input.Offset
 	if start > len(entries) {
 		start = len(entries)
@@ -231,7 +307,11 @@ func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (Brow
 		HasMore:       int64(input.Offset+len(paged)) < total,
 		Sort:          input.Sort,
 		SortDirection: input.SortDirection,
-	}, nil
+	}
+}
+func applyPlayableSeriesVisibility(db *gorm.DB) *gorm.DB {
+	return db.Joins("LEFT JOIN item_rollups browse_item_rollups ON browse_item_rollups.item_id = catalog_items.id").
+		Where("catalog_items.type <> ? OR COALESCE(browse_item_rollups.available_count, 0) > 0", ItemTypeSeries)
 }
 
 func (s *Service) discoveredBrowseEntries(ctx context.Context, input BrowseItemsInput) ([]browseListEntry, error) {
@@ -744,20 +824,24 @@ func (s *Service) listItems(ctx context.Context, libraryID *uint, query string, 
 	}
 
 	db := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL").
-		Where("parent_id IS NULL").
-		Where("availability_status = ?", AvailabilityAvailable).
-		Where("type IN ?", allowedTypes)
+		Table("catalog_search_documents AS browse_docs").
+		Select("catalog_items.*").
+		Joins("JOIN catalog_items ON catalog_items.id = browse_docs.item_id").
+		Where("catalog_items.deleted_at IS NULL").
+		Where("catalog_items.parent_id IS NULL").
+		Where("browse_docs.availability_status = ?", AvailabilityAvailable).
+		Where("browse_docs.item_type IN ?", allowedTypes)
+	db = applyPlayableSeriesVisibility(db)
 	if libraryID != nil {
-		db = db.Where("library_id = ?", *libraryID)
+		db = db.Where("browse_docs.library_id = ?", *libraryID)
 	}
 	if trimmedQuery := strings.TrimSpace(query); trimmedQuery != "" {
 		like := "%" + strings.ToLower(trimmedQuery) + "%"
-		db = db.Where("LOWER(title) LIKE ? OR LOWER(original_title) LIKE ? OR LOWER(sort_title) LIKE ?", like, like, like)
+		db = db.Where("LOWER(browse_docs.title) LIKE ? OR LOWER(browse_docs.original_title) LIKE ? OR LOWER(catalog_items.sort_title) LIKE ?", like, like, like)
 	}
 
 	var items []database.CatalogItem
-	if err := db.Order("sort_key asc").Order("title asc").Order("id asc").Limit(limit).Find(&items).Error; err != nil {
+	if err := db.Order("COALESCE(NULLIF(catalog_items.sort_title, ''), NULLIF(catalog_items.sort_key, ''), catalog_items.title) asc").Order("catalog_items.id asc").Limit(limit).Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return s.buildCatalogListItems(ctx, items)
@@ -1176,16 +1260,8 @@ func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]CatalogLi
 	if limit <= 0 || limit > 100 {
 		limit = 12
 	}
-	var items []database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Joins("JOIN libraries ON libraries.id = catalog_items.library_id AND libraries.status IN ?", []string{"active", "syncing"}).
-		Where("catalog_items.deleted_at IS NULL").
-		Where("catalog_items.parent_id IS NULL").
-		Where("catalog_items.availability_status = ?", AvailabilityAvailable).
-		Where("catalog_items.type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
-		Order("catalog_items.created_at desc").Order("catalog_items.id desc").
-		Limit(limit).
-		Find(&items).Error; err != nil {
+	items, err := s.listLatestRootItems(ctx, nil, limit)
+	if err != nil {
 		return nil, err
 	}
 	return s.buildCatalogListItems(ctx, items)
@@ -1204,15 +1280,8 @@ func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]Catalog
 	}
 	sections := make([]CatalogLatestByLibrarySection, 0, len(libraries))
 	for _, library := range libraries {
-		var items []database.CatalogItem
-		if err := s.db.WithContext(ctx).
-			Where("library_id = ? AND deleted_at IS NULL", library.ID).
-			Where("parent_id IS NULL").
-			Where("availability_status = ?", AvailabilityAvailable).
-			Where("type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
-			Order("created_at desc").Order("id desc").
-			Limit(limit).
-			Find(&items).Error; err != nil {
+		items, err := s.listLatestRootItems(ctx, &library.ID, limit)
+		if err != nil {
 			return nil, err
 		}
 		if len(items) == 0 {
@@ -1229,6 +1298,30 @@ func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]Catalog
 		})
 	}
 	return sections, nil
+}
+
+func (s *Service) listLatestRootItems(ctx context.Context, libraryID *uint, limit int) ([]database.CatalogItem, error) {
+	if limit <= 0 {
+		return []database.CatalogItem{}, nil
+	}
+	db := s.db.WithContext(ctx).
+		Table("catalog_search_documents AS browse_docs").
+		Select("catalog_items.*").
+		Joins("JOIN catalog_items ON catalog_items.id = browse_docs.item_id").
+		Joins("JOIN libraries ON libraries.id = catalog_items.library_id AND libraries.status IN ?", []string{"active", "syncing"}).
+		Where("catalog_items.deleted_at IS NULL").
+		Where("catalog_items.parent_id IS NULL").
+		Where("browse_docs.availability_status = ?", AvailabilityAvailable).
+		Where("browse_docs.item_type IN ?", []string{ItemTypeMovie, ItemTypeSeries})
+	db = applyPlayableSeriesVisibility(db)
+	if libraryID != nil {
+		db = db.Where("browse_docs.library_id = ?", *libraryID)
+	}
+	var items []database.CatalogItem
+	if err := db.Order("catalog_items.created_at desc").Order("catalog_items.id desc").Limit(limit).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (s *Service) loadCatalogItem(ctx context.Context, itemID uint) (database.CatalogItem, error) {
@@ -1351,19 +1444,20 @@ func (s *Service) findRelatedItemsByTags(ctx context.Context, item database.Cata
 	}
 	var items []database.CatalogItem
 	err := s.db.WithContext(ctx).
-		Model(&database.CatalogItem{}).
+		Table("catalog_search_documents AS related_docs").
 		Select("catalog_items.*").
+		Joins("JOIN catalog_items ON catalog_items.id = related_docs.item_id").
 		Joins("JOIN item_tags ON item_tags.item_id = catalog_items.id").
 		Joins("JOIN tags ON tags.id = item_tags.tag_id").
 		Where("catalog_items.deleted_at IS NULL").
-		Where("catalog_items.library_id = ?", item.LibraryID).
+		Where("related_docs.library_id = ?", item.LibraryID).
 		Where("catalog_items.id <> ?", item.ID).
 		Where("catalog_items.parent_id IS NULL").
-		Where("catalog_items.type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
+		Where("related_docs.item_type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
 		Where("LOWER(tags.name) IN ?", tagNames).
 		Group("catalog_items.id").
 		Order("COUNT(tags.id) desc").
-		Order("catalog_items.year desc").
+		Order("related_docs.year desc").
 		Order("catalog_items.sort_key asc").
 		Order("catalog_items.title asc").
 		Order("catalog_items.id asc").
@@ -1383,15 +1477,18 @@ func (s *Service) findRelatedItemsByLibrary(ctx context.Context, item database.C
 	sort.Slice(excludedIDs, func(i, j int) bool { return excludedIDs[i] < excludedIDs[j] })
 	var items []database.CatalogItem
 	query := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL").
-		Where("library_id = ?", item.LibraryID).
-		Where("parent_id IS NULL").
-		Where("type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
-		Where("id NOT IN ?", excludedIDs).
-		Order("year desc").
-		Order("sort_key asc").
-		Order("title asc").
-		Order("id asc").
+		Table("catalog_search_documents AS related_docs").
+		Select("catalog_items.*").
+		Joins("JOIN catalog_items ON catalog_items.id = related_docs.item_id").
+		Where("catalog_items.deleted_at IS NULL").
+		Where("related_docs.library_id = ?", item.LibraryID).
+		Where("catalog_items.parent_id IS NULL").
+		Where("related_docs.item_type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
+		Where("catalog_items.id NOT IN ?", excludedIDs).
+		Order("related_docs.year desc").
+		Order("catalog_items.sort_key asc").
+		Order("catalog_items.title asc").
+		Order("catalog_items.id asc").
 		Limit(limit)
 	if err := query.Find(&items).Error; err != nil {
 		return nil, err

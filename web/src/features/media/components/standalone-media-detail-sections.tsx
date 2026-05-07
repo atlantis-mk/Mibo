@@ -65,7 +65,7 @@ export function SeriesEpisodesSection({
   isLoading: boolean
   errorMessage: string | null
 }) {
-  const navigate = useNavigate()
+  const navigate = useNavigate({ from: "/media/$id" })
   const numberedSeasons = useMemo(
     () => seasons.filter((season) => !isSpecialSeason(season)),
     [seasons]

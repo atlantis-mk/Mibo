@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,6 +63,24 @@ func TestRunnerProcessesDifferentLibrariesConcurrentlyWhenResourcesAllow(t *test
 
 	assertTaskStatus(t, db, first.ID, TaskStatusCompleted)
 	assertTaskStatus(t, db, second.ID, TaskStatusCompleted)
+}
+
+func TestRunnerRegisterPanicsOnDuplicateTaskType(t *testing.T) {
+	runner := NewRunner(nil, RunnerConfig{})
+	runner.Register(TaskTypeDiscoverStorage, func(ctx context.Context, task database.WorkflowTask) error { return nil })
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("expected duplicate registration panic")
+		}
+		message, ok := recovered.(string)
+		if !ok || !strings.Contains(message, TaskTypeDiscoverStorage) {
+			t.Fatalf("unexpected panic: %#v", recovered)
+		}
+	}()
+
+	runner.Register(TaskTypeDiscoverStorage, func(ctx context.Context, task database.WorkflowTask) error { return nil })
 }
 
 func assertTaskStatus(t *testing.T, db *gorm.DB, taskID uint, status string) {

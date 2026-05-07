@@ -20,7 +20,6 @@ type Config struct {
 	FFmpeg   FFmpegConfig
 	FFprobe  FFprobeConfig
 	Worker   WorkerConfig
-	Cleanup  CleanupConfig
 }
 
 type HTTPConfig struct {
@@ -98,18 +97,12 @@ type FFprobeConfig struct {
 }
 
 type WorkerConfig struct {
-	Enabled              bool
-	PollInterval         time.Duration
-	RefreshIntervalHours int
-	ProbeWorkers         int
-	WorkflowPollInterval time.Duration
+	Enabled               bool
+	PollInterval          time.Duration
+	RefreshIntervalHours  int
+	ProbeWorkers          int
+	WorkflowPollInterval  time.Duration
 	WorkflowLeaseDuration time.Duration
-}
-
-type CleanupConfig struct {
-	MissingCleanupEnabled   bool
-	MissingRetention        time.Duration
-	MissingCleanupBatchSize int
 }
 
 func Load() (Config, error) {
@@ -174,17 +167,12 @@ func Load() (Config, error) {
 			Timeout: getDurationEnv("MIBO_FFPROBE_TIMEOUT", 30*time.Second),
 		},
 		Worker: WorkerConfig{
-			Enabled:              getBoolEnv("MIBO_WORKER_ENABLED", true),
-			PollInterval:         getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
-			RefreshIntervalHours: getIntEnv("MIBO_WORKER_REFRESH_INTERVAL_HOURS", 0),
-			ProbeWorkers:         getBoundedIntEnv("MIBO_PROBE_WORKERS", 2, 1, 8),
-			WorkflowPollInterval: getDurationEnv("MIBO_WORKFLOW_POLL_INTERVAL", 2*time.Second),
+			Enabled:               getBoolEnv("MIBO_WORKER_ENABLED", true),
+			PollInterval:          getDurationEnv("MIBO_WORKER_POLL_INTERVAL", 2*time.Second),
+			RefreshIntervalHours:  getIntEnv("MIBO_WORKER_REFRESH_INTERVAL_HOURS", 0),
+			ProbeWorkers:          getBoundedIntEnv("MIBO_PROBE_WORKERS", 2, 1, 8),
+			WorkflowPollInterval:  getDurationEnv("MIBO_WORKFLOW_POLL_INTERVAL", 2*time.Second),
 			WorkflowLeaseDuration: getDurationEnv("MIBO_WORKFLOW_LEASE_DURATION", time.Minute),
-		},
-		Cleanup: CleanupConfig{
-			MissingCleanupEnabled:   getBoolEnv("MIBO_MISSING_CLEANUP_ENABLED", false),
-			MissingRetention:        getDurationEnv("MIBO_MISSING_CLEANUP_RETENTION", 30*24*time.Hour),
-			MissingCleanupBatchSize: getBoundedIntEnv("MIBO_MISSING_CLEANUP_BATCH_SIZE", 100, 1, 1000),
 		},
 	}
 

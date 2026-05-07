@@ -222,29 +222,6 @@ curl http://127.0.0.1:8080/api/v1/items/1/progress \
   -H 'Authorization: Bearer <token>'
 ```
 
-### 检查 catalog consistency
-
-```bash
-curl http://127.0.0.1:8080/api/v1/catalog-migration/consistency \
-  -H 'Authorization: Bearer <admin-token>'
-```
-
-### 重建 catalog rollups / availability / search documents
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/catalog-migration/rebuild-projections \
-  -H 'Authorization: Bearer <admin-token>'
-```
-
-### catalog cutover 运维说明
-
-- `catalog_read_enabled` 不再因为“空库”或“已有 catalog 数据”而自动视为切换完成。未显式设置时，只有在写入 `catalog_validation_completed_at` 或 `legacy_cleanup_completed_at` 后，catalog reads 才会默认开启；如果数据库仍只有 legacy `media_items` 数据，则会继续保持关闭。
-- 建议的切换前检查顺序：
-  1. 调用 `GET /api/v1/catalog-migration/consistency`
-  2. 如果返回 drift，则调用 `POST /api/v1/catalog-migration/rebuild-projections`
-  3. 重新检查 consistency，确认 rollup / availability / search document 已收敛
-- 当 catalog reads 已开启时，`/api/v1/media-items/*` 与 `/api/v1/media-files/*` 只应视为退役兼容路径；新功能应改用 `/api/v1/items/*`、`/api/v1/assets/*` 与 `/api/v1/inventory-files/*`。
-
 ### catalog governance 资产纠错
 
 当前治理工作区支持在“当前条目及其后代”范围内修正资产链接：
@@ -260,12 +237,6 @@ curl -X DELETE http://127.0.0.1:8080/api/v1/items/1/governance/assets/10/links/1
 ```
 
 这些操作只更新 `asset_items` 关系，不会覆盖字段锁、来源证据或图片选择状态。
-
-## Catalog Read Default
-
-- 空库或已经写入 `catalog_items` 的数据库会默认启用 catalog reads。
-- 只有 legacy `media_items` / `media_files` 的数据库会保持 catalog reads 关闭，直到 backfill 或显式设置 `catalog_read_enabled=true`。
-- 当 catalog reads 开启后，legacy `/api/v1/media-items/*` 和 `/api/v1/media-files/*` 路径会返回退役响应，请改用 `/api/v1/items/*`、`/api/v1/assets/*` 和 `/api/v1/inventory-files/*`。
 
 ### 手动重扫媒体库
 
@@ -300,10 +271,9 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs/1/retry
 
 推荐恢复流程：
 
-1. 先调用 `GET /api/v1/catalog-migration/consistency` 检查 rollup、availability、asset-file link 与 search document 是否存在漂移。
-2. 如发现漂移，调用 `POST /api/v1/catalog-migration/rebuild-projections` 重建派生数据。
-3. 如果问题来自旧数据未迁移完整，重新触发 catalog backfill；如果问题来自存储变更，重新扫描对应媒体库。
-4. 只有在需要临时迁移回退时，才显式关闭 `catalog_read_enabled`；正常运行应保持 catalog reads 为默认主路径。
+1. 重新扫描对应媒体库，刷新 inventory、asset 与 catalog 投影。
+2. 如需修正匹配结果或补全详情，在元数据治理工作台中执行重新匹配或重抓。
+3. 如果问题来自存储变更，优先重新扫描具体媒体库而不是依赖一次性迁移工具。
 
 ## 当前边界
 

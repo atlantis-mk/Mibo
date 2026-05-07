@@ -20,7 +20,6 @@ const (
 
 const (
 	KindScan             = "scan"
-	KindLibraryCleanup   = "library_cleanup"
 	KindInvalidLinkCheck = "invalid_link_check"
 
 	StatusQueued    = "queued"
@@ -484,7 +483,7 @@ func validateCreateInput(input CreateScheduleInput) error {
 
 func isValidKind(kind string) bool {
 	switch normalizeKind(kind) {
-	case KindScan, KindLibraryCleanup, KindInvalidLinkCheck:
+	case KindScan, KindInvalidLinkCheck:
 		return true
 	default:
 		return false

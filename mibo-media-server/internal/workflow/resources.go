@@ -17,7 +17,6 @@ const (
 	TaskTypeProbeInventory      = "probe_inventory"
 	TaskTypeProbeInventoryFile  = "probe_inventory_file"
 	TaskTypeMatchMetadata       = "match_metadata"
-	TaskTypeCleanupMissing      = "cleanup_missing"
 	TaskTypeApplyStorageRefresh = "apply_storage_refresh"
 )
 
@@ -45,7 +44,6 @@ var defaultTaskTypes = map[string]TaskTypeDefinition{
 	TaskTypeProbeInventory:      {TaskType: TaskTypeProbeInventory, Stage: StageProbe, Resources: map[string]int{ResourceFFprobe: 1, ResourceLocalDiskIO: 1, ResourceCPUHeavy: 1, ResourceDBWrite: 1}},
 	TaskTypeProbeInventoryFile:  {TaskType: TaskTypeProbeInventoryFile, Stage: StageProbe, Resources: map[string]int{ResourceFFprobe: 1, ResourceLocalDiskIO: 1, ResourceCPUHeavy: 1, ResourceDBWrite: 1}},
 	TaskTypeMatchMetadata:       {TaskType: TaskTypeMatchMetadata, Stage: StageMetadataMatch, Resources: map[string]int{ResourceMetadataAPI: 1, ResourceDBWrite: 1}},
-	TaskTypeCleanupMissing:      {TaskType: TaskTypeCleanupMissing, Stage: StageCleanup, Resources: map[string]int{ResourceDBWrite: 1, ResourceLocalDiskIO: 1}},
 	TaskTypeApplyStorageRefresh: {TaskType: TaskTypeApplyStorageRefresh, Stage: StageStorageRefresh, Resources: map[string]int{ResourceDBWrite: 1}},
 }
 

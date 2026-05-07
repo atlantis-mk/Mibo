@@ -31,18 +31,14 @@ import SearchPage from "#/features/search"
 import SetupPage from "#/features/setup"
 import SettingsLayout from "#/features/settings"
 import {
-  SettingsCleanupPage,
   SettingsConsolePage,
-  SettingsDatabasePage,
   SettingsDevicesPage,
   SettingsDlnaPage,
-  SettingsGeneralPage,
   SettingsHealthPage,
   SettingsLibraryPage,
   SettingsLiveTvPage,
   SettingsMetadataSourcesPage,
   SettingsNetworkPage,
-  SettingsNotificationsPage,
   SettingsPlaybackPage,
   SettingsScanExclusionsPage,
   SettingsSecurityPage,
@@ -79,9 +75,13 @@ const libraryRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/library/$id",
   validateSearch: (search: Record<string, unknown>) => ({
-    page: normalizeLibraryPageSearch(search.page),
-    pageSize: normalizeLibraryPageSizeSearch(search.pageSize),
     ...libraryFiltersToSearch(parseLibraryFiltersSearch(search)),
+    ...(normalizeLibraryPageSearch(search.page) !== undefined
+      ? { page: normalizeLibraryPageSearch(search.page) }
+      : {}),
+    ...(normalizeLibraryPageSizeSearch(search.pageSize) !== undefined
+      ? { pageSize: normalizeLibraryPageSizeSearch(search.pageSize) }
+      : {}),
   }),
   component: LibraryRoute,
 })
@@ -90,8 +90,10 @@ const mediaRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/media/$id",
   validateSearch: (search: Record<string, unknown>) => ({
-    view: search.view === "series" ? "series" : undefined,
-    episodePage: normalizeEpisodePageSearch(search.episodePage),
+    ...(search.view === "series" ? { view: "series" as const } : {}),
+    ...(normalizeEpisodePageSearch(search.episodePage) !== undefined
+      ? { episodePage: normalizeEpisodePageSearch(search.episodePage) }
+      : {}),
   }),
   component: MediaRoute,
 })
@@ -134,24 +136,30 @@ const playRoute = createRoute({
     await requireCanEnterApp()
     await requireAuthenticated(location.href)
   },
-  validateSearch: (search: Record<string, unknown>) => ({
-    fromStart:
+  validateSearch: (search: Record<string, unknown>) => {
+    const fromStart =
       search.fromStart === true ||
       search.fromStart === "true" ||
-      search.fromStart === "1",
-    assetId:
+      search.fromStart === "1"
+    const assetId =
       typeof search.assetId === "number"
         ? search.assetId
         : typeof search.assetId === "string"
           ? Number.parseInt(search.assetId, 10) || undefined
-          : undefined,
-    inventoryFileId:
+          : undefined
+    const inventoryFileId =
       typeof search.inventoryFileId === "number"
         ? search.inventoryFileId
         : typeof search.inventoryFileId === "string"
           ? Number.parseInt(search.inventoryFileId, 10) || undefined
-          : undefined,
-  }),
+          : undefined
+
+    return {
+      ...(fromStart ? { fromStart: true } : {}),
+      ...(assetId !== undefined ? { assetId } : {}),
+      ...(inventoryFileId !== undefined ? { inventoryFileId } : {}),
+    }
+  },
   component: PlayRoute,
 })
 
@@ -195,12 +203,6 @@ const settingsIndexRoute = createRoute({
   },
 })
 
-const settingsGeneralRoute = createRoute({
-  getParentRoute: () => settingsRoute,
-  path: "/general",
-  component: SettingsGeneralPage,
-})
-
 const settingsHealthRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: "/health",
@@ -237,12 +239,6 @@ const settingsJobsRoute = createRoute({
   component: JobsPage,
 })
 
-const settingsCleanupRoute = createRoute({
-  getParentRoute: () => settingsRoute,
-  path: "/cleanup",
-  component: SettingsCleanupPage,
-})
-
 const settingsUsersRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: "/users",
@@ -273,22 +269,10 @@ const settingsLiveTvRoute = createRoute({
   component: SettingsLiveTvPage,
 })
 
-const settingsNotificationsRoute = createRoute({
-  getParentRoute: () => settingsRoute,
-  path: "/notifications",
-  component: SettingsNotificationsPage,
-})
-
 const settingsSecurityRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: "/security",
   component: SettingsSecurityPage,
-})
-
-const settingsDatabaseRoute = createRoute({
-  getParentRoute: () => settingsRoute,
-  path: "/database",
-  component: SettingsDatabasePage,
 })
 
 const settingsLogsRoute = createRoute({
@@ -332,7 +316,6 @@ const routeTree = rootRoute.addChildren([
   ]),
   settingsRoute.addChildren([
     settingsIndexRoute,
-    settingsGeneralRoute,
     settingsHealthRoute,
     settingsLibraryRoute,
     settingsPlaybackRoute,
@@ -341,15 +324,12 @@ const routeTree = rootRoute.addChildren([
     settingsMetadataDetailRoute,
     settingsSchedulesRoute,
     settingsJobsRoute,
-    settingsCleanupRoute,
     settingsUsersRoute,
     settingsDevicesRoute,
     settingsNetworkRoute,
     settingsDlnaRoute,
     settingsLiveTvRoute,
-    settingsNotificationsRoute,
     settingsSecurityRoute,
-    settingsDatabaseRoute,
     settingsLogsRoute,
     settingsConsoleRoute,
     settingsScanExclusionsRoute,
@@ -505,21 +485,36 @@ function parseLibraryFiltersSearch(
 }
 
 function libraryFiltersToSearch(filters: DiscoveryFilters) {
-  return {
-    q: filters.q.trim() || undefined,
-    type: filters.type === "all" ? undefined : filters.type,
-    genre: filters.genre.trim() || undefined,
-    region: filters.region.trim() || undefined,
-    year: filters.year.trim() || undefined,
-    minRating: filters.minRating.trim() || undefined,
-    watchedState:
-      filters.watchedState === "all" ? undefined : filters.watchedState,
-    organizingState:
-      filters.organizingState === "all" ? undefined : filters.organizingState,
-    sort: filters.sort === "title" ? undefined : filters.sort,
-    sortDirection:
-      filters.sortDirection === "asc" ? undefined : filters.sortDirection,
+  const search: Partial<DiscoveryFilters> = {}
+
+  const q = filters.q.trim()
+  if (q) search.q = q
+  if (filters.type !== "all") search.type = filters.type
+
+  const genre = filters.genre.trim()
+  if (genre) search.genre = genre
+
+  const region = filters.region.trim()
+  if (region) search.region = region
+
+  const year = filters.year.trim()
+  if (year) search.year = year
+
+  const minRating = filters.minRating.trim()
+  if (minRating) search.minRating = minRating
+
+  if (filters.watchedState !== "all") {
+    search.watchedState = filters.watchedState
   }
+  if (filters.organizingState !== "all") {
+    search.organizingState = filters.organizingState
+  }
+  if (filters.sort !== "title") search.sort = filters.sort
+  if (filters.sortDirection !== "asc") {
+    search.sortDirection = filters.sortDirection
+  }
+
+  return search
 }
 
 function parseStringSearch(value: unknown) {
@@ -578,14 +573,14 @@ function MediaRoute() {
     <MediaDetail
       itemId={Number(id)}
       detailView={parseMediaDetailView(view)}
-      episodePage={episodePage}
+      episodePage={episodePage ?? 1}
     />
   )
 }
 
-function normalizeEpisodePageSearch(value: unknown): number {
+function normalizeEpisodePageSearch(value: unknown): number | undefined {
   const page = typeof value === "number" ? value : Number(value)
-  return Number.isInteger(page) && page > 0 ? page : 1
+  return Number.isInteger(page) && page > 1 ? page : undefined
 }
 
 function PersonRoute() {

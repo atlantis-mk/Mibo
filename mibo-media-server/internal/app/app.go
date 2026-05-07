@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -33,6 +32,7 @@ type App struct {
 	cfg      config.Config
 	db       *gorm.DB
 	server   *http.Server
+	ingest   *ingest.Service
 	workflow *workflow.Runner
 	listener *listener.Service
 }
@@ -60,15 +60,17 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	ingestSvc := ingest.NewService(db, workflowSvc)
 	settingsSvc := settings.NewService(db, cfg.Metadata)
 	catalogSvc := catalog.NewService(db, ingestSvc)
-	if _, err := catalogSvc.BackfillScannerIdentities(ctx); err != nil {
-		return nil, fmt.Errorf("backfill scanner identities: %w", err)
-	}
 	librarySvc := library.NewService(cfg, db, registry, nil, ingestSvc, workflowSvc)
 	listenerSvc := listener.NewService(db, nil, librarySvc, registry)
 	probeSvc := probe.NewService(db, registry, cfg.FFprobe, cfg.FFmpeg, ingestSvc)
 	playbackSvc := playback.NewService(db, registry)
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc, ingestSvc)
+	librarySvc.SetInventoryProbeExecutor(probeSvc.ProbeInventoryFile)
+	librarySvc.SetCatalogMatchExecutor(func(ctx context.Context, itemID uint) error {
+		_, err := metadataSvc.MatchCatalogItemOperation(ctx, itemID)
+		return err
+	})
 	healthSvc := health.NewService(db, registry, librarySvc, cfg.OpenList.BaseURL)
 	catalogSvc.SetPersonProfileRefresher(metadataSvc)
 	scheduleSvc := schedule.NewService(db, schedule.WithDispatcher(func(ctx context.Context, due schedule.DueSchedule) (database.Job, error) {
@@ -78,8 +80,6 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		switch due.Kind {
 		case schedule.KindScan:
 			result, err = librarySvc.RunScheduledScan(ctx, due)
-		case schedule.KindLibraryCleanup:
-			result, err = librarySvc.RunScheduledCleanup(ctx, due)
 		case schedule.KindInvalidLinkCheck:
 			result, err = librarySvc.RunScheduledInvalidLinkCheck(ctx, due)
 			status = schedule.StatusCompleted
@@ -95,36 +95,6 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	progressSvc := progress.NewService(db, searchSvc)
 	workflowRunner := workflow.NewRunner(workflowSvc, workflow.RunnerConfig{Enabled: true, PollInterval: cfg.Worker.WorkflowPollInterval, LeaseDuration: cfg.Worker.WorkflowLeaseDuration})
 	librarySvc.RegisterWorkflowHandlers(workflowRunner)
-	workflowRunner.Register(workflow.TaskTypeProbeInventory, func(ctx context.Context, task database.WorkflowTask) error {
-		var payload library.InventoryProbeBatchPayload
-		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-			return err
-		}
-		for _, fileID := range payload.FileIDs {
-			if fileID == 0 {
-				continue
-			}
-			if err := probeSvc.ProbeInventoryFile(ctx, fileID); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	workflowRunner.Register(workflow.TaskTypeMatchMetadata, func(ctx context.Context, task database.WorkflowTask) error {
-		var payload library.CatalogMatchBatchPayload
-		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-			return err
-		}
-		for _, itemID := range payload.ItemIDs {
-			if itemID == 0 {
-				continue
-			}
-			if _, err := metadataSvc.MatchCatalogItemOperation(ctx, itemID); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 
 	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, ingestSvc, scheduleSvc, listenerSvc, healthSvc, workflowSvc)
 
@@ -138,6 +108,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		cfg:      cfg,
 		db:       db,
 		server:   server,
+		ingest:   ingestSvc,
 		workflow: workflowRunner,
 		listener: listenerSvc,
 	}, nil
@@ -161,6 +132,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.cfg.Worker.Enabled {
 		go a.workflow.Run(ctx)
+		go a.runIngestReconciler(ctx)
 		go a.listener.StartLocalObserver(ctx)
 		go a.listener.StartOpenListObserver(ctx)
 	}
@@ -172,5 +144,31 @@ func (a *App) Run(ctx context.Context) error {
 		return a.server.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		return err
+	}
+}
+
+func (a *App) runIngestReconciler(ctx context.Context) {
+	if a.ingest == nil {
+		return
+	}
+	interval := a.cfg.Worker.PollInterval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	runOnce := func() {
+		if _, err := a.ingest.ReconcileOnce(ctx, 100); err != nil && ctx.Err() == nil {
+			log.Printf("ingest: reconcile dirty work: %v", err)
+		}
+	}
+	runOnce()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
 	}
 }

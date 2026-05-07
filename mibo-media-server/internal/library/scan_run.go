@@ -3,7 +3,6 @@ package library
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/storageindex"
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 	"gorm.io/gorm"
 )
@@ -194,13 +194,66 @@ func (s *Service) scopedRefreshPath(ctx context.Context, config EffectiveLibrary
 	return database.LibraryPath{}, nil, "", scopedRefreshRootError(rootPath)
 }
 
+func (s *Service) scanDecisionSnapshot(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy, mode *scanMode) (scanDirectorySnapshot, error) {
+	if mode != nil {
+		if cached, ok := mode.decisionSnapshot(snapshot.Path); ok {
+			return cached, nil
+		}
+	}
+	decisionSnapshot, err := s.filteredScanSnapshot(ctx, provider, library, snapshot, exclusionRules, scanPolicy)
+	if err != nil {
+		return scanDirectorySnapshot{}, err
+	}
+	if mode != nil {
+		mode.recordDecisionSnapshot(decisionSnapshot)
+	}
+	return decisionSnapshot, nil
+}
+
+func (s *Service) canShortCircuitDirectoryMaterialization(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy, mode *scanMode) (bool, error) {
+	if mode == nil || s.db == nil || mode.partial || !mode.deferCatalogMaterialization {
+		return false, nil
+	}
+	if mode.directoryMaterialized(snapshot.Path) {
+		return false, nil
+	}
+	decisionSnapshot, err := s.scanDecisionSnapshot(ctx, provider, library, snapshot, exclusionRules, scanPolicy, mode)
+	if err != nil {
+		return false, err
+	}
+	visiblePaths := contentShapeVisibleVideoPaths(decisionSnapshot)
+	if len(visiblePaths) == 0 {
+		return false, nil
+	}
+	var rows []struct {
+		StoragePath string
+	}
+	if err := s.db.WithContext(ctx).
+		Table("inventory_files").
+		Select("DISTINCT inventory_files.storage_path").
+		Joins("JOIN asset_files ON asset_files.file_id = inventory_files.id AND asset_files.role = ? AND asset_files.part_index = 0", inventory.FileRoleSource).
+		Where("inventory_files.library_id = ? AND inventory_files.deleted_at IS NULL AND inventory_files.status = ? AND inventory_files.storage_provider = ? AND inventory_files.storage_path IN ?", library.ID, inventory.FileStatusAvailable, strings.TrimSpace(provider.Name()), visiblePaths).
+		Scan(&rows).Error; err != nil {
+		return false, err
+	}
+	if len(rows) != len(visiblePaths) {
+		return false, nil
+	}
+	mode.markDirectoryMaterialized(snapshot.Path)
+	return true, nil
+}
+
 func (s *Service) scanLibrary(ctx context.Context, provider storage.Provider, library database.Library, rootPath string) (SyncResult, error) {
-	return s.scanLibraryWithMode(ctx, provider, library, rootPath, &scanMode{})
+	return s.scanLibraryWithMode(ctx, provider, library, rootPath, nil)
 }
 
 func (s *Service) scanLibraryWithMode(ctx context.Context, provider storage.Provider, library database.Library, rootPath string, mode *scanMode) (SyncResult, error) {
 	if err := ctx.Err(); err != nil {
 		return SyncResult{}, err
+	}
+	workingMode := mode
+	if workingMode == nil {
+		workingMode = &scanMode{}
 	}
 	resolved, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: rootPath})
 	if err != nil {
@@ -230,11 +283,13 @@ func (s *Service) scanLibraryWithMode(ctx context.Context, provider storage.Prov
 			return SyncResult{}, err
 		}
 	}
-	if err := s.walkDirectory(ctx, provider, library, rootPath, seenFiles, seenItems, &result, exclusionRules, scanPolicy, subtitlePolicy, mode); err != nil {
+	if err := s.walkDirectory(ctx, provider, library, rootPath, seenFiles, seenItems, &result, exclusionRules, scanPolicy, subtitlePolicy, workingMode); err != nil {
 		return SyncResult{}, err
 	}
-	if err := s.cleanupMissingCatalog(ctx, library.ID, rootPath, seenFiles); err != nil {
-		return SyncResult{}, err
+	if workingMode.allowsMissingCleanup() {
+		if err := s.cleanupMissingCatalog(ctx, library.ID, rootPath, seenFiles, workingMode.skippedDirectoryPaths()); err != nil {
+			return SyncResult{}, err
+		}
 	}
 	_ = seenFiles
 	_ = seenItems
@@ -251,9 +306,9 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 	if err != nil {
 		return err
 	}
-		if mode != nil {
-			mode.recordDirectorySnapshot(snapshot)
-		}
+	if mode != nil {
+		mode.recordDirectorySnapshot(snapshot)
+	}
 	objects := snapshot.Objects
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Path < objects[j].Path })
 	discoveredCandidates := make([]discoveredInventoryCandidate, 0)
@@ -267,7 +322,12 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 				continue
 			}
 			if err := s.walkDirectory(ctx, provider, library, object.Path, seenFiles, seenItems, result, exclusionRules, scanPolicy, subtitlePolicy, mode); err != nil {
-				return err
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				mode.recordSkippedDirectory(object.Path, err)
+				s.recordScanDirectoryFailure(ctx, provider, library, object.Path, err)
+				continue
 			}
 			continue
 		}
@@ -296,13 +356,43 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 		seenFiles[object.Path] = struct{}{}
 		discoveredCandidates = append(discoveredCandidates, discoveredInventoryCandidate{object: object, container: strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), ".")})
 	}
-	if err := s.flushDiscoveredInventoryCandidates(ctx, provider, library, snapshot, exclusionRules, scanPolicy, subtitlePolicy, mode, seenFiles, result, discoveredCandidates); err != nil {
+	decisionSnapshot, err := s.scanDecisionSnapshot(ctx, provider, library, snapshot, exclusionRules, scanPolicy, mode)
+	if err != nil {
+		return err
+	}
+	if skip, err := s.canShortCircuitDirectoryMaterialization(ctx, provider, library, snapshot, exclusionRules, scanPolicy, mode); err != nil {
+		return err
+	} else if skip {
+		return nil
+	}
+	if err := s.flushDiscoveredInventoryCandidates(ctx, provider, library, snapshot, decisionSnapshot, exclusionRules, scanPolicy, subtitlePolicy, mode, seenFiles, result, discoveredCandidates); err != nil {
+		return err
+	}
+	if err := s.flushPendingSiblingMovieFiles(ctx, mode, snapshot.Path, seenFiles, result); err != nil {
+		return err
+	}
+	if err := s.flushCatalogMaterializeCandidates(ctx, library.ID, rootPathForScanMode(library.RootPath, mode), mode, catalogMaterializeScanBatchSize); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy, subtitlePolicy database.LibrarySubtitlePolicy, mode *scanMode, seenFiles map[string]struct{}, result *SyncResult, candidates []discoveredInventoryCandidate) error {
+func (s *Service) recordScanDirectoryFailure(ctx context.Context, provider storage.Provider, library database.Library, dirPath string, err error) {
+	if err == nil {
+		return
+	}
+	if _, recordErr := storageindex.NewService(s.db).RecordFailure(ctx, storageindex.FailureInput{
+		LibraryID:       library.ID,
+		StorageProvider: provider.Name(),
+		StoragePath:     dirPath,
+		Reason:          "scan_directory_skipped",
+		Error:           err,
+	}); recordErr != nil {
+		return
+	}
+}
+
+func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, decisionSnapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy, subtitlePolicy database.LibrarySubtitlePolicy, mode *scanMode, seenFiles map[string]struct{}, result *SyncResult, candidates []discoveredInventoryCandidate) error {
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -310,9 +400,9 @@ func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provid
 	if err != nil {
 		return err
 	}
-	decisionSnapshot, err := s.directoryShapeSnapshot(ctx, provider, library, snapshot, exclusionRules, scanPolicy)
-	if err != nil {
-		return err
+	if mode != nil {
+		mode.recordDiscoveredFiles(files)
+		mode.mergePathTreeAssignments(compilePathTreeAssignmentsFromFiles(mode.discoveredVideoFilesInSnapshot(decisionSnapshot), library.RootPath, nil, newFilenameTokenProfileCache()))
 	}
 	for _, candidate := range candidates {
 		fileKey := strings.TrimSpace(provider.Name()) + "\x00" + strings.TrimSpace(candidate.object.Path)
@@ -323,23 +413,21 @@ func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provid
 		result.InventoryFilesSeen++
 		if mode != nil && mode.deferCatalogMaterialization {
 			mode.recordCatalogMaterializeCandidate(file.ID)
-			if err := s.flushCatalogMaterializeCandidates(ctx, library.ID, rootPathForScanMode(library.RootPath, mode), mode, catalogMaterializeScanBatchSize); err != nil {
-				return err
-			}
+			mode.markDirectoryMaterialized(snapshot.Path)
+			continue
+		}
+		if s.shouldDelaySiblingMovieMaterialization(ctx, mode, library, file, candidate.object) {
+			mode.recordPendingSiblingMovieFile(pendingSiblingMovieFile{Provider: provider, Library: library, Object: candidate.object, Snapshot: snapshot, DecisionSnapshot: decisionSnapshot, DirectorySnapshots: mode.directorySnapshots, SubtitlePolicy: subtitlePolicy, FileID: file.ID})
 			continue
 		}
 		directorySnapshots := map[string]scanDirectorySnapshot{}
 		if mode != nil {
 			directorySnapshots = mode.directorySnapshots
 		}
-		if mode != nil && mode.classificationCache == nil {
-			mode.classificationCache = newClassificationDirectoryCache()
-		}
-		var classificationCache *classificationDirectoryCache
-		if mode != nil {
-			classificationCache = mode.classificationCache
-		}
-		writeResult, sidecarPaths, err := s.materializeObjectFromSnapshotWithDirectorySnapshots(ctx, provider, library, candidate.object, snapshot, decisionSnapshot, directorySnapshots, classificationCache, subtitlePolicy, nil)
+		tokenCache := newFilenameTokenProfileCache()
+		shapePlan := compileContentShapePlan(buildContentShapeDirectoryProfile(effectiveVideoLibraryType(library.Type), library.RootPath, decisionSnapshot, tokenCache))
+		shapeAssignments := contentShapeAssignmentsByPath(generateContentShapeAssignments(shapePlan, decisionSnapshot, tokenCache))
+		writeResult, sidecarPaths, err := s.materializeObjectFromSnapshotWithDirectorySnapshotsAndPlan(ctx, provider, library, candidate.object, snapshot, decisionSnapshot, directorySnapshots, tokenCache, shapePlan, shapeAssignments, map[string]pathTreeWorkGroupAssignment{candidate.object.Path: mode.pathTreeAssignment(candidate.object.Path)}, subtitlePolicy, nil)
 		if err != nil {
 			return err
 		}
@@ -349,7 +437,113 @@ func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provid
 		}
 		if writeResult.Item.ID != 0 {
 			result.CatalogItemsSeen++
-			mode.recordCatalogMatchCandidate(writeResult.Item.ID)
+			mode.recordCatalogMatchCandidateForItem(writeResult.Item)
+		}
+		if writeResult.File.ID != 0 {
+			mode.recordInventoryProbeCandidate(writeResult.File.ID)
+		}
+	}
+	return nil
+}
+
+func (s *Service) shouldDelaySiblingMovieMaterialization(ctx context.Context, mode *scanMode, library database.Library, file database.InventoryFile, object storage.Object) bool {
+	if mode == nil || mode.deferCatalogMaterialization || mode.partial || file.ID == 0 || strings.TrimSpace(file.StoragePath) == "" {
+		return false
+	}
+	childDir := path.Dir(file.StoragePath)
+	parentDir := path.Dir(childDir)
+	if childDir == strings.TrimSpace(library.RootPath) || parentDir == "." || parentDir == childDir {
+		return false
+	}
+	if rules, err := loadPathTreeClassificationRules(ctx, s.db, library.ID); err == nil && pathTreeFileMatchesAnyRule(file.StoragePath, rules) {
+		return true
+	}
+	if parseSeasonDirectoryNumber(path.Base(childDir)) != nil && strings.TrimSpace(seriesTitleFromEmbeddedSeasonDirectory(path.Base(childDir))) != "" {
+		return true
+	}
+	if mode.pendingSiblingMovieFiles != nil {
+		if pending := mode.pendingSiblingMovieFiles[parentDir]; len(pending) > 0 {
+			return true
+		}
+	}
+	settings := contentShapeSettingsFromConfig(s.cfg)
+	scope := inventoryFileSignalScope{LibraryID: file.LibraryID, StorageProvider: strings.TrimSpace(file.StorageProvider), ClassifierVersion: settings.ClassifierVersion}
+	models, _, err := loadReusableInventoryFileSignals(ctx, s.db, scope, []database.InventoryFile{file})
+	if err != nil {
+		return false
+	}
+	assignments := compilePathTreeAssignmentsFromFiles([]database.InventoryFile{file}, library.RootPath, models, newFilenameTokenProfileCache())
+	_ = assignments
+	signal := models[strings.TrimSpace(file.StoragePath)]
+	if strings.TrimSpace(signal.Identity.TitleCandidate) == "" {
+		signal = extractFilenameSignalModel(object.Path)
+	}
+	workKey := normalizedMovieWorkKeyFromSignal(signal)
+	return strings.TrimSpace(workKey.Normalized) != "" && workKey.Year != nil && signal.Identity.EpisodeNumber == nil && len(signal.Identity.EpisodeNumbers) == 0 && !signal.RoleHints.IsExtra
+}
+
+func (m *scanMode) recordPendingSiblingMovieFile(pending pendingSiblingMovieFile) {
+	if m == nil || strings.TrimSpace(pending.Object.Path) == "" {
+		return
+	}
+	parentDir := path.Dir(path.Dir(pending.Object.Path))
+	if parentDir == "." {
+		return
+	}
+	if m.pendingSiblingMovieFiles == nil {
+		m.pendingSiblingMovieFiles = make(map[string][]pendingSiblingMovieFile)
+	}
+	m.pendingSiblingMovieFiles[parentDir] = append(m.pendingSiblingMovieFiles[parentDir], pending)
+}
+
+func (s *Service) flushPendingSiblingMovieFiles(ctx context.Context, mode *scanMode, parentPath string, seenFiles map[string]struct{}, result *SyncResult) error {
+	if mode == nil || len(mode.pendingSiblingMovieFiles) == 0 {
+		return nil
+	}
+	pending := mode.pendingSiblingMovieFiles[strings.TrimSpace(parentPath)]
+	if len(pending) == 0 {
+		return nil
+	}
+	delete(mode.pendingSiblingMovieFiles, strings.TrimSpace(parentPath))
+	files := make([]database.InventoryFile, 0, len(pending))
+	for _, entry := range pending {
+		if entry.FileID == 0 {
+			continue
+		}
+		var file database.InventoryFile
+		if err := s.db.WithContext(ctx).First(&file, entry.FileID).Error; err != nil {
+			return err
+		}
+		files = append(files, file)
+	}
+	assignments := compilePathTreeAssignmentsFromFiles(files, pending[0].Library.RootPath, nil, newFilenameTokenProfileCache())
+	rules, err := loadPathTreeClassificationRules(ctx, s.db, pending[0].Library.ID)
+	if err != nil {
+		return err
+	}
+	for storagePath, assignment := range applyPathTreeClassificationRules(files, rules, nil, newFilenameTokenProfileCache()) {
+		if assignments == nil {
+			assignments = make(map[string]pathTreeWorkGroupAssignment)
+		}
+		assignments[storagePath] = assignment
+	}
+	mode.mergePathTreeAssignments(assignments)
+	for _, entry := range pending {
+		tokenCache := newFilenameTokenProfileCache()
+		shapePlan := compileContentShapePlan(buildContentShapeDirectoryProfile(effectiveVideoLibraryType(entry.Library.Type), entry.Library.RootPath, entry.DecisionSnapshot, tokenCache))
+		shapeAssignments := contentShapeAssignmentsByPath(generateContentShapeAssignments(shapePlan, entry.DecisionSnapshot, tokenCache))
+		pathAssignments := map[string]pathTreeWorkGroupAssignment{entry.Object.Path: mode.pathTreeAssignment(entry.Object.Path)}
+		writeResult, sidecarPaths, err := s.materializeObjectFromSnapshotWithDirectorySnapshotsAndPlan(ctx, entry.Provider, entry.Library, entry.Object, entry.Snapshot, entry.DecisionSnapshot, entry.DirectorySnapshots, tokenCache, shapePlan, shapeAssignments, pathAssignments, entry.SubtitlePolicy, nil)
+		if err != nil {
+			return err
+		}
+		for _, sidecarPath := range sidecarPaths {
+			seenFiles[sidecarPath] = struct{}{}
+			result.InventoryFilesSeen++
+		}
+		if writeResult.Item.ID != 0 {
+			result.CatalogItemsSeen++
+			mode.recordCatalogMatchCandidateForItem(writeResult.Item)
 		}
 		if writeResult.File.ID != 0 {
 			mode.recordInventoryProbeCandidate(writeResult.File.ID)
@@ -397,7 +591,20 @@ func (s *Service) upsertNonVideoInventoryFile(ctx context.Context, provider stor
 
 func (s *Service) upsertDiscoveredInventoryFile(ctx context.Context, provider storage.Provider, library database.Library, object storage.Object) (database.InventoryFile, error) {
 	container := strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), ".")
-	if file, ok, err := s.reuseDiscoveredInventoryFileByStableIdentity(ctx, library.ID, provider.Name(), object, container); err != nil {
+	if file, ok, err := reuseInventoryFileByStableIdentity(ctx, s.db, inventoryFileStableIdentityReuseInput{
+		LibraryID:         library.ID,
+		StorageProvider:   provider.Name(),
+		StableIdentityKey: strings.TrimSpace(object.StableIdentity),
+		StoragePath:       object.Path,
+		HashesJSON:        encodeHashInfo(object.HashInfo),
+		ThumbnailURL:      strings.TrimSpace(object.ThumbnailURL),
+		SizeBytes:         object.Size,
+		ModifiedAt:        object.Modified,
+		Container:         container,
+		ContentClass:      SourceContentClassVideo,
+		Status:            inventory.FileStatusAvailable,
+		ScanState:         inventory.FileScanStateDiscovered,
+	}); err != nil {
 		return database.InventoryFile{}, err
 	} else if ok {
 		s.markInventoryFileDirty(ctx, file.ID, "scanner_refresh")
@@ -417,6 +624,9 @@ func (s *Service) upsertDiscoveredInventoryFile(ctx context.Context, provider st
 		ScanState:         inventory.FileScanStateDiscovered,
 	})
 	if err != nil {
+		return database.InventoryFile{}, err
+	}
+	if err := s.ensureInventoryFileSignals(ctx, library.ID, provider.Name(), []database.InventoryFile{file}); err != nil {
 		return database.InventoryFile{}, err
 	}
 	s.markInventoryFileDirty(ctx, file.ID, "scanner_discovery")
@@ -473,7 +683,37 @@ func (s *Service) bulkUpsertDiscoveredInventoryFiles(ctx context.Context, provid
 			return nil, err
 		}
 	}
+	filesForSignals := make([]database.InventoryFile, 0, len(result))
+	for _, file := range result {
+		filesForSignals = append(filesForSignals, file)
+	}
+	if err := s.ensureInventoryFileSignals(ctx, library.ID, provider.Name(), filesForSignals); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+func (s *Service) ensureInventoryFileSignals(ctx context.Context, libraryID uint, storageProvider string, files []database.InventoryFile) error {
+	if len(files) == 0 {
+		return nil
+	}
+	settings := contentShapeSettingsFromConfig(s.cfg)
+	scope := inventoryFileSignalScope{LibraryID: libraryID, StorageProvider: storageProvider, ClassifierVersion: settings.ClassifierVersion}
+	models, _, err := loadReusableInventoryFileSignals(ctx, s.db, scope, files)
+	if err != nil {
+		return err
+	}
+	missing := make([]inventoryFileSignalInput, 0)
+	for _, file := range files {
+		if file.ID == 0 || file.Status != inventory.FileStatusAvailable || file.ContentClass != SourceContentClassVideo || !isVideoFile(file.StoragePath) {
+			continue
+		}
+		if _, ok := models[strings.TrimSpace(file.StoragePath)]; ok {
+			continue
+		}
+		missing = append(missing, inventoryFileSignalInput{File: file, Model: extractFilenameSignalModel(file.StoragePath)})
+	}
+	return saveInventoryFileSignals(ctx, s.db, scope, missing)
 }
 
 func (s *Service) preloadDiscoveredInventoryFilesByStableIdentity(ctx context.Context, libraryID uint, storageProvider string, candidates []discoveredInventoryCandidate) (map[string]discoveredStableIdentityBinding, error) {
@@ -493,16 +733,9 @@ func (s *Service) preloadDiscoveredInventoryFilesByStableIdentity(ctx context.Co
 	if len(stableIdentityKeys) == 0 {
 		return bindings, nil
 	}
-	var files []database.InventoryFile
-	for _, batch := range chunkStrings(stableIdentityKeys, sqliteVariableChunkSize) {
-		var partial []database.InventoryFile
-		if err := s.db.WithContext(ctx).
-			Where("library_id = ? AND storage_provider = ? AND stable_identity_key IN ? AND deleted_at IS NULL", libraryID, strings.TrimSpace(storageProvider), batch).
-			Order("id asc").
-			Find(&partial).Error; err != nil {
-			return nil, err
-		}
-		files = append(files, partial...)
+	files, err := loadInventoryFilesByStableIdentity(ctx, s.db, libraryID, storageProvider, stableIdentityKeys)
+	if err != nil {
+		return nil, err
 	}
 	for _, file := range files {
 		key := strings.TrimSpace(file.StableIdentityKey)
@@ -526,20 +759,20 @@ func (s *Service) applyDiscoveredReuseBindings(ctx context.Context, updates []di
 			}
 			ids = append(ids, update.file.ID)
 			resultKeyByID[update.file.ID] = update.resultKey
-			values := map[string]any{
-				"storage_path":  update.object.Path,
-				"hashes_json":   update.hashJSON,
-				"thumbnail_url": strings.TrimSpace(update.object.ThumbnailURL),
-				"size_bytes":    update.object.Size,
-				"modified_at":   update.object.Modified,
-				"container":     update.container,
-				"content_class": SourceContentClassVideo,
-				"status":        inventory.FileStatusAvailable,
-				"scan_state":    inventory.FileScanStateDiscovered,
-				"missing_since": nil,
-				"deleted_at":    nil,
-			}
-			if err := tx.Model(&database.InventoryFile{}).Where("id = ?", update.file.ID).Updates(values).Error; err != nil {
+			if err := applyInventoryFileStableIdentityReuseUpdate(ctx, tx, update.file.ID, inventoryFileStableIdentityReuseInput{
+				LibraryID:         update.file.LibraryID,
+				StorageProvider:   update.file.StorageProvider,
+				StableIdentityKey: update.file.StableIdentityKey,
+				StoragePath:       update.object.Path,
+				HashesJSON:        update.hashJSON,
+				ThumbnailURL:      strings.TrimSpace(update.object.ThumbnailURL),
+				SizeBytes:         update.object.Size,
+				ModifiedAt:        update.object.Modified,
+				Container:         update.container,
+				ContentClass:      SourceContentClassVideo,
+				Status:            inventory.FileStatusAvailable,
+				ScanState:         inventory.FileScanStateDiscovered,
+			}); err != nil {
 				return err
 			}
 		}
@@ -563,44 +796,6 @@ func (s *Service) applyDiscoveredReuseBindings(ctx context.Context, updates []di
 		result[resultKeyByID[file.ID]] = file
 	}
 	return result, nil
-}
-
-func (s *Service) reuseDiscoveredInventoryFileByStableIdentity(ctx context.Context, libraryID uint, storageProvider string, object storage.Object, container string) (database.InventoryFile, bool, error) {
-	stableIdentityKey := strings.TrimSpace(object.StableIdentity)
-	if stableIdentityKey == "" {
-		return database.InventoryFile{}, false, nil
-	}
-	var file database.InventoryFile
-	err := s.db.WithContext(ctx).
-		Where("library_id = ? AND storage_provider = ? AND stable_identity_key = ? AND deleted_at IS NULL", libraryID, strings.TrimSpace(storageProvider), stableIdentityKey).
-		Order("id asc").
-		First(&file).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return database.InventoryFile{}, false, nil
-	}
-	if err != nil {
-		return database.InventoryFile{}, false, err
-	}
-	updates := map[string]any{
-		"storage_path":  object.Path,
-		"hashes_json":   encodeHashInfo(object.HashInfo),
-		"thumbnail_url": strings.TrimSpace(object.ThumbnailURL),
-		"size_bytes":    object.Size,
-		"modified_at":   object.Modified,
-		"container":     container,
-		"content_class": SourceContentClassVideo,
-		"status":        inventory.FileStatusAvailable,
-		"scan_state":    inventory.FileScanStateDiscovered,
-		"missing_since": nil,
-		"deleted_at":    nil,
-	}
-	if err := s.db.WithContext(ctx).Model(&database.InventoryFile{}).Where("id = ?", file.ID).Updates(updates).Error; err != nil {
-		return database.InventoryFile{}, false, err
-	}
-	if err := s.db.WithContext(ctx).First(&file, file.ID).Error; err != nil {
-		return database.InventoryFile{}, false, err
-	}
-	return file, true, nil
 }
 
 func (s *Service) queuePostScanEnrichment(ctx context.Context, libraryID uint, rootPath string, mode scanMode, scanPolicy database.LibraryScanPolicy) error {
@@ -631,7 +826,7 @@ func catalogScanArtifactNeedsClassificationValidation(artifact catalogScanArtifa
 	return false
 }
 
-func (s *Service) directoryShapeSnapshot(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy) (scanDirectorySnapshot, error) {
+func (s *Service) filteredScanSnapshot(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy) (scanDirectorySnapshot, error) {
 	filtered := snapshot
 	filtered.Objects = make([]storage.Object, 0, len(snapshot.Objects))
 	for _, object := range snapshot.Objects {
@@ -667,13 +862,6 @@ func (r *SyncResult) recordExcludedFileSkipped(reason string) {
 		r.ExcludedFilesSkippedByReason = make(map[string]int)
 	}
 	r.ExcludedFilesSkippedByReason[trimmed]++
-}
-
-func shouldSkipTVDirectoryExtra(libraryType string, decision directoryShapeDecision, object storage.Object) bool {
-	if (!isTVLibraryType(libraryType) && !isMixedLibraryType(libraryType)) || decision.Shape != directoryShapeFlatEpisodeFolder {
-		return false
-	}
-	return extraTypeSignal(strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))) != ""
 }
 
 func shouldSkipByScanPolicy(object storage.Object, policy database.LibraryScanPolicy) bool {

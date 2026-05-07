@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
@@ -10,7 +10,6 @@ import {
   HomeIcon,
   LoaderCircleIcon,
   MoreHorizontalIcon,
-  PlayIcon,
   SearchIcon,
   Settings2Icon,
   UserCircleIcon,
@@ -39,6 +38,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu"
+import { Input } from "#/components/ui/input"
 import { ScrollArea } from "#/components/ui/scroll-area"
 import {
   Select,
@@ -53,10 +53,6 @@ import {
   createDefaultDiscoveryFilters,
   type DiscoveryFilters,
 } from "#/features/discovery/controls"
-import {
-  getMediaCardBackdropUrl,
-  getMediaCardPosterUrl,
-} from "#/lib/media-presentation"
 import {
   createAuthedMiboApi,
   favoritesQueryOptions,
@@ -122,6 +118,7 @@ export default function LibraryDetail({
   const [filterDraft, setFilterDraft] = useState(filters)
   const [activeTab, setActiveTab] = useState<LibraryTab>("programs")
   const [filterDialogOpen, setFilterDialogOpen] = useState(false)
+  const [pageJumpDraft, setPageJumpDraft] = useState(String(page))
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
 
   const setFilters = (next: DiscoveryFilters) => {
@@ -231,11 +228,29 @@ export default function LibraryDetail({
   const pageEnd = Math.min(total, page * pageSize)
   const movieCount = items.filter((item) => item.type === "movie").length
   const showCount = items.filter((item) => item.type !== "movie").length
+
+  useEffect(() => {
+    setPageJumpDraft(String(page))
+  }, [page])
+
   const retryBrowse = () => {
     void browseQuery.refetch()
   }
   const changePageSize = (nextPageSize: string) => {
     onPaginationChange({ page: 1, pageSize: Number(nextPageSize) })
+  }
+  const submitPageJump = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const nextPage = Number.parseInt(pageJumpDraft, 10)
+
+    if (!Number.isFinite(nextPage)) {
+      setPageJumpDraft(String(page))
+      return
+    }
+
+    const clampedPage = Math.min(pageCount, Math.max(1, nextPage))
+    setPageJumpDraft(String(clampedPage))
+    if (clampedPage !== page) onPaginationChange({ page: clampedPage })
   }
   const openFilterDialog = () => {
     setFilterDialogOpenState(true)
@@ -250,12 +265,6 @@ export default function LibraryDetail({
           : "asc",
     })
   }
-  const heroBackdrop =
-    items
-      .map(
-        (item) => getMediaCardBackdropUrl(item) || getMediaCardPosterUrl(item)
-      )
-      .find(Boolean) ?? null
 
   const handleLogout = async () => {
     if (token) {
@@ -702,6 +711,33 @@ export default function LibraryDetail({
                           </SelectContent>
                         </Select>
                       </div>
+                      <form
+                        className="flex items-center gap-2"
+                        onSubmit={submitPageJump}
+                      >
+                        <span className="text-xs">跳至</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={pageCount}
+                          inputMode="numeric"
+                          value={pageJumpDraft}
+                          onChange={(event) =>
+                            setPageJumpDraft(event.currentTarget.value)
+                          }
+                          disabled={browseQuery.isFetching}
+                          aria-label="跳转页码"
+                          className="w-20 rounded-full bg-background/70 text-center"
+                        />
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          className="rounded-full"
+                          disabled={browseQuery.isFetching}
+                        >
+                          跳转
+                        </Button>
+                      </form>
                       <Button
                         type="button"
                         variant="outline"
@@ -845,25 +881,6 @@ function TopBarActions({
   )
 }
 
-function LibraryStatCard({
-  label,
-  value,
-}: {
-  label: string
-  value: number | string
-}) {
-  return (
-    <div className="rounded-2xl border border-border/45 bg-background/60 px-3 py-3 shadow-sm backdrop-blur sm:px-4">
-      <div className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-        {label}
-      </div>
-      <div className="mt-1 truncate text-2xl font-semibold tracking-tight sm:text-3xl">
-        {typeof value === "number" ? value.toLocaleString() : value}
-      </div>
-    </div>
-  )
-}
-
 function LibraryTabContent({
   activeTab,
   isLoading,
@@ -985,8 +1002,8 @@ function parseOptionalFloat(value: string) {
 
 function LibraryDetailError({ message }: { message: string }) {
   return (
-    <div className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
-      <div className="rounded-[2rem] border border-border/40 bg-card/80 p-8 text-center backdrop-blur-xl">
+    <div className="flex min-h-svh w-full items-center justify-center bg-background px-6 text-foreground">
+      <div className="max-w-lg rounded-[2rem] border border-border/40 bg-card/80 p-8 text-center backdrop-blur-xl">
         <Badge className="border-border/60 bg-background/80" variant="outline">
           加载失败
         </Badge>

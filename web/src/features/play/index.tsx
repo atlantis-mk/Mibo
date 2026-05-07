@@ -220,7 +220,7 @@ function PlayExperience({
       const player = playerRef.current
       const rawDuration = Number.isFinite(player.duration)
         ? player.duration
-        : (playback.runtime_seconds ?? item.runtime_seconds ?? 0)
+        : (playback.runtime_seconds ?? item?.runtime_seconds ?? 0)
       const durationSeconds =
         rawDuration > 0 ? Math.round(rawDuration) : undefined
       const positionSeconds = Math.max(0, Math.round(player.currentTime || 0))
@@ -338,7 +338,6 @@ function PlayExperience({
       ...(posterUrl ? { poster: posterUrl } : {}),
       autoplay: true,
       playsInline: true,
-      preload: "metadata",
       theme: "#ffffff",
       setting: false,
       playbackRate: false,
@@ -352,7 +351,6 @@ function PlayExperience({
       settings: [],
       layers: [],
       contextmenu: [],
-      title: playbackTitle,
       moreVideoAttr: {
         crossOrigin: "anonymous",
       },
@@ -541,7 +539,11 @@ function PlayExperience({
     void navigate({
       to: "/play/$id",
       params: { id: String(episode.id) },
-      search: { fromStart: false },
+      search: {
+        fromStart: false,
+        assetId: undefined,
+        inventoryFileId: undefined,
+      },
       replace: true,
     })
   }
@@ -763,8 +765,6 @@ function PlayExperience({
                   playbackMode={playbackMode}
                   onSkipSettingsOpenChange={setSkipSettingsOpen}
                   onRestorePositionEnabledChange={setRestorePositionEnabled}
-                  onSkipIntroSecondsChange={setSkipIntroSeconds}
-                  onSkipOutroSecondsChange={setSkipOutroSeconds}
                   onPlaybackModeChange={setPlaybackMode}
                 />
                 <button
@@ -848,7 +848,7 @@ function buildPlaybackHeader(
   const context = item.episode_context
   const seriesTitle = context?.series?.title?.trim()
   const seasonNumber = context?.season_number ?? context?.season?.number
-  const episodeNumber = context?.episode_number ?? item.index_number
+  const episodeNumber = context?.episode_number
   const episodeTitle = item.title?.trim()
   const seasonEpisodeText = formatSeasonEpisodeCode(seasonNumber, episodeNumber)
   const subtitle = [seasonEpisodeText, episodeTitle]
@@ -885,20 +885,13 @@ function buildPlaybackDocumentTitle(
   const context = item.episode_context
   const seriesTitle = context?.series?.title?.trim()
   const seasonNumber = context?.season_number ?? context?.season?.number
-  const episodeNumber = context?.episode_number ?? item.index_number
+  const episodeNumber = context?.episode_number
   const episodeTitle = item.title?.trim()
   const seasonEpisodeText = formatSeasonEpisodeCode(seasonNumber, episodeNumber)
 
   return [seriesTitle || fallbackTitle, seasonEpisodeText, episodeTitle]
     .filter(Boolean)
     .join("-")
-}
-
-function toggleMute(playerRef: ArtPlayerRef) {
-  const player = playerRef.current
-  if (!player) return
-
-  player.muted = !player.muted
 }
 
 function setPlayerVolume(playerRef: ArtPlayerRef, volumePercent: number) {

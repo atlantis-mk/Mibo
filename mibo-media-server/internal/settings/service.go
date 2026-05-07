@@ -77,21 +77,11 @@ func NewService(db *gorm.DB, fallback config.MetadataConfig) *Service {
 }
 
 func (s *Service) ResolveTMDBConfig(ctx context.Context) (config.TMDBConfig, string, error) {
-	if err := database.BackfillMetadataProfiles(s.db.WithContext(ctx)); err != nil {
-		return config.TMDBConfig{}, "none", err
-	}
-	var provider database.MetadataProviderInstance
-	if err := s.db.WithContext(ctx).Where("name = ?", database.MigratedDefaultTMDBProviderInstanceName).First(&provider).Error; err == nil {
-		resolved := s.resolveTMDBProviderInstanceConfig(provider)
-		if strings.TrimSpace(resolved.APIKey) != "" {
-			return resolved, "database", nil
-		}
-	}
-	resolved := s.fallback.TMDB
 	values, err := s.loadCategoryValues(ctx, metadataCategory)
 	if err != nil {
 		return config.TMDBConfig{}, "none", err
 	}
+	resolved := s.fallback.TMDB
 	source := sourceForValue(values[tmdbAPIKeyKey], resolved.APIKey)
 	applyStringOverride(&resolved.APIKey, values[tmdbAPIKeyKey])
 	applyStringOverride(&resolved.BaseURL, values[tmdbBaseURLKey])

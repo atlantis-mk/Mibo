@@ -389,7 +389,7 @@ export function MetadataProviderSettingsPanel({
       ) : null}
 
       <Dialog open={providerDialogOpen} onOpenChange={setProviderDialogOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {editingProviderInstanceId ? '编辑' : '新建'} Provider Instance
@@ -399,13 +399,15 @@ export function MetadataProviderSettingsPanel({
             </DialogDescription>
           </DialogHeader>
 
-          <ProviderInstanceForm
-            draft={providerInstanceDraft}
-            providerTypeLocked={editingProviderInstanceId !== null}
-            onChange={setProviderInstanceDraft}
-          />
+          <div className="-mx-4 min-h-0 flex-1 overflow-y-auto px-4">
+            <ProviderInstanceForm
+              draft={providerInstanceDraft}
+              providerTypeLocked={editingProviderInstanceId !== null}
+              onChange={setProviderInstanceDraft}
+            />
+          </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button
               type="button"
               variant="outline"
@@ -431,7 +433,7 @@ export function MetadataProviderSettingsPanel({
       </Dialog>
 
       <Dialog open={profileDialogOpen} onOpenChange={setProfileDialogOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>
               {editingProfileId ? '编辑' : '新建'} Metadata Template
@@ -442,13 +444,15 @@ export function MetadataProviderSettingsPanel({
             </DialogDescription>
           </DialogHeader>
 
-          <MetadataProfileForm
-            draft={profileDraft}
-            providerOptions={configurableProviderInstanceOptions}
-            onChange={setProfileDraft}
-          />
+          <div className="-mx-4 min-h-0 flex-1 overflow-y-auto px-4">
+            <MetadataProfileForm
+              draft={profileDraft}
+              providerOptions={configurableProviderInstanceOptions}
+              onChange={setProfileDraft}
+            />
+          </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button
               type="button"
               variant="outline"

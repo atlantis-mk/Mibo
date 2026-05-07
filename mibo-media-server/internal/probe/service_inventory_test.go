@@ -443,7 +443,7 @@ func newInventoryProbeFixture(t *testing.T) inventoryProbeFixture {
 	if err != nil {
 		t.Fatalf("create media source: %v", err)
 	}
-	libraryRecord, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: moviesRoot})
+	libraryRecord, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", MediaSourceID: source.ID, RootPath: moviesRoot})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}

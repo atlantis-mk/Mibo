@@ -16,25 +16,24 @@ var (
 )
 
 type filenameSignals struct {
-	Model             filenameSignalModel
-	RawTitle          string
-	TitleCandidate    string
-	YearCandidate     *int
-	SeasonNumber      *int
-	EpisodeNumber     *int
-	EpisodeNumberEnd  *int
-	EpisodeNumbers    []int
-	EpisodeSource     string
-	QualityLabel      string
-	Edition           string
-	ReleaseGroup      string
-	SourceTags        []string
-	ExtraType         string
-	IsSample          bool
-	IsTrailer         bool
-	IsExtra           bool
-	Candidates        []fastClassificationCandidate
-	ClassificationRef classifiedMedia
+	Model            filenameSignalModel
+	RawTitle         string
+	TitleCandidate   string
+	YearCandidate    *int
+	SeasonNumber     *int
+	EpisodeNumber    *int
+	EpisodeNumberEnd *int
+	EpisodeNumbers   []int
+	EpisodeSource    string
+	QualityLabel     string
+	Edition          string
+	ReleaseGroup     string
+	SourceTags       []string
+	ExtraType        string
+	IsSample         bool
+	IsTrailer        bool
+	IsExtra          bool
+	Candidates       []fastClassificationCandidate
 }
 
 type fastClassificationCandidate struct {
@@ -51,37 +50,43 @@ type fastClassificationCandidate struct {
 }
 
 func resolveFilenameSignals(libraryType string, libraryRoot string, object storage.Object) filenameSignals {
-	model := extractFilenameSignalModel(object.Path)
+	return resolveFilenameSignalsWithTokenCache(libraryType, libraryRoot, object, nil)
+}
+
+func resolveFilenameSignalsWithTokenCache(libraryType string, libraryRoot string, object storage.Object, tokenCache *filenameTokenProfileCache) filenameSignals {
+	model := filenameTokenProfileForPath(tokenCache, object.Path)
 	rawTitle := strings.TrimSuffix(model.RawPathData.Basename, model.RawPathData.Extension)
-	classified := classifyMediaFile(libraryType, libraryRoot, object)
-	signals := filenameSignals{
-		Model:             model,
-		RawTitle:          rawTitle,
-		TitleCandidate:    classified.Title,
-		YearCandidate:     classified.Year,
-		SeasonNumber:      classified.SeasonNumber,
-		EpisodeNumber:     classified.EpisodeNumber,
-		EpisodeNumbers:    append([]int(nil), classified.EpisodeNumbers...),
-		EpisodeSource:     explicitEpisodeSource(rawTitle, classified),
-		QualityLabel:      qualitySignal(rawTitle),
-		Edition:           editionSignal(rawTitle),
-		ReleaseGroup:      releaseGroupSignal(rawTitle),
-		SourceTags:        sourceTagSignals(rawTitle),
-		ExtraType:         videoFileRoleSignal(object.Path),
-		ClassificationRef: classified,
-	}
-	if signals.EpisodeNumber == nil {
-		if episode := parseEpisodeNumberFromTitle(rawTitle, classified.SeriesTitle); episode != nil {
-			if weakEpisodeNumberAllowed(rawTitle) {
-				signals.EpisodeNumber = episode
-				signals.EpisodeNumbers = episodeNumbersFromPointer(episode)
-				signals.EpisodeSource = "filename"
-			}
+	seasonNumber := firstNonNilInt(model.Identity.SeasonNumber, model.PathHints.SeasonNumber, tvSeasonFromPath(libraryRoot, object.Path))
+	episodeNumber := model.Identity.EpisodeNumber
+	episodeNumbers := append([]int(nil), model.Identity.EpisodeNumbers...)
+	episodeEnd := model.Identity.EpisodeEnd
+	episodeSource := model.Identity.EpisodeSource
+	if episodeNumber == nil {
+		if episode := parseEpisodeNumberFromTitle(rawTitle, firstNonEmptyString(model.PathHints.SeriesTitle, tvSeriesTitleFromPath(libraryRoot, object.Path))); episode != nil && weakEpisodeNumberAllowed(rawTitle) {
+			episodeNumber = episode
+			episodeNumbers = episodeNumbersFromPointer(episode)
+			episodeSource = "filename"
 		}
 	}
-	if len(signals.EpisodeNumbers) > 1 {
-		last := signals.EpisodeNumbers[len(signals.EpisodeNumbers)-1]
-		signals.EpisodeNumberEnd = &last
+	if len(episodeNumbers) > 1 && episodeEnd == nil {
+		last := episodeNumbers[len(episodeNumbers)-1]
+		episodeEnd = &last
+	}
+	signals := filenameSignals{
+		Model:            model,
+		RawTitle:         rawTitle,
+		TitleCandidate:   model.Identity.TitleCandidate,
+		YearCandidate:    model.Identity.Year,
+		SeasonNumber:     seasonNumber,
+		EpisodeNumber:    episodeNumber,
+		EpisodeNumberEnd: episodeEnd,
+		EpisodeNumbers:   episodeNumbers,
+		EpisodeSource:    episodeSource,
+		QualityLabel:     qualitySignal(rawTitle),
+		Edition:          editionSignal(rawTitle),
+		ReleaseGroup:     releaseGroupSignal(rawTitle),
+		SourceTags:       sourceTagSignals(rawTitle),
+		ExtraType:        videoFileRoleSignal(object.Path),
 	}
 	signals.IsSample = signals.ExtraType == "sample"
 	signals.IsTrailer = signals.ExtraType == "trailer"
@@ -145,10 +150,6 @@ func weakEpisodeNumberAllowed(rawTitle string) bool {
 }
 
 func fastCandidatesFromFilenameSignals(signals filenameSignals) []fastClassificationCandidate {
-	return fastCandidatesFromSignalsAndSummary(signals, scanDirectorySummary{})
-}
-
-func fastCandidatesFromSignalsAndSummary(signals filenameSignals, summary scanDirectorySummary) []fastClassificationCandidate {
 	candidates := make([]fastClassificationCandidate, 0, 2)
 	if signals.IsExtra {
 		confidence := 0.9
@@ -194,11 +195,6 @@ func fastCandidatesFromSignalsAndSummary(signals filenameSignals, summary scanDi
 			candidates = append(candidates, fastClassificationCandidate{Type: scanDecisionCandidateMovieVersion, Role: scanDecisionRoleMain, Confidence: 0.62, Evidence: movieCandidateEvidence(signals), Reason: "filename contains movie version release hints"})
 		}
 	}
-	if strings.TrimSpace(summary.Path) != "" {
-		for idx := range candidates {
-			candidates[idx].Evidence = append(candidates[idx].Evidence, scanDecisionEvidence{Kind: filenameSignalKindPath, Source: "directory_summary", Value: summary.Path})
-		}
-	}
 	return candidates
 }
 
@@ -226,16 +222,6 @@ func movieCandidateEvidence(signals filenameSignals) []scanDecisionEvidence {
 		evidence = append(evidence, scanDecisionEvidence{Kind: filenameSignalKindEdition, Source: "filename", Value: signals.Edition})
 	}
 	return evidence
-}
-
-func explicitEpisodeSource(rawTitle string, classified classifiedMedia) string {
-	if classified.EpisodeNumber == nil && len(classified.EpisodeNumbers) == 0 {
-		return ""
-	}
-	if hasExplicitEpisodeMarker(rawTitle) {
-		return "explicit"
-	}
-	return "weak"
 }
 
 func qualitySignal(input string) string {

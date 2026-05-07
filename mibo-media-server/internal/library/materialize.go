@@ -2,12 +2,13 @@ package library
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
@@ -15,7 +16,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -50,7 +50,7 @@ func (s *Service) RunCatalogMaterializeBatch(ctx context.Context, payload Catalo
 	for pathKey, snapshot := range batchState.directorySnapshots {
 		directorySnapshots[pathKey] = snapshot
 	}
-	if err := s.preloadMaterializeBatchFiles(ctx, &batchState, fileIDs); err != nil {
+	if err := s.preloadMaterializeBatchFiles(ctx, config, &batchState, fileIDs); err != nil {
 		return err
 	}
 	if err := s.preloadMaterializeBatchCatalogData(ctx, config, &batchState, fileIDs, directorySnapshots); err != nil {
@@ -96,6 +96,9 @@ func (s *Service) RunCatalogMaterializeBatch(ctx context.Context, payload Catalo
 		}
 		materializeDirtyReasons[fileID] = "materialization_completed"
 		materializeEvents = append(materializeEvents, database.IngestEvent{UnitKey: inventoryFileUnitKey(fileID), LibraryID: config.Library.ID, InventoryFileID: &fileID, ConditionType: ingest.ConditionMaterialized, EventType: ingest.EventConditionChanged, Status: ingest.ConditionStatusTrue, Reason: "materialization_completed", Message: "Catalog materialization completed"})
+	}
+	if err := s.persistPathTreeWorkGroupAssignments(ctx, &batchState); err != nil {
+		return err
 	}
 	if err := s.flushMaterializeIngestBatch(ctx, materializeDirtyReasons, materializeEvents); err != nil {
 		return err
@@ -146,22 +149,44 @@ func (s *Service) RunCatalogPostMaterializeBatch(ctx context.Context, payload Ca
 }
 
 func (s *Service) RunInventoryProbeBatch(ctx context.Context, payload InventoryProbeBatchPayload) error {
-	return fmt.Errorf("probe service unavailable for workflow batch")
+	if s.inventoryProbeExecutor == nil {
+		return fmt.Errorf("probe executor unavailable for workflow batch")
+	}
+	for _, fileID := range normalizeUintIDs(payload.FileIDs) {
+		if err := s.inventoryProbeExecutor(ctx, fileID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) RunCatalogMatchBatch(ctx context.Context, payload CatalogMatchBatchPayload) error {
-	return fmt.Errorf("metadata service unavailable for workflow batch")
+	if s.catalogMatchExecutor == nil {
+		return fmt.Errorf("metadata match executor unavailable for workflow batch")
+	}
+	for _, itemID := range normalizeUintIDs(payload.ItemIDs) {
+		if err := s.catalogMatchExecutor(ctx, itemID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type materializeBatchState struct {
-	scanPolicy          database.LibraryScanPolicy
-	subtitlePolicy      database.LibrarySubtitlePolicy
-	exclusionRules      []database.ScanExclusionRule
-	providersByKey      map[string]materializeProviderBinding
-	directorySnapshots  map[string]scanDirectorySnapshot
-	filesByID           map[uint]database.InventoryFile
-	catalogCache        *catalogScanBatchCache
-	classificationCache *classificationDirectoryCache
+	scanPolicy                database.LibraryScanPolicy
+	subtitlePolicy            database.LibrarySubtitlePolicy
+	exclusionRules            []database.ScanExclusionRule
+	providersByKey            map[string]materializeProviderBinding
+	directorySnapshots        map[string]scanDirectorySnapshot
+	decisionSnapshots         map[string]scanDirectorySnapshot
+	filesByID                 map[uint]database.InventoryFile
+	catalogCache              *catalogScanBatchCache
+	tokenProfileCache         *filenameTokenProfileCache
+	shapePlansByDir           map[string]contentShapeDirectoryPlan
+	shapeAssignmentsByDir     map[string]map[string]contentShapeFileAssignment
+	pathTreeAssignmentsByPath map[string]pathTreeWorkGroupAssignment
+	shapeCounters             *contentShapeCounters
+	indexedSignalsByPath      map[string]filenameSignalModel
 }
 
 type materializeProviderBinding struct {
@@ -171,14 +196,21 @@ type materializeProviderBinding struct {
 
 func (s *Service) newMaterializeBatchState(ctx context.Context, config EffectiveLibraryConfig) (materializeBatchState, error) {
 	state := materializeBatchState{
-		scanPolicy:          config.ScanPolicy,
-		subtitlePolicy:      config.SubtitlePolicy,
-		providersByKey:      make(map[string]materializeProviderBinding, len(config.Paths)),
-		directorySnapshots:  make(map[string]scanDirectorySnapshot),
-		filesByID:           make(map[uint]database.InventoryFile),
-		catalogCache:        newCatalogScanBatchCache(),
-		classificationCache: newClassificationDirectoryCache(),
+		shapeCounters:             &contentShapeCounters{MaterializationBatches: 1},
+		scanPolicy:                config.ScanPolicy,
+		subtitlePolicy:            config.SubtitlePolicy,
+		providersByKey:            make(map[string]materializeProviderBinding, len(config.Paths)),
+		directorySnapshots:        make(map[string]scanDirectorySnapshot),
+		decisionSnapshots:         make(map[string]scanDirectorySnapshot),
+		filesByID:                 make(map[uint]database.InventoryFile),
+		catalogCache:              newCatalogScanBatchCache(),
+		tokenProfileCache:         newFilenameTokenProfileCache(),
+		shapePlansByDir:           make(map[string]contentShapeDirectoryPlan),
+		shapeAssignmentsByDir:     make(map[string]map[string]contentShapeFileAssignment),
+		pathTreeAssignmentsByPath: make(map[string]pathTreeWorkGroupAssignment),
+		indexedSignalsByPath:      make(map[string]filenameSignalModel),
 	}
+	state.tokenProfileCache.counters = state.shapeCounters
 	if state.scanPolicy.ConfigurableExclusionRules {
 		rules, err := s.enabledScanExclusionRules(ctx, config.Library.ID)
 		if err != nil {
@@ -217,14 +249,18 @@ func (s *Service) materializeInventoryFile(ctx context.Context, config Effective
 	if err != nil {
 		return catalogScanWriteResult{}, err
 	}
-	decisionSnapshot, err := s.directoryShapeSnapshot(ctx, provider, config.Library, snapshot, batchState.exclusionRules, batchState.scanPolicy)
+	decisionSnapshot, err := s.materializeDecisionSnapshot(ctx, provider, config.Library, snapshot, &batchState)
+	if err != nil {
+		return catalogScanWriteResult{}, err
+	}
+	shapePlan, err := s.contentShapePlanForMaterializeDirectory(ctx, config, pathRecord, provider, decisionSnapshot, &batchState)
 	if err != nil {
 		return catalogScanWriteResult{}, err
 	}
 	libraryForPath := config.Library
 	libraryForPath.MediaSourceID = pathRecord.MediaSourceID
 	libraryForPath.RootPath = pathRecord.RootPath
-	writeResult, _, err := s.materializeObjectFromSnapshotWithDirectorySnapshots(ctx, provider, libraryForPath, object, snapshot, decisionSnapshot, directorySnapshots, batchState.classificationCache, batchState.subtitlePolicy, batchState.catalogCache)
+	writeResult, _, err := s.materializeObjectFromSnapshotWithDirectorySnapshotsAndPlan(ctx, provider, libraryForPath, object, snapshot, decisionSnapshot, directorySnapshots, batchState.tokenProfileCache, shapePlan, batchState.shapeAssignmentsByDir[keyForShapeAssignments(provider, pathRecord.RootPath, decisionSnapshot.Path)], batchState.pathTreeAssignmentsByPath, batchState.subtitlePolicy, batchState.catalogCache)
 	if err != nil {
 		return catalogScanWriteResult{}, err
 	}
@@ -234,7 +270,7 @@ func (s *Service) materializeInventoryFile(ctx context.Context, config Effective
 	return writeResult, nil
 }
 
-func (s *Service) preloadMaterializeBatchFiles(ctx context.Context, batchState *materializeBatchState, fileIDs []uint) error {
+func (s *Service) preloadMaterializeBatchFiles(ctx context.Context, config EffectiveLibraryConfig, batchState *materializeBatchState, fileIDs []uint) error {
 	if batchState == nil || len(fileIDs) == 0 {
 		return nil
 	}
@@ -248,6 +284,266 @@ func (s *Service) preloadMaterializeBatchFiles(ctx context.Context, batchState *
 	}
 	for _, file := range files {
 		batchState.filesByID[file.ID] = file
+	}
+	if err := s.hydrateMaterializeFileSignals(ctx, batchState, files); err != nil {
+		return err
+	}
+	rules, err := loadPathTreeClassificationRules(ctx, s.db, config.Library.ID)
+	if err != nil {
+		return err
+	}
+	batchState.pathTreeAssignmentsByPath = compilePathTreeAssignmentsFromFiles(files, "", batchState.indexedSignalsByPath, batchState.tokenProfileCache)
+	for storagePath, assignment := range applyPathTreeClassificationRules(files, rules, batchState.indexedSignalsByPath, batchState.tokenProfileCache) {
+		if batchState.pathTreeAssignmentsByPath == nil {
+			batchState.pathTreeAssignmentsByPath = make(map[string]pathTreeWorkGroupAssignment)
+		}
+		batchState.pathTreeAssignmentsByPath[storagePath] = assignment
+	}
+	if err := s.persistPathTreeWorkGroupPlans(ctx, batchState, config, files); err != nil {
+		return err
+	}
+	if err := s.persistPathTreeReviewDecisions(ctx, batchState, config, files); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadPathTreeClassificationRules(ctx context.Context, db *gorm.DB, libraryID uint) ([]database.ClassificationRule, error) {
+	if db == nil || libraryID == 0 {
+		return nil, nil
+	}
+	var rules []database.ClassificationRule
+	if err := db.WithContext(ctx).Where("library_id = ? AND rule_type = ? AND enabled = ?", libraryID, pathTreeWorkGroupRuleType, true).Order("id asc").Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func (s *Service) persistPathTreeReviewDecisions(ctx context.Context, batchState *materializeBatchState, config EffectiveLibraryConfig, files []database.InventoryFile) error {
+	if s == nil || s.db == nil || batchState == nil {
+		return nil
+	}
+	reviews := compileAmbiguousPathTreeReviewAssignmentsFromFiles(files, batchState.indexedSignalsByPath, batchState.tokenProfileCache)
+	if len(reviews) == 0 {
+		return nil
+	}
+	byParent := make(map[string]map[string]pathTreeWorkGroupAssignment)
+	for storagePath, assignment := range reviews {
+		parentPath := pathTreeAssignmentParentPath(assignment, storagePath)
+		if byParent[parentPath] == nil {
+			byParent[parentPath] = make(map[string]pathTreeWorkGroupAssignment)
+		}
+		byParent[parentPath][storagePath] = assignment
+	}
+	for parentPath, assignments := range byParent {
+		if err := savePathTreeReviewDecision(ctx, s.db, config.Library.ID, parentPath, assignments, "path-tree work group candidates require review"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) persistPathTreeWorkGroupPlans(ctx context.Context, batchState *materializeBatchState, config EffectiveLibraryConfig, files []database.InventoryFile) error {
+	if s == nil || s.db == nil || batchState == nil || len(batchState.pathTreeAssignmentsByPath) == 0 {
+		return nil
+	}
+	settings := contentShapeSettingsFromConfig(s.cfg)
+	assignmentsByParent := make(map[string]map[string]pathTreeWorkGroupAssignment)
+	for storagePath, assignment := range batchState.pathTreeAssignmentsByPath {
+		parentPath := pathTreeAssignmentParentPath(assignment, storagePath)
+		if parentPath == "" {
+			continue
+		}
+		if assignmentsByParent[parentPath] == nil {
+			assignmentsByParent[parentPath] = make(map[string]pathTreeWorkGroupAssignment)
+		}
+		assignmentsByParent[parentPath][storagePath] = assignment
+	}
+	if len(assignmentsByParent) == 0 {
+		return nil
+	}
+	providerByFilePath := make(map[string]string, len(files))
+	for _, file := range files {
+		providerByFilePath[strings.TrimSpace(file.StoragePath)] = strings.TrimSpace(file.StorageProvider)
+	}
+	for parentPath, assignments := range assignmentsByParent {
+		providerName := ""
+		for storagePath := range assignments {
+			providerName = providerByFilePath[storagePath]
+			break
+		}
+		pathRecord, ok := materializePathRecordForStoragePath(config, parentPath)
+		if !ok {
+			continue
+		}
+		scope := contentShapeScope{LibraryID: config.Library.ID, MediaSourceID: pathRecord.MediaSourceID, StorageProvider: providerName, RootPath: pathRecord.RootPath, DirectoryPath: parentPath, ClassifierVersion: settings.ClassifierVersion, Fingerprint: pathTreePersistedFingerprint(parentPath, assignments, settings.ClassifierVersion, batchState.scanPolicy, batchState.exclusionRules)}
+		if pathRecord.ID != 0 {
+			pathID := pathRecord.ID
+			scope.LibraryPathID = &pathID
+		}
+		profile := contentShapeDatabaseProfile(scope, contentShapeDirectoryProfile{Path: parentPath, VideoCount: len(assignments), NonExtraVideoCount: len(assignments), TitleUniqueCount: len(assignments), TitleUniqueness: 1})
+		profile.Fingerprint = scope.Fingerprint
+		if err := saveContentShapeProfile(ctx, s.db, &profile); err != nil {
+			return err
+		}
+		profileRecord, _, err := loadReusableContentShapeProfile(ctx, s.db, scope)
+		if err != nil {
+			return err
+		}
+		plan := pathTreeContentShapePlanForAssignments(parentPath, assignments)
+		planRow := contentShapeDatabasePlan(scope, profileRecord.ID, plan)
+		if err := saveContentShapePlan(ctx, s.db, &planRow); err != nil {
+			return err
+		}
+		_, reusedPlan, err := loadReusableContentShapePlan(ctx, s.db, scope)
+		if err != nil {
+			return err
+		}
+		if !reusedPlan {
+			return fmt.Errorf("reload path-tree work-group plan for %s", parentPath)
+		}
+	}
+	return nil
+}
+
+func (s *Service) persistPathTreeWorkGroupAssignments(ctx context.Context, batchState *materializeBatchState) error {
+	if s == nil || s.db == nil || batchState == nil || len(batchState.pathTreeAssignmentsByPath) == 0 {
+		return nil
+	}
+	assignmentsByParent := make(map[string]map[string]pathTreeWorkGroupAssignment)
+	for storagePath, assignment := range batchState.pathTreeAssignmentsByPath {
+		parentPath := pathTreeAssignmentParentPath(assignment, storagePath)
+		if parentPath == "" {
+			continue
+		}
+		if assignmentsByParent[parentPath] == nil {
+			assignmentsByParent[parentPath] = make(map[string]pathTreeWorkGroupAssignment)
+		}
+		assignmentsByParent[parentPath][storagePath] = assignment
+	}
+	settings := contentShapeSettingsFromConfig(s.cfg)
+	for parentPath, assignments := range assignmentsByParent {
+		var plan database.ContentShapePlan
+		if err := s.db.WithContext(ctx).Where("library_id = ? AND directory_path = ? AND classifier_version = ? AND deleted_scope = ? AND invalidated_at IS NULL", batchState.filesByAnyAssignmentLibraryID(assignments), parentPath, settings.ClassifierVersion, false).First(&plan).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return err
+		}
+		scope := contentShapeScopeFromPlan(plan)
+		if err := saveContentShapeAssignments(ctx, s.db, scope, plan.ProfileID, plan.ID, contentShapeAssignmentsFromPathTree(assignments)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (state *materializeBatchState) filesByAnyAssignmentLibraryID(assignments map[string]pathTreeWorkGroupAssignment) uint {
+	if state == nil {
+		return 0
+	}
+	for storagePath := range assignments {
+		for _, file := range state.filesByID {
+			if strings.TrimSpace(file.StoragePath) == strings.TrimSpace(storagePath) {
+				return file.LibraryID
+			}
+		}
+	}
+	return 0
+}
+
+func pathTreeAssignmentParentPath(assignment pathTreeWorkGroupAssignment, storagePath string) string {
+	if parent, ok := assignment.Evidence["parent_path"].(string); ok && strings.TrimSpace(parent) != "" {
+		return strings.TrimSpace(parent)
+	}
+	return path.Dir(path.Dir(strings.TrimSpace(storagePath)))
+}
+
+func materializePathRecordForStoragePath(config EffectiveLibraryConfig, storagePath string) (database.LibraryPath, bool) {
+	for _, pathRecord := range config.Paths {
+		root := strings.TrimSpace(pathRecord.RootPath)
+		if root != "" && (strings.TrimSpace(storagePath) == root || strings.HasPrefix(strings.TrimSpace(storagePath), root+"/")) {
+			return pathRecord, true
+		}
+	}
+	return database.LibraryPath{}, false
+}
+
+func pathTreePersistedFingerprint(parentPath string, assignments map[string]pathTreeWorkGroupAssignment, classifierVersion string, scanPolicy database.LibraryScanPolicy, exclusionRules []database.ScanExclusionRule) string {
+	parts := []string{"parent=" + strings.TrimSpace(parentPath), "classifier=" + strings.TrimSpace(classifierVersion), contentShapeScanPolicyFingerprint(scanPolicy), contentShapeExclusionFingerprint(exclusionRules)}
+	keys := make([]string, 0, len(assignments))
+	for storagePath := range assignments {
+		keys = append(keys, storagePath)
+	}
+	sort.Strings(keys)
+	for _, storagePath := range keys {
+		assignment := assignments[storagePath]
+		parts = append(parts, strings.Join([]string{storagePath, assignment.AssignmentType, assignment.TargetKey, fmt.Sprintf("%.3f", assignment.Confidence)}, "|"))
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return hex.EncodeToString(digest[:])
+}
+
+func savePathTreeReviewDecision(ctx context.Context, db *gorm.DB, libraryID uint, parentPath string, assignments map[string]pathTreeWorkGroupAssignment, reason string) error {
+	if db == nil || len(assignments) == 0 {
+		return nil
+	}
+	affected := make([]string, 0, len(assignments))
+	evidence := make([]map[string]any, 0, len(assignments))
+	confidence := 1.0
+	for storagePath, assignment := range assignments {
+		affected = append(affected, storagePath)
+		if assignment.Confidence > 0 && assignment.Confidence < confidence {
+			confidence = assignment.Confidence
+		}
+		evidence = append(evidence, map[string]any{"storage_path": storagePath, "assignment_type": assignment.AssignmentType, "target_key": assignment.TargetKey, "evidence": assignment.Evidence})
+	}
+	if confidence == 1.0 {
+		confidence = 0.5
+	}
+	sort.Strings(affected)
+	return db.WithContext(ctx).Create(&database.ClassificationDecision{LibraryID: libraryID, SourcePath: strings.TrimSpace(parentPath), DecisionType: "path_tree_work_group", CandidateType: pathTreeWorkGroupShapeReview, TargetKind: "work_group", TargetKey: strings.TrimSpace(parentPath), Status: scanDecisionStatusReviewRequired, Confidence: &confidence, EvidenceJSON: mustJSON(evidence), AffectedFilesJSON: mustJSON(affected), AlternativesJSON: mustJSON([]string{pathTreeWorkGroupShapeMovieVersionGroup, pathTreeWorkGroupShapeMovieCollection, pathTreeWorkGroupShapeSeries}), Reason: strings.TrimSpace(reason)}).Error
+}
+
+func (s *Service) hydrateMaterializeFileSignals(ctx context.Context, batchState *materializeBatchState, files []database.InventoryFile) error {
+	if batchState == nil || len(files) == 0 {
+		return nil
+	}
+	settings := contentShapeSettingsFromConfig(s.cfg)
+	filesByProvider := make(map[string][]database.InventoryFile)
+	for _, file := range files {
+		if file.ID == 0 || file.Status != inventory.FileStatusAvailable || file.ContentClass != SourceContentClassVideo || !isVideoFile(file.StoragePath) {
+			continue
+		}
+		provider := strings.TrimSpace(file.StorageProvider)
+		if provider == "" || strings.TrimSpace(file.StoragePath) == "" {
+			continue
+		}
+		filesByProvider[provider] = append(filesByProvider[provider], file)
+	}
+	for provider, providerFiles := range filesByProvider {
+		scope := inventoryFileSignalScope{LibraryID: providerFiles[0].LibraryID, StorageProvider: provider, ClassifierVersion: settings.ClassifierVersion}
+		models, _, err := loadReusableInventoryFileSignals(ctx, s.db, scope, providerFiles)
+		if err != nil {
+			return err
+		}
+		hydrateFilenameTokenCacheFromSignals(batchState.tokenProfileCache, models)
+		for storagePath, model := range models {
+			batchState.indexedSignalsByPath[storagePath] = model
+		}
+		missing := make([]inventoryFileSignalInput, 0)
+		for _, file := range providerFiles {
+			storagePath := strings.TrimSpace(file.StoragePath)
+			if _, ok := models[storagePath]; ok {
+				continue
+			}
+			model := filenameTokenProfileForPath(batchState.tokenProfileCache, storagePath)
+			missing = append(missing, inventoryFileSignalInput{File: file, Model: model})
+			batchState.indexedSignalsByPath[storagePath] = model
+		}
+		if err := saveInventoryFileSignals(ctx, s.db, scope, missing); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -275,14 +571,18 @@ func (s *Service) preloadMaterializeBatchCatalogData(ctx context.Context, config
 		if err != nil {
 			return err
 		}
-		decisionSnapshot, err := s.directoryShapeSnapshot(ctx, provider, config.Library, snapshot, batchState.exclusionRules, batchState.scanPolicy)
+		decisionSnapshot, err := s.materializeDecisionSnapshot(ctx, provider, config.Library, snapshot, batchState)
+		if err != nil {
+			return err
+		}
+		shapePlan, err := s.contentShapePlanForMaterializeDirectory(ctx, config, pathRecord, provider, decisionSnapshot, batchState)
 		if err != nil {
 			return err
 		}
 		libraryForPath := config.Library
 		libraryForPath.MediaSourceID = pathRecord.MediaSourceID
 		libraryForPath.RootPath = pathRecord.RootPath
-		artifact, ok := preloadCatalogScanArtifact(provider, libraryForPath, object, snapshot, decisionSnapshot, directorySnapshots, batchState.classificationCache)
+		artifact, ok := materializePlannedCatalogArtifact(provider, libraryForPath, object, batchState.tokenProfileCache, shapePlan, batchState.shapeAssignmentsByDir[keyForShapeAssignments(provider, pathRecord.RootPath, decisionSnapshot.Path)], batchState.pathTreeAssignmentsByPath)
 		if !ok {
 			continue
 		}
@@ -367,20 +667,145 @@ func (s *Service) preloadMaterializeBatchAssets(ctx context.Context, batchState 
 	return nil
 }
 
-func preloadCatalogScanArtifact(provider storage.Provider, library database.Library, object storage.Object, snapshot scanDirectorySnapshot, decisionSnapshot scanDirectorySnapshot, directorySnapshots map[string]scanDirectorySnapshot, classificationCache *classificationDirectoryCache) (catalogScanArtifact, bool) {
-	if classificationCache == nil {
-		classificationCache = newClassificationDirectoryCache()
-	}
+func materializePlannedCatalogArtifact(provider storage.Provider, library database.Library, object storage.Object, tokenCache *filenameTokenProfileCache, shapePlan contentShapeDirectoryPlan, shapeAssignments map[string]contentShapeFileAssignment, pathTreeAssignments map[string]pathTreeWorkGroupAssignment) (catalogScanArtifact, bool) {
 	classificationLibraryType := effectiveVideoLibraryType(library.Type)
-	directoryDecision := classificationCache.decision(classificationLibraryType, library.RootPath, decisionSnapshot)
-	if shouldSkipTVDirectoryExtra(classificationLibraryType, directoryDecision, object) {
+	assignment, hasAssignment := shapeAssignments[strings.TrimSpace(object.Path)]
+	if hasAssignment && assignment.AssignmentType == contentShapeAssignmentSkip {
 		return catalogScanArtifact{}, false
 	}
-	directorySummary := classificationCache.summary(classificationLibraryType, library.RootPath, decisionSnapshot)
-	inherited := classificationCache.inheritedContext(classificationLibraryType, library.RootPath, object.Path, decisionSnapshot, directoryDecision, directorySnapshots)
-	classified := classifyMediaFileWithDirectorySummaryAndContext(classificationLibraryType, library.RootPath, object, snapshot.Path, directoryDecision, decisionSnapshot, directorySummary, inherited)
+	pathTreeAssignment := pathTreeAssignments[strings.TrimSpace(object.Path)]
+	classified, planned := plannedClassifiedMediaForMaterialize(object, tokenCache, shapePlan, assignment, hasAssignment, pathTreeAssignment)
+	if !planned {
+		return catalogScanArtifact{}, false
+	}
 	artifact, _ := catalogScanArtifactFromObject(provider.Name(), classificationLibraryType, library.RootPath, object, classified)
+	applyPathTreeWorkGroupAssignment(&artifact, pathTreeAssignments[strings.TrimSpace(object.Path)])
 	return artifact, true
+}
+
+func plannedClassifiedMediaForMaterialize(object storage.Object, tokenCache *filenameTokenProfileCache, shapePlan contentShapeDirectoryPlan, assignment contentShapeFileAssignment, hasAssignment bool, pathTreeAssignment pathTreeWorkGroupAssignment) (classifiedMedia, bool) {
+	if strings.TrimSpace(pathTreeAssignment.StoragePath) != "" {
+		return classifiedMedia{Type: "movie", Title: cleanTitle(path.Base(strings.TrimSpace(pathTreeAssignment.TargetKey))), SourcePath: object.Path, Status: "ready", FilenameSignals: filenameTokenProfileForPath(tokenCache, object.Path)}, true
+	}
+	if hasAssignment {
+		return classifiedMediaFromContentShapeAssignment(shapePlan, assignment, object, tokenCache)
+	}
+	if classified, planned := classifiedMediaFromContentShapePlan(shapePlan, object, tokenCache); planned {
+		return classified, true
+	}
+	return classifiedMedia{}, false
+}
+
+func (s *Service) contentShapePlanForMaterializeDirectory(ctx context.Context, config EffectiveLibraryConfig, pathRecord database.LibraryPath, provider storage.Provider, snapshot scanDirectorySnapshot, batchState *materializeBatchState) (contentShapeDirectoryPlan, error) {
+	if batchState == nil {
+		return contentShapeDirectoryPlan{}, nil
+	}
+	key := keyForShapeAssignments(provider, pathRecord.RootPath, snapshot.Path)
+	if plan, ok := batchState.shapePlansByDir[key]; ok {
+		if batchState.shapeCounters != nil {
+			batchState.shapeCounters.PlanReuses++
+		}
+		return plan, nil
+	}
+	settings := contentShapeSettingsFromConfig(s.cfg)
+	if s.db == nil {
+		if batchState.shapeCounters != nil {
+			batchState.shapeCounters.DirectoryProfileBuilds++
+			batchState.shapeCounters.PlanCompiles++
+		}
+		profile := buildContentShapeDirectoryProfile(effectiveVideoLibraryType(config.Library.Type), pathRecord.RootPath, snapshot, batchState.tokenProfileCache)
+		plan := compileContentShapePlan(profile)
+		batchState.shapePlansByDir[key] = plan
+		return plan, nil
+	}
+	scope := contentShapeScope{LibraryID: config.Library.ID, MediaSourceID: pathRecord.MediaSourceID, StorageProvider: strings.TrimSpace(provider.Name()), RootPath: strings.TrimSpace(pathRecord.RootPath), DirectoryPath: strings.TrimSpace(snapshot.Path), ClassifierVersion: settings.ClassifierVersion}
+	if pathRecord.ID != 0 {
+		pathID := pathRecord.ID
+		scope.LibraryPathID = &pathID
+	}
+	profileRecord, builtProfile, profileReused, err := loadOrBuildContentShapeProfileWithBuilt(ctx, s.db, scope, snapshot, batchState.scanPolicy, batchState.exclusionRules, batchState.tokenProfileCache)
+	if err != nil {
+		return contentShapeDirectoryPlan{}, err
+	}
+	if !profileReused && batchState.shapeCounters != nil {
+		batchState.shapeCounters.DirectoryProfileBuilds++
+	}
+	scope = contentShapeScopeFromProfile(profileRecord)
+	planRecord, reusedPlan, err := loadReusableContentShapePlan(ctx, s.db, scope)
+	if err != nil {
+		return contentShapeDirectoryPlan{}, err
+	}
+	if reusedPlan {
+		if batchState.shapeCounters != nil {
+			batchState.shapeCounters.PlanReuses++
+		}
+		plan := contentShapePlanFromRecord(planRecord)
+		visiblePaths := contentShapeVisibleVideoPaths(snapshot)
+		rows, err := loadReusableContentShapeAssignments(ctx, s.db, planRecord.ID, visiblePaths)
+		if err != nil {
+			return contentShapeDirectoryPlan{}, err
+		}
+		if len(rows) == len(visiblePaths) {
+			batchState.shapeAssignmentsByDir[key] = contentShapeAssignmentsFromRecords(rows)
+		} else {
+			assignments := generateContentShapeAssignments(plan, snapshot, batchState.tokenProfileCache)
+			if err := saveContentShapeAssignments(ctx, s.db, scope, profileRecord.ID, planRecord.ID, assignments); err != nil {
+				return contentShapeDirectoryPlan{}, err
+			}
+			batchState.shapeAssignmentsByDir[key] = contentShapeAssignmentsByPath(assignments)
+		}
+		batchState.shapePlansByDir[key] = plan
+		return plan, nil
+	}
+	if batchState.shapeCounters != nil {
+		batchState.shapeCounters.PlanCompiles++
+	}
+	plan := compileContentShapePlan(builtProfile)
+	planRow := contentShapeDatabasePlan(scope, profileRecord.ID, plan)
+	if err := saveContentShapePlan(ctx, s.db, &planRow); err != nil {
+		return contentShapeDirectoryPlan{}, err
+	}
+	planRecord, reusedPlan, err = loadReusableContentShapePlan(ctx, s.db, scope)
+	if err != nil {
+		return contentShapeDirectoryPlan{}, err
+	}
+	if !reusedPlan {
+		return contentShapeDirectoryPlan{}, fmt.Errorf("reload content shape plan for %s", scope.DirectoryPath)
+	}
+	assignments := generateContentShapeAssignments(plan, snapshot, batchState.tokenProfileCache)
+	if err := saveContentShapeAssignments(ctx, s.db, scope, profileRecord.ID, planRecord.ID, assignments); err != nil {
+		return contentShapeDirectoryPlan{}, err
+	}
+	batchState.shapeAssignmentsByDir[key] = contentShapeAssignmentsByPath(assignments)
+	if err := saveContentShapeReviewDecision(ctx, s.db, scope, plan, assignments); err != nil {
+		return contentShapeDirectoryPlan{}, err
+	}
+	batchState.shapePlansByDir[key] = plan
+	return plan, nil
+}
+
+func keyForShapeAssignments(provider storage.Provider, rootPath string, directoryPath string) string {
+	return strings.TrimSpace(provider.Name()) + "\x00" + strings.TrimSpace(rootPath) + "\x00" + strings.TrimSpace(directoryPath)
+}
+
+func keyForDecisionSnapshot(provider storage.Provider, rootPath string, directoryPath string) string {
+	return strings.TrimSpace(provider.Name()) + "\x00" + strings.TrimSpace(rootPath) + "\x00" + strings.TrimSpace(directoryPath)
+}
+
+func (s *Service) materializeDecisionSnapshot(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, batchState *materializeBatchState) (scanDirectorySnapshot, error) {
+	if batchState == nil {
+		return s.filteredScanSnapshot(ctx, provider, library, snapshot, nil, database.LibraryScanPolicy{})
+	}
+	key := keyForDecisionSnapshot(provider, library.RootPath, snapshot.Path)
+	if cached, ok := batchState.decisionSnapshots[key]; ok {
+		return cached, nil
+	}
+	decisionSnapshot, err := s.filteredScanSnapshot(ctx, provider, library, snapshot, batchState.exclusionRules, batchState.scanPolicy)
+	if err != nil {
+		return scanDirectorySnapshot{}, err
+	}
+	batchState.decisionSnapshots[key] = decisionSnapshot
+	return decisionSnapshot, nil
 }
 
 func (s *Service) materializeBatchCreateMissingCatalogData(ctx context.Context, config EffectiveLibraryConfig, batchState *materializeBatchState) error {
@@ -497,85 +922,44 @@ func createCatalogItemsWithoutProjection(ctx context.Context, tx *gorm.DB, catal
 	}
 	items := make([]database.CatalogItem, 0, len(inputs))
 	for _, input := range inputs {
-		item := database.CatalogItem{
-			LibraryID:           input.LibraryID,
-			Type:                strings.TrimSpace(input.Type),
-			ParentID:            input.ParentID,
-			Path:                strings.TrimSpace(input.Path),
-			SortKey:             strings.TrimSpace(input.SortKey),
-			DisplayOrder:        defaultCatalogState(strings.TrimSpace(input.DisplayOrder), catalog.DisplayOrderAired),
-			IndexNumber:         input.IndexNumber,
-			IndexNumberEnd:      input.IndexNumberEnd,
-			ParentIndexNumber:   input.ParentIndexNumber,
-			AbsoluteNumber:      input.AbsoluteNumber,
-			Title:               strings.TrimSpace(input.Title),
-			OriginalTitle:       strings.TrimSpace(input.OriginalTitle),
-			SortTitle:           strings.TrimSpace(input.SortTitle),
-			Overview:            input.Overview,
-			ReleaseDate:         input.ReleaseDate,
-			FirstAirDate:        input.FirstAirDate,
-			LastAirDate:         input.LastAirDate,
-			Year:                input.Year,
-			EndYear:             input.EndYear,
-			RuntimeSeconds:      input.RuntimeSeconds,
-			CommunityRating:     input.CommunityRating,
-			OfficialRating:      strings.TrimSpace(input.OfficialRating),
-			SeriesStatus:        strings.TrimSpace(input.SeriesStatus),
-			AvailabilityStatus:  defaultCatalogState(input.AvailabilityStatus, catalog.AvailabilityNoLocalMedia),
-			GovernanceStatus:    defaultCatalogState(input.GovernanceStatus, catalog.GovernancePending),
-			CanonicalVersion:    1,
-			LastCanonicalizedAt: func() *time.Time { now := time.Now().UTC(); return &now }(),
+		created, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{
+			LibraryID:          input.LibraryID,
+			Type:               input.Type,
+			ParentID:           input.ParentID,
+			Path:               input.Path,
+			SortKey:            input.SortKey,
+			DisplayOrder:       input.DisplayOrder,
+			IndexNumber:        input.IndexNumber,
+			IndexNumberEnd:     input.IndexNumberEnd,
+			ParentIndexNumber:  input.ParentIndexNumber,
+			AbsoluteNumber:     input.AbsoluteNumber,
+			Title:              input.Title,
+			OriginalTitle:      input.OriginalTitle,
+			SortTitle:          input.SortTitle,
+			Overview:           input.Overview,
+			ReleaseDate:        input.ReleaseDate,
+			FirstAirDate:       input.FirstAirDate,
+			LastAirDate:        input.LastAirDate,
+			Year:               input.Year,
+			EndYear:            input.EndYear,
+			RuntimeSeconds:     input.RuntimeSeconds,
+			CommunityRating:    input.CommunityRating,
+			OfficialRating:     input.OfficialRating,
+			SeriesStatus:       input.SeriesStatus,
+			AvailabilityStatus: input.AvailabilityStatus,
+			GovernanceStatus:   input.GovernanceStatus,
+			ProjectionMode:     catalog.ProjectionModeDeferred,
+		})
+		if err != nil {
+			return nil, err
 		}
-		if item.ParentID != nil {
-			var parent database.CatalogItem
-			if err := tx.First(&parent, *item.ParentID).Error; err != nil {
-				return nil, fmt.Errorf("load parent item: %w", err)
-			}
-			if parent.RootID != nil {
-				item.RootID = parent.RootID
-			} else {
-				item.RootID = &parent.ID
-			}
-		}
-		items = append(items, item)
-	}
-	if err := tx.CreateInBatches(&items, sqliteWideWriteBatchSize).Error; err != nil {
-		return nil, err
-	}
-	for idx := range items {
-		if items[idx].RootID == nil {
-			items[idx].RootID = &items[idx].ID
-		}
-	}
-	for _, batch := range chunkCatalogItems(items, sqliteVariableChunkSize) {
-		for _, item := range batch {
-			if err := tx.Model(&database.CatalogItem{}).Where("id = ?", item.ID).Update("root_id", *item.RootID).Error; err != nil {
+		if identityKey, ok := catalog.ScannerIdentityKeyForItem(created); ok {
+			if _, err := catalogSvc.SetIdentity(ctx, catalog.IdentityInput{ItemID: created.ID, Provider: catalog.IdentityProviderScanner, IdentityType: created.Type, IdentityKey: identityKey, SourcePath: created.Path}); err != nil {
 				return nil, err
 			}
 		}
+		items = append(items, created)
 	}
-	identities := make([]database.CatalogIdentity, 0, len(items))
-	for _, item := range items {
-		identityKey, ok := catalog.ScannerIdentityKeyForItem(item)
-		if !ok {
-			continue
-		}
-		identities = append(identities, database.CatalogIdentity{ItemID: item.ID, Provider: catalog.IdentityProviderScanner, IdentityType: item.Type, IdentityKey: identityKey, SourcePath: item.Path})
-	}
-	if len(identities) > 0 {
-		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "provider"}, {Name: "identity_type"}, {Name: "identity_key"}},
-			DoUpdates: clause.AssignmentColumns([]string{"item_id", "source_path", "updated_at"}),
-		}).CreateInBatches(&identities, sqliteNarrowWriteBatchSize).Error; err != nil {
-			return nil, err
-		}
-	}
-	for idx := range items {
-		if err := tx.First(&items[idx], items[idx].ID).Error; err != nil {
-			return nil, err
-		}
-	}
-	_ = catalogSvc
 	return items, nil
 }
 
@@ -758,25 +1142,21 @@ func (s *Service) materializeSnapshotForFile(ctx context.Context, provider stora
 	return object, snapshot, nil
 }
 
-func (s *Service) materializeObjectFromSnapshot(ctx context.Context, provider storage.Provider, library database.Library, object storage.Object, snapshot scanDirectorySnapshot, decisionSnapshot scanDirectorySnapshot, subtitlePolicy database.LibrarySubtitlePolicy, batchCache *catalogScanBatchCache) (catalogScanWriteResult, []string, error) {
-	return s.materializeObjectFromSnapshotWithDirectorySnapshots(ctx, provider, library, object, snapshot, decisionSnapshot, nil, nil, subtitlePolicy, batchCache)
-}
-
-func (s *Service) materializeObjectFromSnapshotWithDirectorySnapshots(ctx context.Context, provider storage.Provider, library database.Library, object storage.Object, snapshot scanDirectorySnapshot, decisionSnapshot scanDirectorySnapshot, directorySnapshots map[string]scanDirectorySnapshot, classificationCache *classificationDirectoryCache, subtitlePolicy database.LibrarySubtitlePolicy, batchCache *catalogScanBatchCache) (catalogScanWriteResult, []string, error) {
-	if classificationCache == nil {
-		classificationCache = newClassificationDirectoryCache()
-	}
+func (s *Service) materializeObjectFromSnapshotWithDirectorySnapshotsAndPlan(ctx context.Context, provider storage.Provider, library database.Library, object storage.Object, snapshot scanDirectorySnapshot, decisionSnapshot scanDirectorySnapshot, directorySnapshots map[string]scanDirectorySnapshot, tokenCache *filenameTokenProfileCache, shapePlan contentShapeDirectoryPlan, shapeAssignments map[string]contentShapeFileAssignment, pathTreeAssignments map[string]pathTreeWorkGroupAssignment, subtitlePolicy database.LibrarySubtitlePolicy, batchCache *catalogScanBatchCache) (catalogScanWriteResult, []string, error) {
 	classificationLibraryType := effectiveVideoLibraryType(library.Type)
-	directoryDecision := classificationCache.decision(classificationLibraryType, library.RootPath, decisionSnapshot)
-	if shouldSkipTVDirectoryExtra(classificationLibraryType, directoryDecision, object) {
-		return catalogScanWriteResult{SkippedReason: "materialization_skipped_tv_extra"}, nil, nil
+	assignment, hasAssignment := shapeAssignments[strings.TrimSpace(object.Path)]
+	pathTreeAssignment := pathTreeAssignments[strings.TrimSpace(object.Path)]
+	classified, planned := plannedClassifiedMediaForMaterialize(object, tokenCache, shapePlan, assignment, hasAssignment, pathTreeAssignment)
+	if !planned {
+		return catalogScanWriteResult{SkippedReason: "materialization_skipped_unplanned"}, nil, nil
 	}
-	directorySummary := classificationCache.summary(classificationLibraryType, library.RootPath, decisionSnapshot)
-	inherited := classificationCache.inheritedContext(classificationLibraryType, library.RootPath, object.Path, decisionSnapshot, directoryDecision, directorySnapshots)
-	classified := classifyMediaFileWithDirectorySummaryAndContext(classificationLibraryType, library.RootPath, object, snapshot.Path, directoryDecision, decisionSnapshot, directorySummary, inherited)
 	artifact, _ := catalogScanArtifactFromObject(provider.Name(), classificationLibraryType, library.RootPath, object, classified)
-	if decision := scanDecisionFromDirectoryShape(directoryDecision, artifact); strings.TrimSpace(decision.Type) != "" {
-		artifact.Decisions = append(artifact.Decisions, decision)
+	applyPathTreeWorkGroupAssignment(&artifact, pathTreeAssignments[strings.TrimSpace(object.Path)])
+	if planned {
+		if !hasAssignment {
+			assignment = contentShapeAssignmentForObject(shapePlan, object, tokenCache)
+		}
+		applyContentShapePlanEvidence(&artifact, shapePlan, assignment)
 	}
 	if decision := scanDecisionFromAttachmentRole(object.Path, artifact); strings.TrimSpace(decision.Type) != "" {
 		artifact.Decisions = append(artifact.Decisions, decision)
@@ -794,4 +1174,68 @@ func (s *Service) materializeObjectFromSnapshotWithDirectorySnapshots(ctx contex
 		return catalogScanWriteResult{}, nil, err
 	}
 	return writeResult, sidecarPaths, nil
+}
+
+func applyContentShapePlanEvidence(artifact *catalogScanArtifact, shapePlan contentShapeDirectoryPlan, assignment contentShapeFileAssignment) {
+	if artifact == nil {
+		return
+	}
+	artifact.ContentShapePlan = contentShapePlanDebugPayload(shapePlan)
+	artifact.ContentShapeAssignment = map[string]any{"assignment_type": assignment.AssignmentType, "target_key": assignment.TargetKey, "review_state": assignment.ReviewState, "confidence": assignment.Confidence}
+	if shapePlan.Confidence < contentShapeHighConfidenceThreshold || shapePlan.ReviewState == "review_required" {
+		artifact.Decisions = append(artifact.Decisions, scanDecision{Type: "content_shape_guarded_placeholder", CandidateType: artifact.ItemType, Status: scanDecisionStatusReviewRequired, Confidence: &shapePlan.Confidence, Reason: "content shape uncertain; materialized guarded local placeholder", Evidence: []scanDecisionEvidence{{Kind: "directory_plan", Source: "content_shape", Value: shapePlan.Shape}, {Kind: "placeholder", Source: "content_shape", Value: artifact.ItemType}}})
+		artifact.ContentShapeAssignment["placeholder"] = artifact.ItemType
+		artifact.ContentShapeAssignment["placeholder_reason"] = "uncertain_content_shape"
+		return
+	}
+	artifact.Decisions = append(artifact.Decisions, scanDecision{Type: "accepted", CandidateType: artifact.ItemType, Status: "accepted", Confidence: &shapePlan.Confidence, Reason: "content shape plan assignment", Evidence: []scanDecisionEvidence{{Kind: "directory_plan", Source: "content_shape", Value: shapePlan.Shape}}})
+}
+
+func applyPathTreeWorkGroupAssignment(artifact *catalogScanArtifact, assignment pathTreeWorkGroupAssignment) {
+	if artifact == nil || strings.TrimSpace(assignment.StoragePath) == "" || strings.TrimSpace(assignment.TargetKey) == "" {
+		return
+	}
+	if assignment.AssignmentType == pathTreeAssignmentVersion {
+		artifact.ItemType = catalog.ItemTypeMovie
+		artifact.ItemPath = strings.TrimSpace(assignment.TargetKey)
+		artifact.PreferredAssetType = inventory.AssetTypeVersion
+		artifact.PreferredAssetRole = inventory.AssetItemRoleVersion
+		applyPathTreeRuleTitle(artifact, assignment)
+	} else if assignment.AssignmentType == pathTreeAssignmentMovie {
+		artifact.ItemType = catalog.ItemTypeMovie
+		artifact.ItemPath = strings.TrimSpace(assignment.TargetKey)
+		applyPathTreeRuleTitle(artifact, assignment)
+	} else if assignment.AssignmentType == pathTreeAssignmentEpisode && assignment.SeasonNumber != nil && assignment.EpisodeNumber != nil && strings.TrimSpace(assignment.SeriesTitle) != "" {
+		artifact.ItemType = catalog.ItemTypeEpisode
+		artifact.SeriesTitle = strings.TrimSpace(assignment.SeriesTitle)
+		artifact.SeriesPath = canonicalSeriesPath(assignment.SeriesTitle)
+		artifact.SeasonNumber = assignment.SeasonNumber
+		artifact.SeasonPath = fmt.Sprintf("%s/season-%02d", artifact.SeriesPath, *assignment.SeasonNumber)
+		artifact.EpisodeSlots = []catalogEpisodeSlot{{EpisodeNumber: *assignment.EpisodeNumber, ItemPath: canonicalEpisodeItemPath(artifact.SeasonPath, *assignment.EpisodeNumber)}}
+	}
+	artifact.ContentShapeAssignment = mergeStringAnyMaps(artifact.ContentShapeAssignment, map[string]any{"path_tree_assignment_type": assignment.AssignmentType, "path_tree_target_key": assignment.TargetKey, "path_tree_review_state": assignment.ReviewState, "path_tree_confidence": assignment.Confidence})
+	confidence := assignment.Confidence
+	artifact.Decisions = append(artifact.Decisions, scanDecision{Type: "path_tree_work_group", CandidateType: artifact.ItemType, TargetKind: "work_group", TargetKey: assignment.TargetKey, Status: "accepted", Confidence: &confidence, Reason: "path-tree work group assignment", Evidence: []scanDecisionEvidence{{Kind: "work_group", Source: "path_tree", Value: assignment.AssignmentType}, {Kind: "target_key", Source: "path_tree", Value: assignment.TargetKey}}})
+}
+
+func applyPathTreeRuleTitle(artifact *catalogScanArtifact, assignment pathTreeWorkGroupAssignment) {
+	if artifact == nil || len(assignment.Evidence) == 0 {
+		return
+	}
+	if title, ok := assignment.Evidence["title"].(string); ok && strings.TrimSpace(title) != "" {
+		artifact.Title = strings.TrimSpace(title)
+	}
+	if yearValue, ok := assignment.Evidence["year"].(int); ok && yearValue > 0 {
+		artifact.Year = &yearValue
+	}
+}
+
+func mergeStringAnyMaps(base map[string]any, extra map[string]any) map[string]any {
+	if base == nil {
+		base = make(map[string]any, len(extra))
+	}
+	for key, value := range extra {
+		base[key] = value
+	}
+	return base
 }

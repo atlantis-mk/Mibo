@@ -1,6 +1,8 @@
 package library
 
 import (
+	"context"
+
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/providers"
@@ -9,12 +11,18 @@ import (
 	"gorm.io/gorm"
 )
 
+type inventoryProbeExecutor func(context.Context, uint) error
+
+type catalogMatchExecutor func(context.Context, uint) error
+
 type Service struct {
-	cfg      config.Config
-	db       *gorm.DB
-	storage  *providers.Registry
-	workflow *workflow.Service
-	ingest   *ingest.Service
+	cfg                    config.Config
+	db                     *gorm.DB
+	storage                *providers.Registry
+	workflow               *workflow.Service
+	ingest                 *ingest.Service
+	inventoryProbeExecutor inventoryProbeExecutor
+	catalogMatchExecutor   catalogMatchExecutor
 }
 
 type CreateMediaSourceInput struct {
@@ -46,7 +54,6 @@ type MediaSourceView struct {
 
 type CreateLibraryInput struct {
 	Name               string                                       `json:"name"`
-	Type               string                                       `json:"type,omitempty"`
 	MediaSourceID      uint                                         `json:"media_source_id"`
 	RootPath           string                                       `json:"root_path"`
 	Scan               *LibraryScanPolicyView                       `json:"scan,omitempty"`
@@ -72,7 +79,6 @@ const (
 	JobKindCatalogMaterializeBatch         = "catalog_materialize_batch"
 	JobKindCatalogPostMaterializeBatch     = "catalog_post_materialize_batch"
 	JobKindInventoryProbeBatch             = "inventory_probe_batch"
-	JobKindMissingMediaCleanup             = "missing_media_cleanup"
 	JobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
 	JobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
 )
@@ -91,4 +97,12 @@ func NewService(cfg config.Config, db *gorm.DB, registry *providers.Registry, _ 
 		service.workflow = workflow.NewService(db)
 	}
 	return service
+}
+
+func (s *Service) SetInventoryProbeExecutor(executor func(context.Context, uint) error) {
+	s.inventoryProbeExecutor = executor
+}
+
+func (s *Service) SetCatalogMatchExecutor(executor func(context.Context, uint) error) {
+	s.catalogMatchExecutor = executor
 }

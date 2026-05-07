@@ -139,6 +139,29 @@ func TestCatalogRefreshItemProjectionNormalizesBlankAvailability(t *testing.T) {
 	assertCatalogSearchDocument(t, ctx, svc.db, item.ID, 9, ItemTypeMovie, "Movie A", AvailabilityNoLocalMedia)
 }
 
+func TestCatalogRefreshLibraryProjectionBatchesLargeScopes(t *testing.T) {
+	svc, ctx := newProjectionTestService(t)
+
+	for i := 0; i < projectionSQLBatchSize+25; i++ {
+		seedCatalogProjectionItem(t, ctx, svc.db, database.CatalogItem{
+			LibraryID:          11,
+			Type:               ItemTypeMovie,
+			Path:               "/library/Movie Batch " + time.Unix(int64(i), 0).UTC().Format("150405"),
+			SortKey:            "Movie Batch",
+			DisplayOrder:       DisplayOrderAired,
+			Title:              "Movie Batch",
+			AvailabilityStatus: AvailabilityAvailable,
+			GovernanceStatus:   GovernancePending,
+		})
+	}
+
+	if err := svc.RefreshLibraryProjection(ctx, 11, ""); err != nil {
+		t.Fatalf("refresh large library projection: %v", err)
+	}
+
+	assertProjectionCounts(t, ctx, svc.db, projectionSQLBatchSize+25, projectionSQLBatchSize+25)
+}
+
 func newProjectionTestService(t *testing.T) (*Service, context.Context) {
 	t.Helper()
 

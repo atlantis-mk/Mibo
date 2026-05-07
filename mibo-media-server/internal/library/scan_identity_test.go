@@ -19,6 +19,80 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestReuseInventoryFileByStableIdentitySharesUpdateBehavior(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, _, libraryRecord := newScanCatalogWriterHarness(t)
+	modifiedAt := time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC)
+	file := database.InventoryFile{
+		LibraryID:         libraryRecord.ID,
+		StorageProvider:   "local",
+		StoragePath:       "/library/Old.Movie.2024.mkv",
+		StableIdentityKey: "provider-object-1",
+		HashesJSON:        `{"sha1":"old"}`,
+		ThumbnailURL:      "https://cdn.example.test/old.jpg",
+		SizeBytes:         1024,
+		ModifiedAt:        timePtr(modifiedAt),
+		Container:         "mkv",
+		ContentClass:      SourceContentClassVideo,
+		Status:            "missing",
+		ScanState:         "discovered",
+		MissingSince:      timePtr(modifiedAt),
+	}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+
+	newModifiedAt := time.Date(2026, 5, 1, 8, 30, 0, 0, time.UTC)
+	reused, ok, err := reuseInventoryFileByStableIdentity(ctx, db, inventoryFileStableIdentityReuseInput{
+		LibraryID:         libraryRecord.ID,
+		StorageProvider:   "local",
+		StableIdentityKey: "provider-object-1",
+		StoragePath:       "/library/Renamed.Movie.2024.mkv",
+		HashesJSON:        `{"sha1":"new"}`,
+		ThumbnailURL:      "https://cdn.example.test/new.jpg",
+		SizeBytes:         2048,
+		ModifiedAt:        timePtr(newModifiedAt),
+		Container:         "mp4",
+		ContentClass:      SourceContentClassVideo,
+		Status:            "available",
+		ScanState:         "classified",
+	})
+	if err != nil {
+		t.Fatalf("reuse inventory file: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected stable-identity reuse")
+	}
+	if reused.ID != file.ID {
+		t.Fatalf("expected reused file id %d, got %d", file.ID, reused.ID)
+	}
+	if reused.StoragePath != "/library/Renamed.Movie.2024.mkv" || reused.HashesJSON != `{"sha1":"new"}` || reused.ThumbnailURL != "https://cdn.example.test/new.jpg" || reused.SizeBytes != 2048 || reused.Container != "mp4" || reused.Status != "available" || reused.ScanState != "classified" || reused.MissingSince != nil {
+		t.Fatalf("unexpected reused file state: %#v", reused)
+	}
+}
+
+func TestLoadInventoryFilesByStableIdentityDeduplicatesKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, _, libraryRecord := newScanCatalogWriterHarness(t)
+	files := []database.InventoryFile{
+		{LibraryID: libraryRecord.ID, StorageProvider: "local", StoragePath: "/library/A.mkv", StableIdentityKey: "stable-a", ContentClass: SourceContentClassVideo, Status: "available"},
+		{LibraryID: libraryRecord.ID, StorageProvider: "local", StoragePath: "/library/B.mkv", StableIdentityKey: "stable-b", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	if err := db.WithContext(ctx).Create(&files).Error; err != nil {
+		t.Fatalf("create inventory files: %v", err)
+	}
+
+	loaded, err := loadInventoryFilesByStableIdentity(ctx, db, libraryRecord.ID, "local", []string{"stable-a", "stable-a", " ", "stable-b"})
+	if err != nil {
+		t.Fatalf("load by stable identity: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("expected 2 files, got %#v", loaded)
+	}
+}
+
 func TestRunSyncLibraryUsesStableIdentityEvidence(t *testing.T) {
 	t.Parallel()
 

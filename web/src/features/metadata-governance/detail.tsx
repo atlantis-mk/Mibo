@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import {
@@ -154,7 +154,6 @@ export function MetadataGovernanceDetail({
   const [asyncActionState, setAsyncActionState] =
     useState<AsyncActionState | null>(null)
   const [saveSuccessMessage, setSaveSuccessMessage] = useState("")
-  const pollTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!workspaceQuery.data) return
@@ -335,8 +334,6 @@ export function MetadataGovernanceDetail({
       setBaselineDraft(nextDraft)
       setAsyncActionState({
         type: "rematch",
-        jobId: 0,
-        kind: "catalog_match",
         status: "completed",
         message: "重新匹配已完成，治理结果已刷新。",
       })
@@ -359,8 +356,6 @@ export function MetadataGovernanceDetail({
       setBaselineDraft(nextDraft)
       setAsyncActionState({
         type: "refetch",
-        jobId: 0,
-        kind: "catalog_refetch",
         status: "completed",
         message: "元数据重抓已完成，来源证据和字段值已刷新。",
       })

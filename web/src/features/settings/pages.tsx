@@ -10,16 +10,6 @@ import { SETTINGS_SECTIONS } from "./sections"
 
 const ConsolePage = lazy(() => import("#/features/console"))
 const HealthCenter = lazy(() => import("#/features/health"))
-const GeneralSettingsPanel = lazy(() =>
-  import("./components/preference-panels").then((module) => ({
-    default: module.GeneralSettingsPanel,
-  }))
-)
-const NotificationSettingsPanel = lazy(() =>
-  import("./components/preference-panels").then((module) => ({
-    default: module.NotificationSettingsPanel,
-  }))
-)
 const SecuritySettingsPanel = lazy(() =>
   import("./components/preference-panels").then((module) => ({
     default: module.SecuritySettingsPanel,
@@ -50,11 +40,6 @@ const ScanExclusionsPanel = lazy(() =>
     default: module.ScanExclusionsPanel,
   }))
 )
-const CleanupSettingsPanel = lazy(() =>
-  import("./components/cleanup-settings-panel").then((module) => ({
-    default: module.CleanupSettingsPanel,
-  }))
-)
 const TranscodingSettingsPanel = lazy(() =>
   import("./components/transcoding-settings-panel").then((module) => ({
     default: module.TranscodingSettingsPanel,
@@ -63,11 +48,6 @@ const TranscodingSettingsPanel = lazy(() =>
 const NetworkSettingsPanel = lazy(() =>
   import("./components/network-settings-panel").then((module) => ({
     default: module.NetworkSettingsPanel,
-  }))
-)
-const DatabaseSettingsPanel = lazy(() =>
-  import("./components/database-settings-panel").then((module) => ({
-    default: module.DatabaseSettingsPanel,
   }))
 )
 const LiveTvSettingsPanel = lazy(() =>
@@ -81,43 +61,19 @@ const MetadataProviderSettingsPanel = lazy(() =>
   }))
 )
 
-export function SettingsGeneralPage() {
-  return (
-    <SettingsSectionPanel
-      sectionKey="general"
-      panel={
-        <LazyPanel>
-          <GeneralSettingsPanel />
-        </LazyPanel>
-      }
-    />
-  )
-}
-
 export function SettingsHealthPage() {
   return (
-    <SettingsNamedPage sectionKey="health">
-      <LazyPanel>
-        <HealthCenter />
-      </LazyPanel>
-    </SettingsNamedPage>
+    <LazyPanel>
+      <HealthCenter />
+    </LazyPanel>
   )
 }
 
 export function SettingsConsolePage() {
-  const section = SETTINGS_SECTIONS.find(({ key }) => key === "console")
-  if (!section) return null
-
   return (
-    <SettingsPageShell
-      icon={section.icon}
-      title={section.title}
-      description={section.description}
-    >
-      <LazyPanel>
-        <ConsolePage embedded />
-      </LazyPanel>
-    </SettingsPageShell>
+    <LazyPanel>
+      <ConsolePage embedded />
+    </LazyPanel>
   )
 }
 
@@ -221,17 +177,6 @@ export function SettingsScanExclusionsPage() {
   )
 }
 
-export function SettingsCleanupPage() {
-  const token = useAuthStore((state) => state.token)
-  return (
-    <SettingsNamedPage sectionKey="cleanup">
-      <LazyPanel>
-        <CleanupSettingsPanel token={token} />
-      </LazyPanel>
-    </SettingsNamedPage>
-  )
-}
-
 export function SettingsPlaybackPage() {
   return (
     <SettingsSectionPanel
@@ -259,19 +204,6 @@ export function SettingsNetworkPage() {
   )
 }
 
-export function SettingsDatabasePage() {
-  return (
-    <SettingsSectionPanel
-      sectionKey="database"
-      panel={
-        <LazyPanel>
-          <DatabaseSettingsPanel />
-        </LazyPanel>
-      }
-    />
-  )
-}
-
 export function SettingsLiveTvPage() {
   return (
     <SettingsSectionPanel
@@ -279,19 +211,6 @@ export function SettingsLiveTvPage() {
       panel={
         <LazyPanel>
           <LiveTvSettingsPanel />
-        </LazyPanel>
-      }
-    />
-  )
-}
-
-export function SettingsNotificationsPage() {
-  return (
-    <SettingsSectionPanel
-      sectionKey="notifications"
-      panel={
-        <LazyPanel>
-          <NotificationSettingsPanel />
         </LazyPanel>
       }
     />
@@ -364,7 +283,6 @@ function SettingsSectionPanel({
   sectionKey:
     | "general"
     | "network"
-    | "database"
     | "playback"
     | "notifications"
     | "security"

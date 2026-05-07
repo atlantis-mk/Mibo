@@ -39,10 +39,7 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 		name = deriveLibraryNameFromPath(rootPath, source.Name)
 	}
 	probe := s.ProbeSource(ctx, provider, rootPath)
-	libraryType := normalizeLibraryType(input.Type)
-	if libraryType == "" {
-		libraryType = LibraryTypeAuto
-	}
+	libraryType := LibraryTypeAuto
 	library := database.Library{Name: name, Type: libraryType, MediaSourceID: source.ID, RootPath: rootPath, Status: "pending", ScannerEnabled: true, ProbeStatus: probe.Status, ProbeSummaryJSON: encodeSourceProbeSummary(probe)}
 	if err := s.db.WithContext(ctx).Create(&library).Error; err != nil {
 		return database.Library{}, database.Job{}, err
@@ -236,6 +233,9 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 		return err
 	}
 	queries := []string{
+		`DELETE FROM content_shape_assignments WHERE library_id = ?`,
+		`DELETE FROM content_shape_plans WHERE library_id = ?`,
+		`DELETE FROM content_shape_profiles WHERE library_id = ?`,
 		`DELETE FROM job_active_intents WHERE job_id IN (SELECT id FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
 		`DELETE FROM jobs WHERE status NOT IN ('running', 'cancel_requested') AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
 		`DELETE FROM workflow_task_dependencies WHERE task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?) OR depends_on_task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
@@ -272,6 +272,9 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 		`DELETE FROM catalog_search_documents WHERE library_id = ? OR item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
 	}
 	args := [][]any{
+		{libraryID},
+		{libraryID},
+		{libraryID},
 		{libraryID, libraryID, libraryID, libraryID},
 		{libraryID, libraryID, libraryID, libraryID},
 		{libraryID, libraryID},

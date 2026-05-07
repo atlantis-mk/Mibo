@@ -35,10 +35,6 @@ func TestMatchCatalogItemSkipsUnavailableProviderInstanceInProfile(t *testing.T)
 	}
 	ctx := context.Background()
 	settingsSvc := settings.NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: time.Second}})
-	enabledMigrated := true
-	if _, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: database.MigratedDefaultTMDBProviderInstanceName, ProviderType: database.MetadataProviderTypeTMDB, Enabled: &enabledMigrated, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, TMDB: &settings.MetadataProviderInput{APIKey: "fallback-key", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("create migrated tmdb provider instance: %v", err)
-	}
 	disabled := false
 	primary, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: "tmdb-cooldown", ProviderType: database.MetadataProviderTypeTMDB, Enabled: &disabled, AvailabilityStatus: database.MetadataProviderAvailabilityCooldown, TMDB: &settings.MetadataProviderInput{APIKey: "unused", BaseURL: tmdb.URL, ImageBaseURL: tmdb.URL + "/images", Language: "en-US", Timeout: "1s"}})
 	if err != nil {

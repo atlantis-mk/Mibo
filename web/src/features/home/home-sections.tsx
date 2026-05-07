@@ -13,7 +13,7 @@ import { Swiper, SwiperSlide } from "swiper/react"
 
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
-import { MediaPosterCard, MediaRail } from "#/components/media-poster-card"
+import { MediaPosterCard } from "#/components/media-poster-card"
 import type {
   CatalogListItem,
   CatalogUserItemEntry,
@@ -49,6 +49,42 @@ export function HeroCarousel({
   showCount: number
   hasBottomOverlay?: boolean
 }) {
+  if (heroItems.length === 0) {
+    return (
+      <section
+        className="relative min-h-svh overflow-hidden"
+        style={{
+          background:
+            "linear-gradient(135deg, rgba(5,10,18,1), rgba(30,41,59,0.88), rgba(15,118,110,0.66))",
+        }}
+      >
+        <div className="absolute inset-0 bg-linear-to-r from-background via-background/15 to-background/95" />
+        <div className="absolute inset-0 bg-linear-to-t from-background/95 via-background/20 to-background/10" />
+        <div
+          className={cn(
+            "relative flex min-h-svh items-end px-6 pt-24 sm:px-8 lg:px-12",
+            hasBottomOverlay ? "pb-81" : "pb-8 lg:pb-10"
+          )}
+        >
+          <div className="max-w-4xl min-w-0">
+            <Badge
+              className="border-border/50 bg-background/75 backdrop-blur-sm"
+              variant="outline"
+            >
+              首页已就绪
+            </Badge>
+            <h1 className="mt-5 max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
+              等待扫描后的最近加入内容
+            </h1>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
+              媒体库入口已显示在下方。扫描完成后，最近加入的影片或剧集会自动切换为首页轮播。
+            </p>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <Swiper
       modules={canLoopHeroItems ? [Autoplay] : undefined}
@@ -136,7 +172,11 @@ export function HeroCarousel({
                         <Link
                           to="/play/$id"
                           params={{ id: String(item.id) }}
-                          search={{ fromStart: false, assetId: undefined }}
+                          search={{
+                            fromStart: false,
+                            assetId: undefined,
+                            inventoryFileId: undefined,
+                          }}
                         >
                           <PlayIcon className="size-4" />
                           播放
@@ -156,6 +196,7 @@ export function HeroCarousel({
                               getMediaCardType(item) === "show"
                                 ? "series"
                                 : undefined,
+                            episodePage: undefined,
                           }}
                         >
                           <InfoIcon className="size-4" />

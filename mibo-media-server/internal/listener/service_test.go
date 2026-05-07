@@ -333,7 +333,7 @@ func newListenerIntegrationService(t *testing.T) (*Service, *gorm.DB, database.L
 	if err != nil {
 		t.Fatalf("create media source: %v", err)
 	}
-	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: libraryRoot})
+	record, _, err := librarySvc.CreateLibrary(ctx, library.CreateLibraryInput{Name: "Movies", MediaSourceID: source.ID, RootPath: libraryRoot})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}

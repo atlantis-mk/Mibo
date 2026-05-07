@@ -13,7 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "#/components/ui/alert-dialog"
-import type { HealthIssue, Library, MediaSource } from "#/lib/mibo-api"
+import type { Library, MediaSource } from "#/lib/mibo-api"
 import {
   createAuthedMiboApi,
   healthIssuesQueryOptions,

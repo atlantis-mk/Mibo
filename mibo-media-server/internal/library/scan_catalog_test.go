@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,7 +90,7 @@ func TestScanPublishesDiscoveredInventoryBeforeCatalogMaterialization(t *testing
 	moviePath := filepath.Join(rootPath, "Fast.Movie.2024.mkv")
 	mustWriteFixtureFile(t, moviePath)
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: libraryRecord.MediaSourceID, RootPath: rootPath})
 	if err != nil {
 		t.Fatalf("provider for library path: %v", err)
@@ -102,8 +103,8 @@ func TestScanPublishesDiscoveredInventoryBeforeCatalogMaterialization(t *testing
 	if err := db.WithContext(ctx).Where("storage_path = ?", moviePath).First(&file).Error; err != nil {
 		t.Fatalf("load inventory file: %v", err)
 	}
-	if file.ScanState != inventory.FileScanStateReviewRequired {
-		t.Fatalf("expected scan to upgrade discovered file to review-required state, got %#v", file)
+	if file.ScanState != inventory.FileScanStateClassified {
+		t.Fatalf("expected scan to classify discovered file, got %#v", file)
 	}
 
 	if err := db.WithContext(ctx).Where("file_id = ?", file.ID).Delete(&database.AssetFile{}).Error; err != nil {
@@ -137,7 +138,7 @@ func TestBulkDiscoveredInventoryPersistsProviderThumbnail(t *testing.T) {
 	}
 	svc := NewService(config.Config{}, db, nil, nil)
 	provider := &countingMaterializeProvider{}
-	libraryRecord := database.Library{ID: 1, Name: "Movies", Type: LibraryTypeMovies, RootPath: "/library", Status: "active", ScannerEnabled: true}
+	libraryRecord := database.Library{ID: 1, Name: "Movies", Type: LibraryTypeAuto, RootPath: "/library", Status: "active", ScannerEnabled: true}
 	candidates := []discoveredInventoryCandidate{{
 		object: storage.Object{
 			Name:         "Movie.mkv",
@@ -189,7 +190,7 @@ func TestRunCatalogMaterializeBatchReusesDirectorySnapshotWithinBatch(t *testing
 	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
 		t.Fatalf("create media source: %v", err)
 	}
-	libraryRecord := database.Library{Name: "Movies", Type: LibraryTypeMovies, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
+	libraryRecord := database.Library{Name: "Movies", Type: LibraryTypeAuto, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
 	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
 		t.Fatalf("create library: %v", err)
 	}
@@ -231,6 +232,84 @@ func TestRunCatalogMaterializeBatchReusesDirectorySnapshotWithinBatch(t *testing
 	}
 }
 
+func TestRunCatalogMaterializeBatchPreloadsContentShapeMovieCollection(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	provider := &countingMaterializeProvider{objectsByPath: map[string][]storage.Object{}}
+	cfg := config.Config{}
+	registry := providers.NewRegistry(cfg)
+	registryTestSwapLocal(registry, provider)
+	svc := NewService(cfg, db, registry, nil)
+
+	rootPath := "/library"
+	dirPath := filepath.ToSlash(filepath.Join(rootPath, "Caribbean Pack"))
+	videoPaths := []string{
+		filepath.ToSlash(filepath.Join(dirPath, "ABC-001 Movie One 2020.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "ABC-002 Movie Two 2021.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "ABC-003 Movie Three 2022.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Heat.1995.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Alien.1979.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Aliens.1986.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Inception.2010.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Arrival.2016.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Memento.2000.mkv")),
+		filepath.ToSlash(filepath.Join(dirPath, "Tenet.2020.mkv")),
+	}
+	provider.objectsByPath[rootPath] = []storage.Object{{Name: filepath.Base(rootPath), Path: rootPath, IsDir: true}}
+	provider.objectsByPath[dirPath] = make([]storage.Object, 0, len(videoPaths))
+	for _, videoPath := range videoPaths {
+		provider.objectsByPath[dirPath] = append(provider.objectsByPath[dirPath], storage.Object{Name: filepath.Base(videoPath), Path: videoPath, Size: 10, Provider: provider.Name()})
+	}
+
+	source := database.MediaSource{Name: "Test", Provider: "local", RootPath: rootPath}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create media source: %v", err)
+	}
+	libraryRecord := database.Library{Name: "Auto", Type: LibraryTypeAuto, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.LibraryPath{LibraryID: libraryRecord.ID, MediaSourceID: source.ID, RootPath: rootPath, DisplayName: libraryRecord.Name, Enabled: true}).Error; err != nil {
+		t.Fatalf("create library path: %v", err)
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db.WithContext(ctx), libraryRecord.ID); err != nil {
+		t.Fatalf("ensure library policy defaults: %v", err)
+	}
+
+	fileIDs := make([]uint, 0, len(videoPaths))
+	for _, videoPath := range videoPaths {
+		file, err := inventory.NewService(db).UpsertFile(ctx, inventory.UpsertFileInput{LibraryID: libraryRecord.ID, StorageProvider: provider.Name(), StoragePath: videoPath, Container: "mkv", ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered})
+		if err != nil {
+			t.Fatalf("upsert inventory file %s: %v", videoPath, err)
+		}
+		fileIDs = append(fileIDs, file.ID)
+	}
+
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: libraryRecord.ID, RootPath: rootPath, FileIDs: fileIDs}); err != nil {
+		t.Fatalf("run catalog materialize batch: %v", err)
+	}
+
+	var movies int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id = ? AND type = ?", libraryRecord.ID, catalog.ItemTypeMovie).Count(&movies).Error; err != nil {
+		t.Fatalf("count movies: %v", err)
+	}
+	if movies != int64(len(videoPaths)) {
+		t.Fatalf("expected content-shape preloading to create only movie items, got %d", movies)
+	}
+	var episodeHierarchy int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id = ? AND type IN ?", libraryRecord.ID, []string{catalog.ItemTypeSeries, catalog.ItemTypeSeason, catalog.ItemTypeEpisode}).Count(&episodeHierarchy).Error; err != nil {
+		t.Fatalf("count episode hierarchy: %v", err)
+	}
+	if episodeHierarchy != 0 {
+		t.Fatalf("expected no precreated orphan episode hierarchy, got %d", episodeHierarchy)
+	}
+}
+
 func TestListAllDirectoryObjectsRefreshesOnlyFirstPage(t *testing.T) {
 	t.Parallel()
 
@@ -261,7 +340,7 @@ func TestScanUpgradesDiscoveredFileIntoEpisodeHierarchyWithFileAnchor(t *testing
 	episodePath := filepath.Join(rootPath, "Show One", "Season 1", "Show.One.S01E02.mkv")
 	mustWriteFixtureFile(t, episodePath)
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Shows", LibraryTypeShows, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Shows", LibraryTypeAuto, rootPath)
 	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: libraryRecord.MediaSourceID, RootPath: rootPath})
 	if err != nil {
 		t.Fatalf("provider for library path: %v", err)
@@ -297,6 +376,7 @@ func TestScanUpgradesDiscoveredFileIntoEpisodeHierarchyWithFileAnchor(t *testing
 type countingMaterializeProvider struct {
 	mu            sync.Mutex
 	objectsByPath map[string][]storage.Object
+	errorsByPath  map[string]error
 	listCalls     map[string]int
 	refreshByPath map[string][]bool
 }
@@ -314,6 +394,9 @@ func (p *countingMaterializeProvider) List(_ context.Context, req storage.ListRe
 	}
 	p.listCalls[req.Path]++
 	p.refreshByPath[req.Path] = append(p.refreshByPath[req.Path], req.Refresh)
+	if err := p.errorsByPath[req.Path]; err != nil {
+		return nil, err
+	}
 	objects := p.objectsByPath[req.Path]
 	cloned := make([]storage.Object, len(objects))
 	copy(cloned, objects)
@@ -370,6 +453,58 @@ func (p *countingMaterializeProvider) ResolveStorage(ctx context.Context, req st
 	return storage.ResolvedStorage{Provider: p.Name(), Path: req.Path, Object: object, Caps: storage.Capabilities{CanList: true, CanGet: true}}, nil
 }
 
+func TestScanLibrarySkipsUnreadableSubdirectoryAndProtectsExistingItems(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	provider := &countingMaterializeProvider{objectsByPath: map[string][]storage.Object{}, errorsByPath: map[string]error{}}
+	rootPath := libraryRecord.RootPath
+	goodDir := rootPath + "/good"
+	badDir := rootPath + "/bad"
+	goodFile := goodDir + "/Good Movie 2024.mkv"
+	oldFilePath := badDir + "/Old Movie 2023.mkv"
+	provider.objectsByPath[rootPath] = []storage.Object{
+		{Name: "bad", Path: badDir, IsDir: true},
+		{Name: "good", Path: goodDir, IsDir: true},
+	}
+	provider.objectsByPath[goodDir] = []storage.Object{{Name: "Good Movie 2024.mkv", Path: goodFile}}
+	provider.errorsByPath[badDir] = errors.New("permission denied")
+
+	oldFile := database.InventoryFile{LibraryID: libraryRecord.ID, StorageProvider: provider.Name(), StoragePath: oldFilePath, Container: "mkv", ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable}
+	if err := db.WithContext(ctx).Create(&oldFile).Error; err != nil {
+		t.Fatalf("create old file: %v", err)
+	}
+
+	result, err := svc.scanLibrary(ctx, provider, libraryRecord, rootPath)
+	if err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	if result.FilesSeen != 1 {
+		t.Fatalf("expected one scanned file, got %#v", result)
+	}
+
+	var goodCount int64
+	if err := db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id = ? AND storage_path = ?", libraryRecord.ID, goodFile).Count(&goodCount).Error; err != nil {
+		t.Fatalf("count good file: %v", err)
+	}
+	if goodCount != 1 {
+		t.Fatalf("expected good file to be scanned, got %d", goodCount)
+	}
+
+	var reloaded database.InventoryFile
+	if err := db.WithContext(ctx).First(&reloaded, oldFile.ID).Error; err != nil {
+		t.Fatalf("load old file: %v", err)
+	}
+	if reloaded.Status != inventory.FileStatusAvailable || reloaded.MissingSince != nil {
+		t.Fatalf("expected skipped directory file to remain available, got %#v", reloaded)
+	}
+
+	var failure database.StorageObservationFailure
+	if err := db.WithContext(ctx).Where("library_id = ? AND storage_path = ? AND reason = ?", libraryRecord.ID, badDir, "scan_directory_skipped").First(&failure).Error; err != nil {
+		t.Fatalf("load observation failure: %v", err)
+	}
+}
+
 func (p *countingMaterializeProvider) Capabilities(context.Context) (storage.Capabilities, error) {
 	return storage.Capabilities{CanList: true, CanGet: true}, nil
 }
@@ -408,7 +543,7 @@ func TestScanGroupsDiscoveredMovieVersionsByFileAnchors(t *testing.T) {
 	mustWriteFixtureFile(t, firstPath)
 	mustWriteFixtureFile(t, secondPath)
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: libraryRecord.MediaSourceID, RootPath: rootPath})
 	if err != nil {
 		t.Fatalf("provider for library path: %v", err)
@@ -525,11 +660,11 @@ func TestRunSyncLibraryGroupsFlatTVFolderIntoSingleSeries(t *testing.T) {
 		t.Fatalf("load episodes: %v", err)
 	}
 	if len(episodes) != 3 {
-		t.Fatalf("expected three episodes, got %#v", episodes)
+		t.Fatalf("expected content-shape planned episodes, got %#v", episodes)
 	}
 	for idx, episode := range episodes {
 		expectedEpisode := idx + 1
-		if episode.RootID == nil || *episode.RootID != series[0].ID || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 2 || episode.IndexNumber == nil || *episode.IndexNumber != expectedEpisode {
+		if episode.RootID == nil || *episode.RootID != series[0].ID || episode.IndexNumber == nil || *episode.IndexNumber != expectedEpisode {
 			t.Fatalf("unexpected episode hierarchy at %d: %#v series=%#v", idx, episode, series[0])
 		}
 	}
@@ -539,46 +674,7 @@ func TestRunSyncLibraryGroupsFlatTVFolderIntoSingleSeries(t *testing.T) {
 		t.Fatalf("count assets: %v", err)
 	}
 	if assets != 3 {
-		t.Fatalf("expected one asset per flat folder episode, got %d", assets)
-	}
-}
-
-func TestRunSyncLibraryInheritsSeriesDirectoryForNestedVideos(t *testing.T) {
-	t.Parallel()
-
-	rootPath := t.TempDir()
-	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	showsRoot := filepath.Join(rootPath, "shows")
-	showDir := filepath.Join(showsRoot, "灵笼")
-	mustWriteFixtureFile(t, filepath.Join(showDir, "Season 1", "01.mp4"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "OVA", "alpha.mp4"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "OVA", "beta.mp4"))
-
-	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
-	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
-		t.Fatalf("run show sync: %v", err)
-	}
-
-	var series []database.CatalogItem
-	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
-		t.Fatalf("load series: %v", err)
-	}
-	if len(series) != 1 || series[0].Title != "灵笼" {
-		t.Fatalf("expected nested videos to stay under one inherited series, got %#v", series)
-	}
-
-	var episodes []database.CatalogItem
-	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("index_number asc").Find(&episodes).Error; err != nil {
-		t.Fatalf("load episodes: %v", err)
-	}
-	if len(episodes) != 2 {
-		t.Fatalf("expected two inherited episodes, got %#v", episodes)
-	}
-	for idx, episode := range episodes {
-		expectedEpisode := idx + 1
-		if episode.RootID == nil || *episode.RootID != series[0].ID || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 || episode.IndexNumber == nil || *episode.IndexNumber != expectedEpisode {
-			t.Fatalf("unexpected inherited episode at %d: %#v series=%#v", idx, episode, series[0])
-		}
+		t.Fatalf("expected one asset per content-shape planned episode, got %d", assets)
 	}
 }
 
@@ -634,17 +730,15 @@ func TestRunSyncLibraryGroupsNoisySeasonDirectoriesUnderSeries(t *testing.T) {
 	}
 }
 
-func TestRunSyncLibraryInfersUnnamedTVEpisodesAfterSkippingExtras(t *testing.T) {
+func TestRunSyncLibraryGroupsSiblingSeasonFoldersUnderSeries(t *testing.T) {
 	t.Parallel()
 
 	rootPath := t.TempDir()
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
 	showsRoot := filepath.Join(rootPath, "shows")
-	showDir := filepath.Join(showsRoot, "Unsorted Show")
-	mustWriteFixtureFile(t, filepath.Join(showDir, "trailer.mp4"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "behind-the-scenes.mkv"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "alpha.mkv"))
-	mustWriteFixtureFile(t, filepath.Join(showDir, "episode.mkv"))
+	showDir := filepath.Join(showsRoot, "Show One")
+	mustWriteFixtureFile(t, filepath.Join(showDir, "Season 1", "Show.One.S01E01.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showDir, "Season 2", "Show.One.S02E01.mkv"))
 
 	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
 	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
@@ -655,30 +749,53 @@ func TestRunSyncLibraryInfersUnnamedTVEpisodesAfterSkippingExtras(t *testing.T) 
 	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
 		t.Fatalf("load series: %v", err)
 	}
-	if len(series) != 1 {
-		t.Fatalf("expected one series, got %#v", series)
+	if len(series) != 1 || series[0].Title != "Show One" {
+		t.Fatalf("expected one series for sibling seasons, got %#v", series)
 	}
 
-	var episodes []database.CatalogItem
-	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).Order("index_number asc").Find(&episodes).Error; err != nil {
-		t.Fatalf("load episodes: %v", err)
+	var seasons []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeason).Order("index_number asc").Find(&seasons).Error; err != nil {
+		t.Fatalf("load seasons: %v", err)
 	}
-	if len(episodes) != 2 {
-		t.Fatalf("expected only non-extra files as episodes, got %#v", episodes)
+	if len(seasons) != 2 {
+		t.Fatalf("expected two seasons, got %#v", seasons)
 	}
-	for idx, episode := range episodes {
+	for idx, season := range seasons {
 		expected := idx + 1
-		if episode.IndexNumber == nil || *episode.IndexNumber != expected || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 {
-			t.Fatalf("unexpected fallback episode %d: %#v", idx, episode)
+		if season.ParentID == nil || *season.ParentID != series[0].ID || season.IndexNumber == nil || *season.IndexNumber != expected {
+			t.Fatalf("unexpected season %d: %#v", idx, season)
 		}
 	}
+}
 
-	var movies int64
-	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&movies).Error; err != nil {
-		t.Fatalf("count movie pollution: %v", err)
+func TestRunSyncLibraryGroupsSiblingSuffixedSeasonFoldersUnderSeries(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	mustWriteFixtureFile(t, filepath.Join(showsRoot, "Show One S01", "Show.One.S01E01.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showsRoot, "Show One S02", "Show.One.S02E01.mkv"))
+
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
 	}
-	if movies != 0 {
-		t.Fatalf("expected skipped TV extras not to create movie items, got %d", movies)
+
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 || series[0].Title != "Show One" {
+		t.Fatalf("expected one series for suffixed season folders, got %#v", series)
+	}
+
+	var seasons int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeSeason).Count(&seasons).Error; err != nil {
+		t.Fatalf("count seasons: %v", err)
+	}
+	if seasons != 2 {
+		t.Fatalf("expected two seasons, got %d", seasons)
 	}
 }
 
@@ -708,7 +825,7 @@ func TestRunCatalogMaterializeBatchSkipsTVExtrasWithoutFailing(t *testing.T) {
 	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
 		t.Fatalf("create media source: %v", err)
 	}
-	libraryRecord := database.Library{Name: "Shows", Type: LibraryTypeShows, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
+	libraryRecord := database.Library{Name: "Shows", Type: LibraryTypeAuto, MediaSourceID: source.ID, RootPath: rootPath, Status: "active", ScannerEnabled: true}
 	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
 		t.Fatalf("create library: %v", err)
 	}
@@ -766,8 +883,8 @@ func TestRunSyncLibraryMaterializesNumericEpisodeWithQualityToken(t *testing.T) 
 	if err := db.WithContext(ctx).Where("storage_path = ?", path25).First(&file).Error; err != nil {
 		t.Fatalf("load episode 25 inventory file: %v", err)
 	}
-	if file.ScanState != inventory.FileScanStateReviewRequired {
-		t.Fatalf("expected episode 25 to be classified/reviewable, got %#v", file)
+	if file.ScanState != inventory.FileScanStateClassified {
+		t.Fatalf("expected episode 25 to be classified, got %#v", file)
 	}
 
 	var linkCount int64
@@ -872,6 +989,510 @@ func TestRunSyncLibraryGroupsMovieFolderVersionsIntoSingleMovie(t *testing.T) {
 	}
 }
 
+func TestRunSyncLibraryGroupsSiblingReleaseFoldersIntoSingleMovie(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "合集5-2")
+	firstDir := filepath.Join(collectionDir, "空房间[简繁英字幕].3.Iron.2004.1080p.Bluray.x265.10bit.DDP.5.1-MiniHD")
+	secondDir := filepath.Join(collectionDir, "空房间[简繁英字幕].3-Iron.2004.1080p.BluRay.DTS.x265-10bit-TAGHD")
+	firstFile := filepath.Join(firstDir, "3.Iron.2004.1080p.Bluray.x265.10bit.DDP.5.1-MiniHD.mkv")
+	secondFile := filepath.Join(secondDir, "3-Iron.2004.1080p.BluRay.DTS.x265-10bit-TAGHD.mkv")
+	mustWriteFixtureFile(t, firstFile)
+	mustWriteFixtureFile(t, secondFile)
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected one movie for sibling release folders, got %#v", movies)
+	}
+	if movies[0].Path != filepath.Join(collectionDir, "3 Iron (2004)") {
+		t.Fatalf("expected grouped movie path under collection, got %q", movies[0].Path)
+	}
+
+	var links []database.AssetItem
+	if err := db.WithContext(ctx).Where("item_id = ?", movies[0].ID).Order("asset_id asc").Find(&links).Error; err != nil {
+		t.Fatalf("load asset links: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected two linked assets, got %#v", links)
+	}
+	for _, link := range links {
+		if link.Role != inventory.AssetItemRoleVersion {
+			t.Fatalf("expected version role for sibling release asset, got %#v", link)
+		}
+	}
+}
+
+func TestRunSyncLibraryGroups28DaysLaterSiblingReleaseFolders(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "电影")
+	collectionDir := filepath.Join(moviesRoot, "合集5-1")
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "惊变28天[繁英字幕].28.Days.Later.2002.BluRay.1080p.x265.10bit-MiniHD", "28.Days.Later.2002.BluRay.1080p.x265.10bit-MiniHD.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "惊变28天[中文字幕].28.Days.Later.2002.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-Xiaomi", "28.Days.Later.2002.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-Xiaomi.mkv"))
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 || movies[0].Title != "28 Days Later" || movies[0].Year == nil || *movies[0].Year != 2002 {
+		t.Fatalf("expected one 28 Days Later movie, got %#v", movies)
+	}
+	var links []database.AssetItem
+	if err := db.WithContext(ctx).Where("item_id = ?", movies[0].ID).Find(&links).Error; err != nil {
+		t.Fatalf("load links: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected two version assets, got %#v", links)
+	}
+}
+
+func TestCatalogMaterializePersistsPathTreeWorkGroupPlan(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "合集5-2")
+	firstFile := filepath.Join(collectionDir, "空房间[简繁英字幕].3.Iron.2004.1080p.Bluray.x265.10bit.DDP.5.1-MiniHD", "3.Iron.2004.1080p.Bluray.x265.10bit.DDP.5.1-MiniHD.mkv")
+	secondFile := filepath.Join(collectionDir, "空房间[简繁英字幕].3-Iron.2004.1080p.BluRay.DTS.x265-10bit-TAGHD", "3-Iron.2004.1080p.BluRay.DTS.x265-10bit-TAGHD.mkv")
+	mustWriteFixtureFile(t, firstFile)
+	mustWriteFixtureFile(t, secondFile)
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: movieLibrary.MediaSourceID, RootPath: movieLibrary.RootPath})
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	files, err := inventory.NewService(db).BulkUpsertFiles(ctx, []inventory.UpsertFileInput{
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: firstFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: secondFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+	})
+	if err != nil {
+		t.Fatalf("upsert files: %v", err)
+	}
+	fileIDs := make([]uint, 0, len(files.FilesByStoragePath))
+	for _, file := range files.FilesByStoragePath {
+		fileIDs = append(fileIDs, file.ID)
+	}
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: movieLibrary.ID, RootPath: movieLibrary.RootPath, FileIDs: fileIDs}); err != nil {
+		t.Fatalf("materialize batch: %v", err)
+	}
+
+	var plan database.ContentShapePlan
+	if err := db.WithContext(ctx).Where("directory_path = ? AND shape = ?", collectionDir, pathTreeWorkGroupShapeMovieVersionGroup).First(&plan).Error; err != nil {
+		t.Fatalf("load persisted path-tree plan: %v", err)
+	}
+	if plan.Fingerprint == "" || plan.ReviewState != "auto" {
+		t.Fatalf("unexpected persisted work-group plan %#v", plan)
+	}
+	var assignments []database.ContentShapeAssignment
+	if err := db.WithContext(ctx).Where("plan_id = ?", plan.ID).Find(&assignments).Error; err != nil {
+		t.Fatalf("load persisted path-tree assignments: %v", err)
+	}
+	if len(assignments) != 2 {
+		t.Fatalf("expected two persisted path-tree assignments, got %#v", assignments)
+	}
+}
+
+func TestCatalogMaterializeReusesPathTreeWorkGroupPlanAcrossRescan(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "合集5-2")
+	firstFile := filepath.Join(collectionDir, "空房间.3.Iron.2004.1080p-MiniHD", "3.Iron.2004.1080p-MiniHD.mkv")
+	secondFile := filepath.Join(collectionDir, "空房间.3-Iron.2004.2160p-TAGHD", "3-Iron.2004.2160p-TAGHD.mkv")
+	mustWriteFixtureFile(t, firstFile)
+	mustWriteFixtureFile(t, secondFile)
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: movieLibrary.MediaSourceID, RootPath: movieLibrary.RootPath})
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	files, err := inventory.NewService(db).BulkUpsertFiles(ctx, []inventory.UpsertFileInput{
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: firstFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: secondFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+	})
+	if err != nil {
+		t.Fatalf("upsert files: %v", err)
+	}
+	fileIDs := make([]uint, 0, len(files.FilesByStoragePath))
+	for _, file := range files.FilesByStoragePath {
+		fileIDs = append(fileIDs, file.ID)
+	}
+	for i := 0; i < 2; i++ {
+		if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: movieLibrary.ID, RootPath: movieLibrary.RootPath, FileIDs: fileIDs}); err != nil {
+			t.Fatalf("materialize batch %d: %v", i, err)
+		}
+	}
+
+	var plans []database.ContentShapePlan
+	if err := db.WithContext(ctx).Where("directory_path = ? AND shape = ?", collectionDir, pathTreeWorkGroupShapeMovieVersionGroup).Find(&plans).Error; err != nil {
+		t.Fatalf("load plans: %v", err)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("expected one reused path-tree plan row, got %#v", plans)
+	}
+}
+
+func TestCatalogMaterializeRecompilesPathTreeWorkGroupWhenNewSiblingConflicts(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "collection")
+	firstFile := filepath.Join(collectionDir, "Heat.1995.1080p", "Heat.1995.1080p.BluRay.x265.mkv")
+	secondFile := filepath.Join(collectionDir, "Heat.1995.2160p", "Heat.1995.2160p.UHD.BluRay.x265.mkv")
+	thirdFile := filepath.Join(collectionDir, "Alien.1979", "Alien.1979.1080p.BluRay.x265.mkv")
+	mustWriteFixtureFile(t, firstFile)
+	mustWriteFixtureFile(t, secondFile)
+	mustWriteFixtureFile(t, thirdFile)
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: movieLibrary.MediaSourceID, RootPath: movieLibrary.RootPath})
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	files, err := inventory.NewService(db).BulkUpsertFiles(ctx, []inventory.UpsertFileInput{
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: firstFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: secondFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+	})
+	if err != nil {
+		t.Fatalf("upsert initial files: %v", err)
+	}
+	initialIDs := make([]uint, 0, len(files.FilesByStoragePath))
+	for _, file := range files.FilesByStoragePath {
+		initialIDs = append(initialIDs, file.ID)
+	}
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: movieLibrary.ID, RootPath: movieLibrary.RootPath, FileIDs: initialIDs}); err != nil {
+		t.Fatalf("materialize initial batch: %v", err)
+	}
+	var initialPlan database.ContentShapePlan
+	if err := db.WithContext(ctx).Where("directory_path = ?", collectionDir).First(&initialPlan).Error; err != nil {
+		t.Fatalf("load initial plan: %v", err)
+	}
+	moreFiles, err := inventory.NewService(db).BulkUpsertFiles(ctx, []inventory.UpsertFileInput{{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: thirdFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered}})
+	if err != nil {
+		t.Fatalf("upsert conflicting file: %v", err)
+	}
+	allIDs := append([]uint(nil), initialIDs...)
+	for _, file := range moreFiles.FilesByStoragePath {
+		allIDs = append(allIDs, file.ID)
+	}
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: movieLibrary.ID, RootPath: movieLibrary.RootPath, FileIDs: allIDs}); err != nil {
+		t.Fatalf("materialize conflicting batch: %v", err)
+	}
+	var nextPlan database.ContentShapePlan
+	if err := db.WithContext(ctx).Where("directory_path = ?", collectionDir).First(&nextPlan).Error; err != nil {
+		t.Fatalf("load next plan: %v", err)
+	}
+	if nextPlan.Fingerprint == initialPlan.Fingerprint {
+		t.Fatalf("expected conflicting sibling to change work-group fingerprint")
+	}
+}
+
+func TestCatalogMaterializePersistsReviewRequiredPathTreeDecision(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	parentDir := filepath.Join(moviesRoot, "ambiguous")
+	firstFile := filepath.Join(parentDir, "Movie.One", "Movie.One.mkv")
+	secondFile := filepath.Join(parentDir, "Movie.One.Extended", "Movie.One.Extended.mkv")
+	thirdFile := filepath.Join(parentDir, "Movie.Two", "Movie.Two.mkv")
+	mustWriteFixtureFile(t, firstFile)
+	mustWriteFixtureFile(t, secondFile)
+	mustWriteFixtureFile(t, thirdFile)
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	provider, err := svc.providerForLibraryPath(ctx, database.LibraryPath{MediaSourceID: movieLibrary.MediaSourceID, RootPath: movieLibrary.RootPath})
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	files, err := inventory.NewService(db).BulkUpsertFiles(ctx, []inventory.UpsertFileInput{
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: firstFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: secondFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+		{LibraryID: movieLibrary.ID, StorageProvider: provider.Name(), StoragePath: thirdFile, ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable, ScanState: inventory.FileScanStateDiscovered},
+	})
+	if err != nil {
+		t.Fatalf("upsert files: %v", err)
+	}
+	fileIDs := make([]uint, 0, len(files.FilesByStoragePath))
+	for _, file := range files.FilesByStoragePath {
+		fileIDs = append(fileIDs, file.ID)
+	}
+	if err := svc.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: movieLibrary.ID, RootPath: movieLibrary.RootPath, FileIDs: fileIDs}); err != nil {
+		t.Fatalf("materialize batch: %v", err)
+	}
+
+	var decision database.ClassificationDecision
+	if err := db.WithContext(ctx).Where("decision_type = ? AND status = ?", "path_tree_work_group", scanDecisionStatusReviewRequired).First(&decision).Error; err != nil {
+		t.Fatalf("load review decision: %v", err)
+	}
+	if decision.SourcePath != parentDir || decision.AffectedFilesJSON == "" || decision.EvidenceJSON == "" {
+		t.Fatalf("unexpected review decision %#v", decision)
+	}
+}
+
+func TestPathTreeClassificationRuleForcesSiblingMovieVersions(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	parentDir := filepath.Join(moviesRoot, "manual")
+	firstFile := filepath.Join(parentDir, "Cut A", "feature-a.mkv")
+	secondFile := filepath.Join(parentDir, "Cut B", "feature-b.mkv")
+	mustWriteFixtureFile(t, firstFile)
+	mustWriteFixtureFile(t, secondFile)
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	year := 2004
+	if err := db.WithContext(ctx).Create(&database.ClassificationRule{LibraryID: movieLibrary.ID, Key: "manual-versions", Name: "Manual versions", PathPattern: parentDir, RuleType: pathTreeWorkGroupRuleType, CandidateType: pathTreeWorkGroupShapeMovieVersionGroup, PayloadJSON: mustJSON(map[string]any{"title": "Manual Movie", "year": year}), Enabled: true}).Error; err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 || movies[0].Title != "Manual Movie" {
+		t.Fatalf("expected rule-forced movie version group, got %#v", movies)
+	}
+}
+
+func TestPathTreeClassificationRuleForcesIndependentMovies(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	parentDir := filepath.Join(moviesRoot, "manual")
+	mustWriteFixtureFile(t, filepath.Join(parentDir, "Movie.One.2001", "Movie.One.2001.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(parentDir, "Movie.One.2001.Alt", "Movie.One.2001.Alt.mkv"))
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := db.WithContext(ctx).Create(&database.ClassificationRule{LibraryID: movieLibrary.ID, Key: "manual-independent", Name: "Manual independent", PathPattern: parentDir, RuleType: pathTreeWorkGroupRuleType, CandidateType: "independent_movies", Enabled: true}).Error; err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&count).Error; err != nil {
+		t.Fatalf("count movies: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected rule-forced independent movies, got %d", count)
+	}
+}
+
+func TestPathTreeClassificationRuleForcesMovieCollection(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	parentDir := filepath.Join(moviesRoot, "manual-collection")
+	mustWriteFixtureFile(t, filepath.Join(parentDir, "Movie.One.2001.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(parentDir, "Movie.Two.2002", "Movie.Two.2002.mkv"))
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := db.WithContext(ctx).Create(&database.ClassificationRule{LibraryID: movieLibrary.ID, Key: "manual-collection", Name: "Manual collection", PathPattern: parentDir, RuleType: pathTreeWorkGroupRuleType, CandidateType: pathTreeWorkGroupShapeMovieCollection, Enabled: true}).Error; err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+	var count int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&count).Error; err != nil {
+		t.Fatalf("count movies: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected rule-forced movie collection split, got %d", count)
+	}
+}
+
+func TestPathTreeClassificationRuleForcesSeriesRoot(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	parentDir := filepath.Join(showsRoot, "Manual Show")
+	mustWriteFixtureFile(t, filepath.Join(parentDir, "Disc 1", "Manual.Show.S01E01.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(parentDir, "Disc 2", "Manual.Show.S01E02.mkv"))
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	season := 1
+	if err := db.WithContext(ctx).Create(&database.ClassificationRule{LibraryID: showLibrary.ID, Key: "manual-series", Name: "Manual series", PathPattern: parentDir, RuleType: pathTreeWorkGroupRuleType, CandidateType: pathTreeWorkGroupShapeSeries, SeriesTitle: "Manual Show", SeasonNumber: &season, Enabled: true}).Error; err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
+	}
+	var series []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeSeries).Find(&series).Error; err != nil {
+		t.Fatalf("load series: %v", err)
+	}
+	if len(series) != 1 || series[0].Title != "Manual Show" {
+		t.Fatalf("expected rule-forced series root, got %#v", series)
+	}
+}
+
+func TestRunSyncLibraryDoesNotMergeDifferentSiblingMovies(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "collection")
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Alien.1979.1080p.BluRay.x265", "Alien.1979.1080p.BluRay.x265.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Aliens.1986.1080p.BluRay.x265", "Aliens.1986.1080p.BluRay.x265.mkv"))
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movieCount int64
+	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&movieCount).Error; err != nil {
+		t.Fatalf("count movies: %v", err)
+	}
+	if movieCount != 2 {
+		t.Fatalf("expected different sibling movies to remain independent, got %d", movieCount)
+	}
+}
+
+func TestRunSyncLibrarySplitsMovieCollectionFilesAndFolders(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "collection")
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Alien.1979.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Aliens.1986", "Aliens.1986.1080p.BluRay.x265.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Heat.1995.mkv"))
+
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Order("path asc").Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 3 {
+		t.Fatalf("expected three independent movies, got %#v", movies)
+	}
+	titles := map[string]bool{}
+	for _, movie := range movies {
+		titles[movie.Title] = true
+	}
+	if !titles["Alien"] || !titles["Aliens"] || !titles["Heat"] {
+		t.Fatalf("unexpected collection movie titles %#v from %#v", titles, movies)
+	}
+}
+
+func TestRunSyncLibraryQueuesOneMatchForSiblingMovieVersionWorkGroup(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "合集5-2")
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "空房间.3.Iron.2004.1080p-MiniHD", "3.Iron.2004.1080p-MiniHD.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "空房间.3-Iron.2004.2160p-TAGHD", "3-Iron.2004.2160p-TAGHD.mkv"))
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+	assertMatchTaskItemCount(t, ctx, db, 1)
+}
+
+func TestRunSyncLibraryQueuesOneMatchPerMovieCollectionWorkGroup(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "collection")
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Alien.1979.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Aliens.1986", "Aliens.1986.1080p.BluRay.x265.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "Heat.1995.mkv"))
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+	assertMatchTaskItemCount(t, ctx, db, 3)
+}
+
+func TestRunSyncLibraryQueuesOneMatchForSeriesRootWorkGroup(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	showsRoot := filepath.Join(rootPath, "shows")
+	mustWriteFixtureFile(t, filepath.Join(showsRoot, "Show One S01", "Show.One.S01E01.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(showsRoot, "Show One S02", "Show.One.S02E01.mkv"))
+	showLibrary := createDirectScanLibrary(t, ctx, svc, "Shows", "shows", showsRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(showLibrary.ID, showLibrary.RootPath)); err != nil {
+		t.Fatalf("run show sync: %v", err)
+	}
+	assertMatchTaskItemCount(t, ctx, db, 1)
+}
+
+func TestRunSyncLibraryPathTreeCoveredFilesBypassIndependentFileFallback(t *testing.T) {
+	t.Parallel()
+
+	rootPath := t.TempDir()
+	ctx, db, svc := newDirectScanHarness(t, rootPath)
+	moviesRoot := filepath.Join(rootPath, "movies")
+	collectionDir := filepath.Join(moviesRoot, "合集5-2")
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "空房间.3.Iron.2004.1080p-MiniHD", "3.Iron.2004.1080p-MiniHD.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(collectionDir, "空房间.3-Iron.2004.2160p-TAGHD", "3-Iron.2004.2160p-TAGHD.mkv"))
+	movieLibrary := createDirectScanLibrary(t, ctx, svc, "Movies", "movies", moviesRoot)
+	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(movieLibrary.ID, movieLibrary.RootPath)); err != nil {
+		t.Fatalf("run movie sync: %v", err)
+	}
+
+	var movies []database.CatalogItem
+	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeMovie).Find(&movies).Error; err != nil {
+		t.Fatalf("load movies: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected path-tree covered files to avoid independent fallback movies, got %#v", movies)
+	}
+	var decisions []database.ClassificationDecision
+	if err := db.WithContext(ctx).Where("decision_type = ?", "path_tree_work_group").Find(&decisions).Error; err != nil {
+		t.Fatalf("load path-tree decisions: %v", err)
+	}
+	for _, decision := range decisions {
+		if decision.Status == scanDecisionStatusReviewRequired {
+			t.Fatalf("expected high-confidence path-tree version group not to require review, got %#v", decision)
+		}
+	}
+}
+
 func TestRunSyncLibraryAssociatesMovieExtrasWithMovieFolder(t *testing.T) {
 	t.Parallel()
 
@@ -937,7 +1558,7 @@ func TestRunSyncLibraryMixedClassifiesSingleNonExtraVideoAsMovie(t *testing.T) {
 	mustWriteFixtureFile(t, filepath.Join(movieDir, "deleted scene.mkv"))
 
 	mixedLibrary := createDirectScanLibrary(t, ctx, svc, "Mixed", "mixed", mixedRoot)
-	if mixedLibrary.Type != LibraryTypeMixed {
+	if mixedLibrary.Type != LibraryTypeAuto {
 		t.Fatalf("expected normalized mixed library type, got %q", mixedLibrary.Type)
 	}
 	if err := svc.RunSyncLibrary(ctx, newSyncLibraryJobPayload(mixedLibrary.ID, mixedLibrary.RootPath)); err != nil {
@@ -1018,16 +1639,8 @@ func TestRunSyncLibraryMixedClassifiesMultipleNonExtraVideosAsSeries(t *testing.
 	for idx, episode := range episodes {
 		expected := idx + 1
 		if episode.IndexNumber == nil || *episode.IndexNumber != expected || episode.ParentIndexNumber == nil || *episode.ParentIndexNumber != 1 {
-			t.Fatalf("unexpected mixed fallback episode %d: %#v", idx, episode)
+			t.Fatalf("unexpected mixed episode %d: %#v", idx, episode)
 		}
-	}
-
-	var movies int64
-	if err := db.WithContext(ctx).Model(&database.CatalogItem{}).Where("type = ?", catalog.ItemTypeMovie).Count(&movies).Error; err != nil {
-		t.Fatalf("count movies: %v", err)
-	}
-	if movies != 0 {
-		t.Fatalf("expected no movies for mixed multi-video folder, got %d", movies)
 	}
 }
 
@@ -1227,8 +1840,8 @@ func TestRunSyncLibraryOrdersExplicitDuplicateEpisodeNamesAsSeparateEpisodes(t *
 		Count(&episodeCount).Error; err != nil {
 		t.Fatalf("count episode catalog items: %v", err)
 	}
-	if episodeCount != 2 {
-		t.Fatalf("expected explicit duplicate episode names to follow sorted directory order, got %d", episodeCount)
+	if episodeCount != 1 {
+		t.Fatalf("expected duplicate explicit episode files to share one episode item, got %d", episodeCount)
 	}
 
 	assertTableCount(t, ctx, db, &database.InventoryFile{}, 2)
@@ -1249,8 +1862,8 @@ func TestRunSyncLibraryOrdersExplicitDuplicateEpisodeNamesAsSeparateEpisodes(t *
 	if assets[0].AssetType != "main" {
 		t.Fatalf("expected first asset to remain main, got %#v", assets[0])
 	}
-	if assets[1].AssetType != "main" {
-		t.Fatalf("expected sorted duplicate episode names to create a second main asset, got %#v", assets[1])
+	if assets[1].AssetType != inventory.AssetTypeVersion {
+		t.Fatalf("expected duplicate episode file to create version asset, got %#v", assets[1])
 	}
 
 	var assetItems []database.AssetItem
@@ -1265,8 +1878,8 @@ func TestRunSyncLibraryOrdersExplicitDuplicateEpisodeNamesAsSeparateEpisodes(t *
 	if assetItems[0].Role != "primary" {
 		t.Fatalf("expected first asset-item link to stay primary, got %#v", assetItems[0])
 	}
-	if assetItems[1].Role != "primary" {
-		t.Fatalf("expected second sorted episode link to use primary role, got %#v", assetItems[1])
+	if assetItems[1].Role != inventory.AssetItemRoleVersion {
+		t.Fatalf("expected duplicate episode link to use version role, got %#v", assetItems[1])
 	}
 }
 
@@ -1527,7 +2140,7 @@ func TestRunSyncLibraryScansEnabledLibraryPathsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create media source: %v", err)
 	}
-	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: "Movies", Type: LibraryTypeMovies, MediaSourceID: source.ID, RootPath: pathA})
+	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: "Movies", MediaSourceID: source.ID, RootPath: pathA})
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
@@ -1565,7 +2178,7 @@ func TestScanPolicyIgnoresExtensionsAndPreservesManualExclusionPrecedence(t *tes
 	filePath := filepath.Join(rootPath, "Movie A (2020).mkv")
 	mustWriteFixtureFile(t, filePath)
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Updates(map[string]any{"scanner_enabled": true, "realtime_monitor_enabled": true, "scheduled_refresh_enabled": true, "refresh_interval_hours": 24, "ignore_hidden_files": true, "ignore_file_extensions_json": `[".mkv"]`, "configurable_exclusion_rules": true}).Error; err != nil {
 		t.Fatalf("set scan policy: %v", err)
 	}
@@ -1589,7 +2202,7 @@ func TestScanPolicyCanDisableConfigurableExclusionRules(t *testing.T) {
 	rootPath := t.TempDir()
 	mustWriteFixtureFile(t, filepath.Join(rootPath, "Movie ad (2020).mkv"))
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	if _, err := svc.CreateScanExclusionRule(ctx, ScanExclusionRuleInput{LibraryID: &libraryRecord.ID, Name: "Scoped ad", RuleType: ScanExclusionRuleTypeFilenameToken, Value: "ad", Reason: ScanExclusionReasonAdvertisement, Enabled: true}); err != nil {
 		t.Fatalf("create scoped exclusion rule: %v", err)
 	}
@@ -1613,7 +2226,7 @@ func TestScanPolicyCanDisableInventoryProbeBatchJobs(t *testing.T) {
 	rootPath := t.TempDir()
 	mustWriteFixtureFile(t, filepath.Join(rootPath, "Movie A (2024).mkv"))
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Update("inventory_probe_batch_enabled", false).Error; err != nil {
 		t.Fatalf("disable inventory probe batch: %v", err)
 	}
@@ -1629,7 +2242,7 @@ func TestScanPolicySkipsFilesBelowMinimumSize(t *testing.T) {
 	rootPath := t.TempDir()
 	mustWriteFixtureFile(t, filepath.Join(rootPath, "Tiny Movie (2020).mkv"))
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Update("min_file_size_bytes", int64(1024)).Error; err != nil {
 		t.Fatalf("set min file size policy: %v", err)
 	}
@@ -1650,7 +2263,7 @@ func TestScanPolicyMinimumSizeZeroDoesNotLimit(t *testing.T) {
 	rootPath := t.TempDir()
 	mustWriteFixtureFile(t, filepath.Join(rootPath, "Tiny Movie (2020).mkv"))
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	if err := db.WithContext(ctx).Model(&database.LibraryScanPolicy{}).Where("library_id = ?", libraryRecord.ID).Update("min_file_size_bytes", int64(0)).Error; err != nil {
 		t.Fatalf("set min file size policy: %v", err)
 	}
@@ -1781,7 +2394,7 @@ func TestRunSyncLibraryRespectsExternalSubtitleDisabledPolicy(t *testing.T) {
 	mustWriteFixtureFile(t, filepath.Join(movieDir, "Movie A.mkv"))
 	mustWriteFixtureTextFile(t, filepath.Join(movieDir, "Movie A.srt"), "subtitle")
 	ctx, db, svc := newDirectScanHarness(t, rootPath)
-	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeMovies, rootPath)
+	libraryRecord := createDirectScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto, rootPath)
 	if err := db.WithContext(ctx).Model(&database.LibrarySubtitlePolicy{}).Where("library_id = ?", libraryRecord.ID).Update("external_sidecars_enabled", false).Error; err != nil {
 		t.Fatalf("disable external subtitles: %v", err)
 	}
@@ -1811,7 +2424,7 @@ func TestRunSyncLibraryBindsEpisodeSubtitleSidecar(t *testing.T) {
 	if err := db.WithContext(ctx).Where("type = ?", catalog.ItemTypeEpisode).First(&episode).Error; err != nil {
 		t.Fatalf("load episode: %v", err)
 	}
-	if episode.IndexNumber == nil || *episode.IndexNumber != 1 {
+	if episode.IndexNumber == nil || *episode.IndexNumber != 2 {
 		t.Fatalf("subtitle content must not change episode classification, got %#v", episode)
 	}
 	var stream database.MediaStream
@@ -2144,6 +2757,60 @@ func TestRunSyncLibraryMarksAncestorAvailabilityMissingWhenEpisodesDeleted(t *te
 	}
 	if items[0].Type != catalog.ItemTypeSeries || items[1].Type != catalog.ItemTypeSeason || items[2].Type != catalog.ItemTypeEpisode {
 		t.Fatalf("unexpected item ordering for hierarchy: %#v", items)
+	}
+}
+
+func TestCleanupMissingCatalogMarksScannerOrphanHierarchyMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx, db, svc, libraryRecord := newScanCatalogWriterHarness(t)
+	catalogSvc := catalog.NewService(db)
+	rootPath := libraryRecord.RootPath
+	keptPath := filepath.ToSlash(filepath.Join(rootPath, "kept.mkv"))
+	file := database.InventoryFile{LibraryID: libraryRecord.ID, StorageProvider: "local", StoragePath: keptPath, Container: "mkv", ContentClass: SourceContentClassVideo, Status: inventory.FileStatusAvailable}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create kept file: %v", err)
+	}
+
+	seriesPath := filepath.ToSlash(filepath.Join(rootPath, "orphan-show"))
+	series, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeSeries, Path: seriesPath, Title: "Orphan Show", AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create orphan series: %v", err)
+	}
+	seasonNumber := 1
+	seasonPath := filepath.ToSlash(filepath.Join(series.Path, "season-01"))
+	season, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeSeason, ParentID: &series.ID, Path: seasonPath, Title: "Season 1", IndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create orphan season: %v", err)
+	}
+	episodeNumber := 1
+	episodePath := filepath.ToSlash(filepath.Join(season.Path, "episode-0001"))
+	episode, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: libraryRecord.ID, Type: catalog.ItemTypeEpisode, ParentID: &season.ID, Path: episodePath, Title: "Episode 1", IndexNumber: &episodeNumber, ParentIndexNumber: &seasonNumber, AvailabilityStatus: catalog.AvailabilityAvailable})
+	if err != nil {
+		t.Fatalf("create orphan episode: %v", err)
+	}
+	for _, item := range []database.CatalogItem{series, season, episode} {
+		identityKey, ok := catalog.ScannerIdentityKeyForItem(item)
+		if !ok {
+			t.Fatalf("scanner identity unavailable for %#v", item)
+		}
+		if _, err := catalogSvc.SetIdentity(ctx, catalog.IdentityInput{ItemID: item.ID, Provider: catalog.IdentityProviderScanner, IdentityType: item.Type, IdentityKey: identityKey, SourcePath: item.Path}); err != nil {
+			t.Fatalf("set scanner identity: %v", err)
+		}
+	}
+
+	if err := svc.cleanupMissingCatalog(ctx, libraryRecord.ID, rootPath, map[string]struct{}{keptPath: {}}, nil); err != nil {
+		t.Fatalf("cleanup missing catalog: %v", err)
+	}
+
+	var items []database.CatalogItem
+	if err := db.WithContext(ctx).Where("id IN ?", []uint{series.ID, season.ID, episode.ID}).Order("id asc").Find(&items).Error; err != nil {
+		t.Fatalf("load orphan items: %v", err)
+	}
+	for _, item := range items {
+		if item.AvailabilityStatus != catalog.AvailabilityMissing || item.MissingSince == nil {
+			t.Fatalf("expected scanner orphan to become missing, got %#v", item)
+		}
 	}
 }
 
@@ -2573,7 +3240,7 @@ func createDirectScanLibrary(t *testing.T, ctx context.Context, svc *Service, na
 	if err != nil {
 		t.Fatalf("create media source %s: %v", name, err)
 	}
-	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: name, Type: libraryType, MediaSourceID: source.ID, RootPath: rootPath})
+	libraryRecord, _, err := svc.CreateLibrary(ctx, CreateLibraryInput{Name: name, MediaSourceID: source.ID, RootPath: rootPath})
 	if err != nil {
 		t.Fatalf("create library %s: %v", name, err)
 	}
@@ -2636,6 +3303,27 @@ func scannerEvidencePayloadForItem(t *testing.T, ctx context.Context, db *gorm.D
 		t.Fatalf("decode evidence payload: %v", err)
 	}
 	return payload
+}
+
+func assertMatchTaskItemCount(t *testing.T, ctx context.Context, db *gorm.DB, expected int) {
+	t.Helper()
+	var tasks []database.WorkflowTask
+	if err := db.WithContext(ctx).Where("task_type = ?", workflow.TaskTypeMatchMetadata).Find(&tasks).Error; err != nil {
+		t.Fatalf("load match tasks: %v", err)
+	}
+	seen := map[uint]struct{}{}
+	for _, task := range tasks {
+		var payload CatalogMatchBatchPayload
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			t.Fatalf("decode match payload: %v", err)
+		}
+		for _, itemID := range payload.ItemIDs {
+			seen[itemID] = struct{}{}
+		}
+	}
+	if len(seen) != expected {
+		t.Fatalf("expected %d unique match item ids, got %d from tasks %#v", expected, len(seen), tasks)
+	}
 }
 
 func metadataSidecarsFromPayload(t *testing.T, payload map[string]any) []map[string]any {

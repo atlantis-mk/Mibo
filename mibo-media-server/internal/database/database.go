@@ -72,9 +72,13 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&MediaAsset{},
 		&AssetItem{},
 		&InventoryFile{},
+		&InventoryFileSignal{},
 		&StorageIndexEntry{},
 		&StorageObservationFailure{},
 		&StorageDirectoryFingerprint{},
+		&ContentShapeProfile{},
+		&ContentShapePlan{},
+		&ContentShapeAssignment{},
 		&ScanExclusion{},
 		&FilenameExclusionRule{},
 		&FilenameExclusionRestore{},
@@ -86,6 +90,22 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&UserItemData{},
 		&ItemRollup{},
 		&CatalogSearchDocument{},
+		&MetadataItem{},
+		&MetadataExternalID{},
+		&MetadataItemSource{},
+		&MetadataItemFieldState{},
+		&MetadataItemImage{},
+		&MetadataItemPerson{},
+		&MetadataItemTag{},
+		&Resource{},
+		&ResourceFile{},
+		&ResourceLibraryLink{},
+		&ResourceMetadataLink{},
+		&LibraryMetadataProjection{},
+		&MetadataSearchDocument{},
+		&LibrarySearchDocument{},
+		&UserMetadataData{},
+		&UserResourceData{},
 		&Job{},
 		&JobActiveIntent{},
 		&Schedule{},
@@ -106,33 +126,17 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	); err != nil {
 		return nil, err
 	}
+	if cfg.Driver == "sqlite" {
+		if err := repairSQLiteConflictIndexes(db); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := validateCatalogKernelUniqueness(db); err != nil {
 		return nil, err
 	}
 
 	if err := ensureCatalogKernelIndexes(db); err != nil {
-		return nil, err
-	}
-	if err := BackfillLibraryPathsAndPolicies(db); err != nil {
-		return nil, err
-	}
-	if err := BackfillMetadataProfiles(db); err != nil {
-		return nil, err
-	}
-	if err := BackfillLibraryMetadataStrategies(db); err != nil {
-		return nil, err
-	}
-	if err := cleanupLegacyMetadataSchema(db); err != nil {
-		return nil, err
-	}
-	if err := BackfillMissingSince(db); err != nil {
-		return nil, err
-	}
-	if err := BackfillInventoryScanState(db); err != nil {
-		return nil, err
-	}
-	if err := BackfillIngestDirtyScopes(db); err != nil {
 		return nil, err
 	}
 
@@ -174,23 +178,6 @@ func BackfillInventoryScanState(db *gorm.DB) error {
 		Update("scan_state", "discovered").Error
 }
 
-func BackfillMissingSince(db *gorm.DB) error {
-	nowExpr := gorm.Expr("updated_at")
-	if err := db.Model(&InventoryFile{}).
-		Where("status = ? AND missing_since IS NULL", "missing").
-		Update("missing_since", nowExpr).Error; err != nil {
-		return err
-	}
-	if err := db.Model(&MediaAsset{}).
-		Where("status = ? AND missing_since IS NULL", "missing").
-		Update("missing_since", nowExpr).Error; err != nil {
-		return err
-	}
-	return db.Model(&CatalogItem{}).
-		Where("availability_status = ? AND missing_since IS NULL", "missing").
-		Update("missing_since", nowExpr).Error
-}
-
 func configureSQLite(db *gorm.DB) error {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -215,6 +202,26 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&CatalogItem{}, "idx_catalog_items_parent_order"},
 		{&CatalogItem{}, "idx_catalog_items_root_type_order"},
 		{&CatalogSearchDocument{}, "idx_catalog_search_documents_library_type_availability_title"},
+		{&MetadataItem{}, "idx_metadata_items_type_status_sort"},
+		{&MetadataItem{}, "idx_metadata_items_parent_order"},
+		{&MetadataItem{}, "idx_metadata_items_root_type_order"},
+		{&MetadataExternalID{}, "idx_metadata_external_identity"},
+		{&MetadataItemFieldState{}, "idx_metadata_item_field_state_identity"},
+		{&MetadataItemImage{}, "idx_metadata_item_images_selected"},
+		{&MetadataItemPerson{}, "idx_metadata_item_people_identity"},
+		{&MetadataItemTag{}, "idx_metadata_item_tags_identity"},
+		{&Resource{}, "idx_resources_stable_resource_key"},
+		{&ResourceFile{}, "idx_resource_files_resource_file_role_part"},
+		{&ResourceFile{}, "idx_resource_files_resource_part"},
+		{&ResourceLibraryLink{}, "idx_resource_library_link_identity"},
+		{&ResourceLibraryLink{}, "idx_resource_library_links_library_status"},
+		{&ResourceMetadataLink{}, "idx_resource_metadata_link_identity"},
+		{&ResourceMetadataLink{}, "idx_resource_metadata_links_item_role"},
+		{&LibraryMetadataProjection{}, "idx_library_metadata_projection_identity"},
+		{&LibraryMetadataProjection{}, "idx_library_metadata_projections_library_type_availability_title"},
+		{&LibrarySearchDocument{}, "idx_library_search_documents_library_type_availability_title"},
+		{&UserMetadataData{}, "idx_user_metadata_data_identity"},
+		{&UserResourceData{}, "idx_user_resource_data_identity"},
 		{&CatalogExternalID{}, "idx_catalog_external_identity"},
 		{&CatalogIdentity{}, "idx_catalog_identity_key"},
 		{&MetadataFieldState{}, "idx_metadata_field_state_item_field"},
@@ -222,12 +229,20 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&AssetItem{}, "idx_asset_items_asset_item_role_segment"},
 		{&AssetFile{}, "idx_asset_files_asset_part"},
 		{&AssetFile{}, "idx_asset_files_asset_file_role_part"},
-		{&InventoryFile{}, "idx_inventory_file_storage_path"},
+		{&InventoryFile{}, "idx_inventory_file_source_storage_path"},
 		{&InventoryFile{}, "idx_inventory_files_library_status_path"},
+		{&InventoryFileSignal{}, "idx_inventory_file_signal_identity"},
+		{&InventoryFileSignal{}, "idx_inventory_file_signals_library_state"},
 		{&StorageIndexEntry{}, "idx_storage_index_identity"},
 		{&StorageIndexEntry{}, "idx_storage_index_library_status_path"},
 		{&StorageIndexEntry{}, "idx_storage_index_stable_identity"},
 		{&StorageObservationFailure{}, "idx_storage_observation_failure_library_path"},
+		{&ContentShapeProfile{}, "idx_content_shape_profile_identity"},
+		{&ContentShapeProfile{}, "idx_content_shape_profiles_library_state"},
+		{&ContentShapePlan{}, "idx_content_shape_plan_scope"},
+		{&ContentShapePlan{}, "idx_content_shape_plans_library_state"},
+		{&ContentShapeAssignment{}, "idx_content_shape_assignment_file"},
+		{&ContentShapeAssignment{}, "idx_content_shape_assignments_library_state"},
 		{&ScanExclusion{}, "idx_scan_exclusions_identity"},
 		{&ScanExclusion{}, "idx_scan_exclusions_path"},
 		{&FilenameExclusionRule{}, "idx_filename_exclusion_rules_normalized_filename"},
@@ -267,61 +282,8 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 	return nil
 }
 
-func BackfillLibraryPathsAndPolicies(db *gorm.DB) error {
-	var libraries []Library
-	if err := db.Find(&libraries).Error; err != nil {
-		return err
-	}
-	for _, library := range libraries {
-		if err := backfillLibraryPath(db, library); err != nil {
-			return err
-		}
-		if err := EnsureLibraryPolicyDefaults(db, library.ID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func BackfillMetadataProfiles(db *gorm.DB) error {
-	if err := ensureMigratedMetadataProfiles(db); err != nil {
-		return err
-	}
-	if err := ensureBuiltInLocalScanProviderInstance(db); err != nil {
-		return err
-	}
-	return nil
-}
-
-func BackfillLibraryMetadataStrategies(db *gorm.DB) error {
-	if err := ensureBuiltInLocalScanProviderInstance(db); err != nil {
-		return err
-	}
-	var libraries []Library
-	if err := db.Find(&libraries).Error; err != nil {
-		return err
-	}
-	for _, library := range libraries {
-		if err := EnsureLibraryMetadataStrategy(db, library.ID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func backfillLibraryPath(db *gorm.DB, library Library) error {
-	if library.ID == 0 || library.MediaSourceID == 0 || strings.TrimSpace(library.RootPath) == "" {
-		return nil
-	}
-	var count int64
-	if err := db.Model(&LibraryPath{}).Where("library_id = ?", library.ID).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	path := LibraryPath{LibraryID: library.ID, MediaSourceID: library.MediaSourceID, RootPath: library.RootPath, DisplayName: library.Name, Enabled: true}
-	return db.Create(&path).Error
+func EnsureBuiltInMetadataProviders(db *gorm.DB) error {
+	return ensureBuiltInLocalScanProviderInstance(db)
 }
 
 func EnsureLibraryPolicyDefaults(db *gorm.DB, libraryID uint) error {
@@ -365,44 +327,6 @@ func EnsureLibraryPolicyDefaults(db *gorm.DB, libraryID uint) error {
 	return nil
 }
 
-func ensureMigratedMetadataProfiles(db *gorm.DB) error {
-	instanceID, err := ensureMigratedTMDBProviderInstance(db)
-	if err != nil {
-		return err
-	}
-	providerList := []uint{}
-	if instanceID != 0 {
-		providerList = append(providerList, instanceID)
-	}
-	profiles := []MetadataProfile{
-		{
-			Name:                      MigratedDefaultOnlineProfileName,
-			Description:               "Migrated default metadata profile backed by the legacy TMDB configuration.",
-			SearchProvidersJSON:       mustJSON(providerList),
-			DetailProvidersJSON:       mustJSON(providerList),
-			ImageProvidersJSON:        mustJSON(providerList),
-			PeopleProvidersJSON:       mustJSON(providerList),
-			HierarchyProvidersJSON:    mustJSON(providerList),
-			FallbackEnabled:           true,
-			PreferredMetadataLanguage: strings.TrimSpace(loadSystemSettingValue(db, metadataCategory, tmdbLanguageKey)),
-		},
-		{
-			Name:            MigratedDefaultLocalProfileName,
-			FallbackEnabled: false,
-		},
-	}
-	for _, profile := range profiles {
-		record := profile
-		if err := db.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "name"}},
-			DoUpdates: clause.AssignmentColumns([]string{"description", "search_providers_json", "detail_providers_json", "image_providers_json", "people_providers_json", "hierarchy_providers_json", "preferred_metadata_language", "preferred_image_language", "fallback_enabled", "updated_at"}),
-		}).Create(&record).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func ensureBuiltInLocalScanProviderInstance(db *gorm.DB) error {
 	record := MetadataProviderInstance{
 		Name:               BuiltInLocalScanProviderInstanceName,
@@ -432,307 +356,18 @@ func EnsureLibraryMetadataStrategy(db *gorm.DB, libraryID uint) error {
 	if count > 0 {
 		return nil
 	}
-	policy := LibraryMetadataPolicy{LibraryID: libraryID, LocalMetadataEnabled: true}
-	if err := db.Where("library_id = ?", libraryID).First(&policy).Error; err != nil && err != gorm.ErrRecordNotFound {
+	localScan := MetadataProviderInstance{}
+	if err := db.Where("name = ?", BuiltInLocalScanProviderInstanceName).First(&localScan).Error; err != nil {
 		return err
 	}
-	legacyBinding := legacyLibraryMetadataProfileBinding{LibraryID: libraryID}
-	if db.Migrator().HasTable("library_metadata_profile_bindings") {
-		if err := db.Table("library_metadata_profile_bindings").Where("library_id = ?", libraryID).First(&legacyBinding).Error; err != nil && err != gorm.ErrRecordNotFound {
-			return err
-		}
-	}
-	if legacyBinding.ForceLocalOnly {
-		legacyBinding.MetadataProfileID = legacyLocalOnlyProfileID(db)
-	}
-	profile := MetadataProfile{}
-	if legacyBinding.MetadataProfileID != 0 {
-		if err := db.First(&profile, legacyBinding.MetadataProfileID).Error; err != nil && err != gorm.ErrRecordNotFound {
-			return err
-		}
-	}
-	if profile.ID == 0 {
-		profile = legacyDefaultProfileForPolicy(db, loadLegacyMetadataPolicy(db, libraryID, policy))
-		if profile.ID != 0 {
-			legacyBinding.MetadataProfileID = profile.ID
-		}
-	}
-	localScanID, tmdbIDs, err := resolveBackfillStrategyProviderIDs(db)
-	if err != nil {
-		return err
-	}
-	legacyPolicy := loadLegacyMetadataPolicy(db, libraryID, policy)
-	searchProviders, detailProviders, imageProviders, peopleProviders, hierarchyProviders := backfillStrategyProviders(profile, legacyPolicy, localScanID, tmdbIDs)
 	strategy := LibraryMetadataStrategy{
-		LibraryID:                 libraryID,
-		MetadataProfileID:         uintPtrOrNil(legacyBinding.MetadataProfileID),
-		SearchProvidersJSON:       mustJSON(searchProviders),
-		DetailProvidersJSON:       mustJSON(detailProviders),
-		ImageProvidersJSON:        mustJSON(imageProviders),
-		PeopleProvidersJSON:       mustJSON(peopleProviders),
-		HierarchyProvidersJSON:    mustJSON(hierarchyProviders),
-		PreferredMetadataLanguage: strings.TrimSpace(firstNonEmpty(legacyBinding.PreferredMetadataLanguage, profile.PreferredMetadataLanguage, policy.PreferredMetadataLanguage)),
-		PreferredImageLanguage:    strings.TrimSpace(firstNonEmpty(legacyBinding.PreferredImageLanguage, profile.PreferredImageLanguage, policy.PreferredImageLanguage)),
-		MetadataCountryCode:       strings.TrimSpace(policy.MetadataCountryCode),
+		LibraryID:           libraryID,
+		DetailProvidersJSON: mustJSON([]uint{localScan.ID}),
 	}
 	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "library_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"metadata_profile_id", "search_providers_json", "detail_providers_json", "image_providers_json", "people_providers_json", "hierarchy_providers_json", "preferred_metadata_language", "preferred_image_language", "metadata_country_code", "updated_at"}),
 	}).Create(&strategy).Error
-}
-
-type legacyLibraryMetadataPolicy struct {
-	TMDBEnabled bool
-}
-
-type legacyLibraryMetadataProfileBinding struct {
-	LibraryID                 uint
-	MetadataProfileID         uint
-	PreferredMetadataLanguage string
-	PreferredImageLanguage    string
-	ForceLocalOnly            bool
-}
-
-func loadLegacyMetadataPolicy(db *gorm.DB, libraryID uint, fallback LibraryMetadataPolicy) legacyLibraryMetadataPolicy {
-	legacy := legacyLibraryMetadataPolicy{TMDBEnabled: true}
-	if !db.Migrator().HasColumn("library_metadata_policies", "tmdb_enabled") {
-		return legacy
-	}
-	if err := db.Table("library_metadata_policies").Where("library_id = ?", libraryID).Take(&legacy).Error; err == nil {
-		return legacy
-	}
-	return legacy
-}
-
-func cleanupLegacyMetadataSchema(db *gorm.DB) error {
-	if db.Migrator().HasTable("library_metadata_profile_bindings") {
-		if err := db.Migrator().DropTable("library_metadata_profile_bindings"); err != nil {
-			return err
-		}
-	}
-	for _, column := range []string{"local_only"} {
-		if db.Migrator().HasColumn("metadata_profiles", column) {
-			if err := dropLegacyColumnIndexes(db, "metadata_profiles", column); err != nil {
-				return err
-			}
-			if err := dropLegacyColumn(db, "metadata_profiles", column); err != nil {
-				return err
-			}
-		}
-	}
-	for _, column := range []string{"tmdb_enabled", "tvdb_enabled", "provider_priority_json"} {
-		if db.Migrator().HasColumn("library_metadata_policies", column) {
-			if err := dropLegacyColumnIndexes(db, "library_metadata_policies", column); err != nil {
-				return err
-			}
-			if err := dropLegacyColumn(db, "library_metadata_policies", column); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func dropLegacyColumnIndexes(db *gorm.DB, table, column string) error {
-	for _, index := range legacyColumnIndexes(table, column) {
-		if err := db.Exec(fmt.Sprintf("DROP INDEX IF EXISTS %q", index)).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func legacyColumnIndexes(table, column string) []string {
-	switch table {
-	case "metadata_profiles":
-		if column == "local_only" {
-			return []string{"idx_metadata_profiles_local_only"}
-		}
-	case "library_metadata_policies":
-		switch column {
-		case "tmdb_enabled":
-			return []string{"idx_library_metadata_policies_tmdb_enabled"}
-		case "tvdb_enabled":
-			return []string{"idx_library_metadata_policies_tvdb_enabled"}
-		case "provider_priority_json":
-			return []string{"idx_library_metadata_policies_provider_priority_json"}
-		}
-	}
-	return nil
-}
-
-func dropLegacyColumn(db *gorm.DB, table, column string) error {
-	if !isKnownLegacyMetadataColumn(table, column) {
-		return fmt.Errorf("refusing to drop unknown legacy metadata column %s.%s", table, column)
-	}
-	return db.Exec(fmt.Sprintf("ALTER TABLE %q DROP COLUMN %q", table, column)).Error
-}
-
-func isKnownLegacyMetadataColumn(table, column string) bool {
-	switch table {
-	case "metadata_profiles":
-		return column == "local_only"
-	case "library_metadata_policies":
-		switch column {
-		case "tmdb_enabled", "tvdb_enabled", "provider_priority_json":
-			return true
-		}
-	}
-	return false
-}
-
-func legacyLocalOnlyProfileID(db *gorm.DB) uint {
-	var profile MetadataProfile
-	if err := db.Where("name = ?", MigratedDefaultLocalProfileName).First(&profile).Error; err != nil {
-		return 0
-	}
-	return profile.ID
-}
-
-func legacyDefaultProfileForPolicy(db *gorm.DB, policy legacyLibraryMetadataPolicy) MetadataProfile {
-	profileName := MigratedDefaultOnlineProfileName
-	if !policy.TMDBEnabled {
-		profileName = MigratedDefaultLocalProfileName
-	}
-	var profile MetadataProfile
-	if err := db.Where("name = ?", profileName).First(&profile).Error; err != nil {
-		return MetadataProfile{}
-	}
-	return profile
-}
-
-func resolveBackfillStrategyProviderIDs(db *gorm.DB) (uint, []uint, error) {
-	var localScan MetadataProviderInstance
-	if err := db.Where("name = ?", BuiltInLocalScanProviderInstanceName).First(&localScan).Error; err != nil {
-		return 0, nil, err
-	}
-	var tmdbProviders []MetadataProviderInstance
-	if err := db.Where("provider_type = ? AND enabled = ?", MetadataProviderTypeTMDB, true).Order("id asc").Find(&tmdbProviders).Error; err != nil {
-		return 0, nil, err
-	}
-	ids := make([]uint, 0, len(tmdbProviders))
-	for _, provider := range tmdbProviders {
-		ids = append(ids, provider.ID)
-	}
-	return localScan.ID, ids, nil
-}
-
-func backfillStrategyProviders(profile MetadataProfile, policy legacyLibraryMetadataPolicy, localScanID uint, tmdbIDs []uint) ([]uint, []uint, []uint, []uint, []uint) {
-	searchProviders := filterKnownProviderIDs(unmarshalUintList(profile.SearchProvidersJSON), tmdbIDs)
-	detailProviders := filterKnownProviderIDs(unmarshalUintList(profile.DetailProvidersJSON), tmdbIDs)
-	imageProviders := filterKnownProviderIDs(unmarshalUintList(profile.ImageProvidersJSON), tmdbIDs)
-	peopleProviders := filterKnownProviderIDs(unmarshalUintList(profile.PeopleProvidersJSON), tmdbIDs)
-	hierarchyProviders := filterKnownProviderIDs(unmarshalUintList(profile.HierarchyProvidersJSON), tmdbIDs)
-	if strings.TrimSpace(profile.Name) == MigratedDefaultLocalProfileName || !policy.TMDBEnabled {
-		searchProviders = []uint{}
-		imageProviders = []uint{}
-		peopleProviders = []uint{}
-		hierarchyProviders = []uint{}
-		detailProviders = []uint{localScanID}
-		return searchProviders, detailProviders, imageProviders, peopleProviders, hierarchyProviders
-	}
-	if len(searchProviders) == 0 {
-		searchProviders = append([]uint(nil), tmdbIDs...)
-	}
-	if len(detailProviders) == 0 {
-		detailProviders = append([]uint(nil), tmdbIDs...)
-	}
-	if len(imageProviders) == 0 {
-		imageProviders = append([]uint(nil), tmdbIDs...)
-	}
-	if len(peopleProviders) == 0 {
-		peopleProviders = append([]uint(nil), tmdbIDs...)
-	}
-	if len(hierarchyProviders) == 0 {
-		hierarchyProviders = append([]uint(nil), tmdbIDs...)
-	}
-	return searchProviders, detailProviders, imageProviders, peopleProviders, hierarchyProviders
-}
-
-func filterKnownProviderIDs(candidate []uint, allowed []uint) []uint {
-	if len(candidate) == 0 || len(allowed) == 0 {
-		return []uint{}
-	}
-	allowedSet := make(map[uint]struct{}, len(allowed))
-	for _, id := range allowed {
-		allowedSet[id] = struct{}{}
-	}
-	filtered := make([]uint, 0, len(candidate))
-	for _, id := range candidate {
-		if _, ok := allowedSet[id]; ok {
-			filtered = append(filtered, id)
-		}
-	}
-	return filtered
-}
-
-func uintPtrOrNil(value uint) *uint {
-	if value == 0 {
-		return nil
-	}
-	copy := value
-	return &copy
-}
-
-func unmarshalUintList(raw string) []uint {
-	var values []uint
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &values); err != nil {
-		return []uint{}
-	}
-	return values
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
-func ensureMigratedTMDBProviderInstance(db *gorm.DB) (uint, error) {
-	config := map[string]string{}
-	for _, key := range []string{tmdbAPIKeyKey, tmdbBaseURLKey, tmdbImageBaseURLKey, tmdbLanguageKey, tmdbTimeoutKey} {
-		if value := strings.TrimSpace(loadSystemSettingValue(db, metadataCategory, key)); value != "" {
-			config[key] = value
-		}
-	}
-	var existing MetadataProviderInstance
-	if err := db.Where("name = ?", MigratedDefaultTMDBProviderInstanceName).First(&existing).Error; err == nil {
-		if len(config) == 0 {
-			if strings.TrimSpace(existing.ConfigJSON) == "" || strings.TrimSpace(existing.ConfigJSON) == "{}" {
-				return 0, nil
-			}
-			return existing.ID, nil
-		}
-	} else if err != nil && err != gorm.ErrRecordNotFound {
-		return 0, err
-	}
-	record := MetadataProviderInstance{
-		Name:               MigratedDefaultTMDBProviderInstanceName,
-		ProviderType:       MetadataProviderTypeTMDB,
-		Enabled:            true,
-		AvailabilityStatus: MetadataProviderAvailabilityAvailable,
-		ConfigJSON:         mustJSON(config),
-	}
-	if err := db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "name"}},
-		DoUpdates: clause.AssignmentColumns([]string{"provider_type", "enabled", "availability_status", "config_json", "updated_at"}),
-	}).Create(&record).Error; err != nil {
-		return 0, err
-	}
-	var stored MetadataProviderInstance
-	if err := db.Where("name = ?", MigratedDefaultTMDBProviderInstanceName).First(&stored).Error; err != nil {
-		return 0, err
-	}
-	return stored.ID, nil
-}
-
-func loadSystemSettingValue(db *gorm.DB, category, key string) string {
-	var value string
-	_ = db.Model(&SystemSetting{}).Where("category = ? AND key = ?", category, key).Select("value").Scan(&value).Error
-	return strings.TrimSpace(value)
 }
 
 func mustJSON(value any) string {
@@ -751,6 +386,111 @@ const (
 	tmdbLanguageKey     = "tmdb_language"
 	tmdbTimeoutKey      = "tmdb_timeout"
 )
+
+func repairSQLiteConflictIndexes(db *gorm.DB) error {
+	checks := []struct {
+		model           any
+		indexName       string
+		expectedColumns []string
+		expectUnique    bool
+	}{
+		{model: &ContentShapePlan{}, indexName: "idx_content_shape_plan_scope", expectedColumns: []string{"library_id", "storage_provider", "root_path", "directory_path", "classifier_version"}, expectUnique: true},
+	}
+	for _, check := range checks {
+		if err := ensureSQLiteIndexDefinition(db, check.model, check.indexName, check.expectedColumns, check.expectUnique); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureSQLiteIndexDefinition(db *gorm.DB, model any, indexName string, expectedColumns []string, expectUnique bool) error {
+	tableName, err := sqliteTableNameForModel(db, model)
+	if err != nil {
+		return err
+	}
+	exists, unique, columns, err := sqliteIndexDefinition(db, tableName, indexName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if unique == expectUnique && sameStringSlice(columns, expectedColumns) {
+		return nil
+	}
+	if err := db.Migrator().DropIndex(model, indexName); err != nil {
+		return fmt.Errorf("drop stale sqlite index %s: %w", indexName, err)
+	}
+	if err := db.Migrator().CreateIndex(model, indexName); err != nil {
+		return fmt.Errorf("recreate sqlite index %s: %w", indexName, err)
+	}
+	exists, unique, columns, err = sqliteIndexDefinition(db, tableName, indexName)
+	if err != nil {
+		return err
+	}
+	if !exists || unique != expectUnique || !sameStringSlice(columns, expectedColumns) {
+		return fmt.Errorf("sqlite index %s has unexpected definition after repair: unique=%t columns=%v", indexName, unique, columns)
+	}
+	return nil
+}
+
+func sqliteTableNameForModel(db *gorm.DB, model any) (string, error) {
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(model); err != nil {
+		return "", err
+	}
+	if stmt.Schema == nil || strings.TrimSpace(stmt.Schema.Table) == "" {
+		return "", fmt.Errorf("resolve sqlite table name for %T", model)
+	}
+	return stmt.Schema.Table, nil
+}
+
+func sqliteIndexDefinition(db *gorm.DB, tableName string, indexName string) (bool, bool, []string, error) {
+	type sqliteIndexListRow struct {
+		Name   string `gorm:"column:name"`
+		Unique int    `gorm:"column:unique"`
+	}
+	var indexes []sqliteIndexListRow
+	if err := db.Raw(fmt.Sprintf("PRAGMA index_list(%s)", sqliteQuotedIdentifier(tableName))).Scan(&indexes).Error; err != nil {
+		return false, false, nil, fmt.Errorf("list sqlite indexes for %s: %w", tableName, err)
+	}
+	for _, index := range indexes {
+		if index.Name != indexName {
+			continue
+		}
+		type sqliteIndexInfoRow struct {
+			Seqno int    `gorm:"column:seqno"`
+			Name  string `gorm:"column:name"`
+		}
+		var infoRows []sqliteIndexInfoRow
+		if err := db.Raw(fmt.Sprintf("PRAGMA index_info(%s)", sqliteQuotedIdentifier(indexName))).Scan(&infoRows).Error; err != nil {
+			return false, false, nil, fmt.Errorf("describe sqlite index %s: %w", indexName, err)
+		}
+		columns := make([]string, 0, len(infoRows))
+		for _, row := range infoRows {
+			columns = append(columns, row.Name)
+		}
+		return true, index.Unique == 1, columns, nil
+	}
+	return false, false, nil, nil
+}
+
+func sqliteQuotedIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(strings.TrimSpace(value), `"`, `""`) + `"`
+}
+
+func sameStringSlice(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
+}
 
 func validateCatalogKernelUniqueness(db *gorm.DB) error {
 	checks := []struct {
@@ -799,10 +539,10 @@ func validateCatalogKernelUniqueness(db *gorm.DB) error {
 		{
 			label:      "inventory file storage path",
 			table:      "inventory_files",
-			columns:    []string{"storage_provider", "storage_path"},
+			columns:    []string{"media_source_id", "storage_provider", "storage_path"},
 			where:      "deleted_at IS NULL",
-			groupBy:    "storage_provider, storage_path",
-			selectExpr: "storage_provider || '|' || storage_path",
+			groupBy:    "media_source_id, storage_provider, storage_path",
+			selectExpr: "CAST(media_source_id AS TEXT) || '|' || storage_provider || '|' || storage_path",
 		},
 		{
 			label:      "media stream index",
@@ -825,10 +565,77 @@ func validateCatalogKernelUniqueness(db *gorm.DB) error {
 			groupBy:    "category, key",
 			selectExpr: "category || '|' || key",
 		},
+		{
+			label:      "metadata external identity",
+			table:      "metadata_external_ids",
+			columns:    []string{"provider", "provider_type", "external_id"},
+			groupBy:    "provider, provider_type, external_id",
+			selectExpr: "provider || '|' || provider_type || '|' || external_id",
+		},
+		{
+			label:      "metadata item field state",
+			table:      "metadata_item_field_states",
+			columns:    []string{"metadata_item_id", "field_key", "locale"},
+			groupBy:    "metadata_item_id, field_key, locale",
+			selectExpr: "CAST(metadata_item_id AS TEXT) || '|' || field_key || '|' || locale",
+		},
+		{
+			label:      "resource file link",
+			table:      "resource_files",
+			columns:    []string{"resource_id", "inventory_file_id", "role", "part_index"},
+			groupBy:    "resource_id, inventory_file_id, role, part_index",
+			selectExpr: "CAST(resource_id AS TEXT) || '|' || CAST(inventory_file_id AS TEXT) || '|' || role || '|' || CAST(part_index AS TEXT)",
+		},
+		{
+			label:      "resource library link",
+			table:      "resource_library_links",
+			columns:    []string{"resource_id", "library_id"},
+			where:      "deleted_at IS NULL",
+			groupBy:    "resource_id, library_id",
+			selectExpr: "CAST(resource_id AS TEXT) || '|' || CAST(library_id AS TEXT)",
+		},
+		{
+			label:      "resource metadata link",
+			table:      "resource_metadata_links",
+			columns:    []string{"resource_id", "metadata_item_id", "role", "segment_index"},
+			groupBy:    "resource_id, metadata_item_id, role, segment_index",
+			selectExpr: "CAST(resource_id AS TEXT) || '|' || CAST(metadata_item_id AS TEXT) || '|' || role || '|' || CAST(segment_index AS TEXT)",
+		},
+		{
+			label:      "library metadata projection",
+			table:      "library_metadata_projections",
+			columns:    []string{"library_id", "metadata_item_id"},
+			groupBy:    "library_id, metadata_item_id",
+			selectExpr: "CAST(library_id AS TEXT) || '|' || CAST(metadata_item_id AS TEXT)",
+		},
+		{
+			label:      "user metadata data identity",
+			table:      "user_metadata_data",
+			columns:    []string{"user_id", "metadata_item_id"},
+			groupBy:    "user_id, metadata_item_id",
+			selectExpr: "CAST(user_id AS TEXT) || '|' || CAST(metadata_item_id AS TEXT)",
+		},
+		{
+			label:      "user resource data identity",
+			table:      "user_resource_data",
+			columns:    []string{"user_id", "resource_id", "metadata_item_id"},
+			groupBy:    "user_id, resource_id, metadata_item_id",
+			selectExpr: "CAST(user_id AS TEXT) || '|' || CAST(resource_id AS TEXT) || '|' || CAST(metadata_item_id AS TEXT)",
+		},
 	}
 
 	for _, check := range checks {
 		if !db.Migrator().HasTable(check.table) {
+			continue
+		}
+		missingColumn := false
+		for _, column := range check.columns {
+			if !db.Migrator().HasColumn(check.table, column) {
+				missingColumn = true
+				break
+			}
+		}
+		if missingColumn {
 			continue
 		}
 		var duplicates []string

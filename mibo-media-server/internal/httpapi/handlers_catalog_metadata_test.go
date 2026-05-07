@@ -22,6 +22,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/search"
 	"github.com/atlan/mibo-media-server/internal/settings"
+	"gorm.io/gorm"
 )
 
 func TestCatalogGovernanceFieldHTTPReturnsMetadataOperation(t *testing.T) {
@@ -118,7 +119,7 @@ func TestCatalogMetadataHTTPManualApplyAndRefetch(t *testing.T) {
 	catalogSvc := catalog.NewService(db)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc)
 	playbackSvc := playback.NewService(db, registry)
-	if err := configureHTTPTestTMDBProvider(ctx, settingsSvc, tmdb.URL); err != nil {
+	if err := configureHTTPTestTMDBProvider(ctx, db, settingsSvc, tmdb.URL); err != nil {
 		t.Fatalf("configure tmdb provider: %v", err)
 	}
 	item, err := catalogSvc.CreateItem(ctx, catalog.CreateItemInput{LibraryID: 1, Type: catalog.ItemTypeMovie, Title: "HTTP Movie", Path: "/movies/http.mkv", SortKey: "HTTP Movie"})
@@ -153,8 +154,15 @@ func TestCatalogMetadataHTTPManualApplyAndRefetch(t *testing.T) {
 	}
 }
 
-func configureHTTPTestTMDBProvider(ctx context.Context, settingsSvc *settings.Service, baseURL string) error {
+func configureHTTPTestTMDBProvider(ctx context.Context, db *gorm.DB, settingsSvc *settings.Service, baseURL string) error {
 	enabled := true
-	_, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: database.MigratedDefaultTMDBProviderInstanceName, ProviderType: database.MetadataProviderTypeTMDB, Enabled: &enabled, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, TMDB: &settings.MetadataProviderInput{APIKey: "http-key", BaseURL: baseURL, ImageBaseURL: baseURL + "/images", Language: "en-US", Timeout: "1s"}})
+	provider, err := settingsSvc.UpsertMetadataProviderInstance(ctx, 0, settings.UpdateMetadataProviderInstanceInput{Name: "tmdb-http", ProviderType: database.MetadataProviderTypeTMDB, Enabled: &enabled, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, TMDB: &settings.MetadataProviderInput{APIKey: "http-key", BaseURL: baseURL, ImageBaseURL: baseURL + "/images", Language: "en-US", Timeout: "1s"}})
+	if err != nil {
+		return err
+	}
+	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
+		return err
+	}
+	_, err = settingsSvc.UpdateLibraryMetadataStrategy(ctx, 1, settings.UpdateLibraryMetadataStrategyInput{SearchProviderIDs: []uint{provider.ID}, DetailProviderIDs: []uint{provider.ID}, ImageProviderIDs: []uint{provider.ID}, PeopleProviderIDs: []uint{provider.ID}, HierarchyProviderIDs: []uint{provider.ID}})
 	return err
 }

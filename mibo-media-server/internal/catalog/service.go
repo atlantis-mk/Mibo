@@ -106,6 +106,22 @@ func classificationRuleKey(input ClassificationRuleInput) string {
 	return strings.ToLower(strings.Join(parts, ":"))
 }
 
+type ProjectionWriteMode string
+
+const (
+	ProjectionModeImmediate ProjectionWriteMode = "immediate"
+	ProjectionModeDeferred  ProjectionWriteMode = "deferred"
+)
+
+func normalizeProjectionWriteMode(mode ProjectionWriteMode) ProjectionWriteMode {
+	switch ProjectionWriteMode(strings.TrimSpace(string(mode))) {
+	case ProjectionModeDeferred:
+		return ProjectionModeDeferred
+	default:
+		return ProjectionModeImmediate
+	}
+}
+
 type CreateItemInput struct {
 	LibraryID          uint
 	Type               string
@@ -132,6 +148,7 @@ type CreateItemInput struct {
 	SeriesStatus       string
 	AvailabilityStatus string
 	GovernanceStatus   string
+	ProjectionMode     ProjectionWriteMode
 }
 
 type MetadataSourceInput struct {
@@ -149,6 +166,7 @@ type MetadataSourceInput struct {
 	Confidence           *float64
 	FetchedAt            time.Time
 	ExpiresAt            *time.Time
+	ProjectionMode       ProjectionWriteMode
 }
 
 type ClassificationRuleInput struct {
@@ -168,13 +186,14 @@ type ClassificationRuleInput struct {
 }
 
 type ExternalIDInput struct {
-	ItemID       uint
-	Provider     string
-	ProviderType string
-	ExternalID   string
-	IsPrimary    bool
-	Source       string
-	Confidence   *float64
+	ItemID         uint
+	Provider       string
+	ProviderType   string
+	ExternalID     string
+	IsPrimary      bool
+	Source         string
+	Confidence     *float64
+	ProjectionMode ProjectionWriteMode
 }
 
 type ApplyFieldInput struct {
@@ -236,6 +255,7 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (databa
 		LastCanonicalizedAt: timePtr(time.Now().UTC()),
 	}
 
+	projectionMode := normalizeProjectionWriteMode(input.ProjectionMode)
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if item.ParentID != nil {
 			var parent database.CatalogItem
@@ -257,6 +277,9 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (databa
 			if err := tx.Model(&item).Update("root_id", item.ID).Error; err != nil {
 				return err
 			}
+		}
+		if projectionMode == ProjectionModeDeferred {
+			return nil
 		}
 		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: item.ID})
 	})
@@ -306,9 +329,13 @@ func (s *Service) RecordMetadataSource(ctx context.Context, input MetadataSource
 		FetchedAt:            input.FetchedAt,
 		ExpiresAt:            input.ExpiresAt,
 	}
+	projectionMode := normalizeProjectionWriteMode(input.ProjectionMode)
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&source).Error; err != nil {
 			return err
+		}
+		if projectionMode == ProjectionModeDeferred {
+			return nil
 		}
 		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: input.ItemID})
 	})
@@ -332,12 +359,16 @@ func (s *Service) SetExternalID(ctx context.Context, input ExternalIDInput) (dat
 		Source:       strings.TrimSpace(input.Source),
 		Confidence:   input.Confidence,
 	}
+	projectionMode := normalizeProjectionWriteMode(input.ProjectionMode)
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "provider"}, {Name: "provider_type"}, {Name: "external_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"item_id", "is_primary", "source", "confidence", "updated_at"}),
 		}).Create(&externalID).Error; err != nil {
 			return err
+		}
+		if projectionMode == ProjectionModeDeferred {
+			return nil
 		}
 		return s.refreshProjectionWithDB(ctx, tx, ProjectionRefreshRequest{ItemID: input.ItemID})
 	})

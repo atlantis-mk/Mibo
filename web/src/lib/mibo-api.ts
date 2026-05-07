@@ -1560,21 +1560,6 @@ export type AcceptedResult = {
   queued: boolean
 }
 
-export type CleanupSettings = {
-  missing_cleanup_enabled: boolean
-  missing_retention: string
-  missing_retention_seconds: number
-  missing_cleanup_batch_size: number
-  can_run: boolean
-  warning: string
-}
-
-export type CleanupSettingsInput = {
-  missing_cleanup_enabled: boolean
-  missing_retention_seconds: number
-  missing_cleanup_batch_size: number
-}
-
 type ApiOptions = {
   baseUrl: string
   token?: string | null
@@ -1856,10 +1841,6 @@ export function createMiboApi(options: ApiOptions) {
     runConsoleAction(actionId: string) {
       const actionEndpoints: Record<string, string> = {
         "scan-libraries": "/api/v1/admin/console/actions/scan-libraries",
-        "catalog-consistency":
-          "/api/v1/admin/console/actions/catalog-consistency",
-        "rebuild-projections":
-          "/api/v1/admin/console/actions/rebuild-projections",
       }
       const endpoint = actionEndpoints[actionId]
       if (!endpoint) {
@@ -2533,23 +2514,6 @@ export function createMiboApi(options: ApiOptions) {
     },
     listScheduleHistory(scheduleId: number) {
       return request<ScheduleRun[]>(`/api/v1/schedules/${scheduleId}/history`)
-    },
-    getCleanupSettings() {
-      return request<CleanupSettings>("/api/v1/settings/cleanup")
-    },
-    updateCleanupSettings(input: CleanupSettingsInput) {
-      return request<CleanupSettings>("/api/v1/settings/cleanup", {
-        method: "PUT",
-        body: JSON.stringify(input),
-      })
-    },
-    runMissingMediaCleanup() {
-      return request<AcceptedResult>(
-        "/api/v1/settings/cleanup/missing-media/run",
-        {
-          method: "POST",
-        }
-      )
     },
     getCatalogPlayback(
       itemId: number,

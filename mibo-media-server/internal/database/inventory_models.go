@@ -36,8 +36,9 @@ type AssetItem struct {
 type InventoryFile struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	LibraryID         uint       `gorm:"not null;index;index:idx_inventory_files_library_status_path,priority:1" json:"library_id"`
-	StorageProvider   string     `gorm:"size:64;not null;uniqueIndex:idx_inventory_file_storage_path" json:"storage_provider"`
-	StoragePath       string     `gorm:"size:2048;not null;uniqueIndex:idx_inventory_file_storage_path;index:idx_inventory_files_library_status_path,priority:3" json:"storage_path"`
+	MediaSourceID     uint       `gorm:"not null;default:0;index;uniqueIndex:idx_inventory_file_source_storage_path,priority:1" json:"media_source_id"`
+	StorageProvider   string     `gorm:"size:64;not null;uniqueIndex:idx_inventory_file_source_storage_path,priority:2" json:"storage_provider"`
+	StoragePath       string     `gorm:"size:2048;not null;uniqueIndex:idx_inventory_file_source_storage_path,priority:3;index:idx_inventory_files_library_status_path,priority:3" json:"storage_path"`
 	StableIdentityKey string     `gorm:"size:512;index" json:"stable_identity_key"`
 	HashesJSON        string     `gorm:"type:text" json:"hashes_json"`
 	ThumbnailURL      string     `gorm:"size:2048" json:"thumbnail_url,omitempty"`

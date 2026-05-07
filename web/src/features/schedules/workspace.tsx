@@ -1,30 +1,34 @@
-import { lazy, Suspense, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClockIcon, CircleHelpIcon } from 'lucide-react'
-import { toast } from 'sonner'
+import { lazy, Suspense, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { CalendarClockIcon, CircleHelpIcon } from "lucide-react"
+import { toast } from "sonner"
 
-import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
-import { Button } from '#/components/ui/button'
-import { type Schedule, type ScheduleMutationInput } from '#/lib/mibo-api'
+import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert"
+import { Button } from "#/components/ui/button"
+import {
+  type Library,
+  type Schedule,
+  type ScheduleMutationInput,
+} from "#/lib/mibo-api"
 import {
   createAuthedMiboApi,
   librariesQueryOptions,
   miboQueryKeys,
   scheduleHistoryQueryOptions,
   schedulesQueryOptions,
-} from '#/lib/mibo-query'
+} from "#/lib/mibo-query"
 
-import { ScheduleList } from './components/schedule-list'
+import { ScheduleList } from "./components/schedule-list"
 
 const ScheduleFormDialog = lazy(() =>
-  import('./components/schedule-form-dialog').then((module) => ({
+  import("./components/schedule-form-dialog").then((module) => ({
     default: module.ScheduleFormDialog,
-  })),
+  }))
 )
 const ScheduleRunHistoryDrawer = lazy(() =>
-  import('./components/schedule-run-history-drawer').then((module) => ({
+  import("./components/schedule-run-history-drawer").then((module) => ({
     default: module.ScheduleRunHistoryDrawer,
-  })),
+  }))
 )
 
 export function SchedulesWorkspace({ token }: { token: string }) {
@@ -66,7 +70,7 @@ export function SchedulesWorkspace({ token }: { token: string }) {
     onSuccess: async () => {
       setEditingSchedule(null)
       await refreshSchedules()
-      toast.success(editingSchedule ? '计划任务已更新' : '计划任务已创建')
+      toast.success(editingSchedule ? "计划任务已更新" : "计划任务已创建")
     },
     onError: (error: Error) => toast.error(error.message),
   })
@@ -76,7 +80,7 @@ export function SchedulesWorkspace({ token }: { token: string }) {
       api.toggleSchedule(schedule.id, !schedule.enabled),
     onSuccess: async () => {
       await refreshSchedules()
-      toast.success('计划任务状态已更新')
+      toast.success("计划任务状态已更新")
     },
     onError: (error: Error) => toast.error(error.message),
   })
@@ -85,7 +89,18 @@ export function SchedulesWorkspace({ token }: { token: string }) {
     mutationFn: (schedule: Schedule) => api.runScheduleNow(schedule.id),
     onSuccess: async () => {
       await refreshSchedules()
-      toast.success('计划任务已加入后台队列')
+      toast.success("计划任务已加入后台队列")
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const scanLibraryMutation = useMutation({
+    mutationFn: (library: Library) => api.scanLibrary(library.id, "changed"),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.libraries(token),
+      })
+      toast.success("媒体库扫描已加入后台队列")
     },
     onError: (error: Error) => toast.error(error.message),
   })
@@ -103,7 +118,7 @@ export function SchedulesWorkspace({ token }: { token: string }) {
               className="size-8 rounded-full text-muted-foreground"
               onClick={() =>
                 toast.info(
-                  '计划任务会在后台自动执行，也可以从列表右侧手动运行。',
+                  "计划任务会在后台自动执行，也可以从列表右侧手动运行。"
                 )
               }
             >
@@ -112,7 +127,7 @@ export function SchedulesWorkspace({ token }: { token: string }) {
             </Button>
           </div>
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            查看服务器后台维护任务的最近运行状态、耗时和用途说明，并可直接手动触发执行。
+            查看服务器后台维护任务、可扫描的媒体库和元数据治理动作，并可直接手动触发执行。
           </p>
         </div>
         <Button onClick={() => setFormOpen(true)}>新建计划任务</Button>
@@ -130,6 +145,7 @@ export function SchedulesWorkspace({ token }: { token: string }) {
         </Alert>
       ) : (
         <ScheduleList
+          libraries={librariesQuery.data ?? []}
           schedules={schedules}
           onCreate={() => {
             setEditingSchedule(null)
@@ -140,10 +156,13 @@ export function SchedulesWorkspace({ token }: { token: string }) {
             setFormOpen(true)
           }}
           onRunNow={(schedule) => runNowMutation.mutate(schedule)}
+          onScanLibrary={(library) => scanLibraryMutation.mutate(library)}
           onShowHistory={(schedule) => setHistorySchedule(schedule)}
           onToggle={(schedule) => toggleMutation.mutate(schedule)}
           runningScheduleId={runNowMutation.variables?.id}
           isRunning={runNowMutation.isPending}
+          scanningLibraryId={scanLibraryMutation.variables?.id}
+          isScanningLibrary={scanLibraryMutation.isPending}
         />
       )}
 

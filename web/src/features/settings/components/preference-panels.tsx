@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react'
 import { InfoIcon } from 'lucide-react'
-import { toast } from 'sonner'
 
-import { Button } from '#/components/ui/button'
 import {
   Card,
   CardContent,
@@ -12,11 +9,9 @@ import {
 } from '#/components/ui/card'
 import {
   Field,
-  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-  FieldTitle,
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import {
@@ -27,176 +22,8 @@ import {
   SelectValue,
 } from '#/components/ui/select'
 import { Separator } from '#/components/ui/separator'
-import { Switch } from '#/components/ui/switch'
-import { Textarea } from '#/components/ui/textarea'
 
 import { SettingSwitchField } from './setting-switch-field'
-
-const GENERAL_SETTINGS_STORAGE_KEY = 'mibo-web-general-settings'
-
-type GeneralSettingsForm = {
-  language: string
-  maintenanceMode: boolean
-  cachePath: string
-  automaticRestart: boolean
-  loginDisclaimer: string
-  customCSS: string
-}
-
-const defaultGeneralSettings: GeneralSettingsForm = {
-  language: 'zh-Hans',
-  maintenanceMode: false,
-  cachePath: '',
-  automaticRestart: true,
-  loginDisclaimer: '',
-  customCSS: '',
-}
-
-export function GeneralSettingsPanel() {
-  const [draft, setDraft] = useState<GeneralSettingsForm>(
-    defaultGeneralSettings,
-  )
-
-  useEffect(() => {
-    const savedSettings = window.localStorage.getItem(
-      GENERAL_SETTINGS_STORAGE_KEY,
-    )
-
-    if (!savedSettings) {
-      return
-    }
-
-    try {
-      setDraft({
-        ...defaultGeneralSettings,
-        ...(JSON.parse(savedSettings) as Partial<GeneralSettingsForm>),
-      })
-    } catch {
-      window.localStorage.removeItem(GENERAL_SETTINGS_STORAGE_KEY)
-    }
-  }, [])
-
-  function updateDraft<Value extends keyof GeneralSettingsForm>(
-    key: Value,
-    value: GeneralSettingsForm[Value],
-  ) {
-    setDraft((current) => ({ ...current, [key]: value }))
-  }
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    window.localStorage.setItem(
-      GENERAL_SETTINGS_STORAGE_KEY,
-      JSON.stringify(draft),
-    )
-    toast.success('通用设置已保存')
-  }
-
-  return (
-    <SettingsPanelCard
-      title="通用"
-      description="管理服务器基础行为、Web 界面语言和全局登录页展示。"
-      note="当前通用设置先保存在本机浏览器，后续可与服务端设置表打通。"
-    >
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <FieldGroup>
-          <Field>
-            <FieldLabel>首选显示语言</FieldLabel>
-            <Select
-              value={draft.language}
-              onValueChange={(value) => updateDraft('language', value)}
-            >
-              <SelectTrigger className="w-full border-border/60 bg-background text-foreground md:max-w-md">
-                <SelectValue placeholder="选择界面语言" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="zh-Hans">Chinese Simplified</SelectItem>
-                <SelectItem value="en-US">English</SelectItem>
-                <SelectItem value="ja-JP">Japanese</SelectItem>
-              </SelectContent>
-            </Select>
-            <FieldDescription>
-              控制 Mibo Web
-              的默认显示语言。翻译会持续完善，欢迎在项目中提交翻译改进。
-            </FieldDescription>
-          </Field>
-
-          <FormSwitchField
-            title="维护模式"
-            description="开启后，普通用户只会看到维护提示，管理员仍可进入设置中心检查状态。"
-            checked={draft.maintenanceMode}
-            onCheckedChange={(checked) =>
-              updateDraft('maintenanceMode', checked)
-            }
-          />
-
-          <Field>
-            <FieldLabel htmlFor="general-cache-path">高级：缓存路径</FieldLabel>
-            <Input
-              id="general-cache-path"
-              value={draft.cachePath}
-              onChange={(event) => updateDraft('cachePath', event.target.value)}
-              placeholder="留空则使用服务器默认缓存位置"
-              className="border-border/60 bg-background text-foreground placeholder:text-muted-foreground"
-            />
-            <FieldDescription>
-              用于图片缓存、临时转码产物等服务器缓存文件。建议使用服务器可写的绝对路径。
-            </FieldDescription>
-          </Field>
-
-          <FormSwitchField
-            title="自动更新"
-            description="允许服务器在空闲期间自动重启，以便插件或后台组件更新生效。"
-            checked={draft.automaticRestart}
-            onCheckedChange={(checked) =>
-              updateDraft('automaticRestart', checked)
-            }
-          />
-
-          <Field>
-            <FieldLabel htmlFor="general-login-disclaimer">
-              登录免责声明
-            </FieldLabel>
-            <Textarea
-              id="general-login-disclaimer"
-              value={draft.loginDisclaimer}
-              onChange={(event) =>
-                updateDraft('loginDisclaimer', event.target.value)
-              }
-              placeholder="显示在登录页底部的提示文字"
-              className="min-h-28 border-border/60 bg-background text-foreground placeholder:text-muted-foreground"
-            />
-            <FieldDescription>
-              可用于展示家庭媒体库使用说明、访问边界或隐私提示。
-            </FieldDescription>
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor="general-custom-css">自定义 CSS</FieldLabel>
-            <Textarea
-              id="general-custom-css"
-              value={draft.customCSS}
-              onChange={(event) => updateDraft('customCSS', event.target.value)}
-              placeholder=".mibo-login { backdrop-filter: blur(16px); }"
-              className="min-h-40 border-border/60 bg-background font-mono text-sm text-foreground placeholder:text-muted-foreground"
-            />
-            <FieldDescription>
-              用 CSS 代码微调 Mibo Web 外观。保存后会在后续全局样式接入中生效。
-            </FieldDescription>
-          </Field>
-        </FieldGroup>
-
-        <Button
-          type="submit"
-          size="lg"
-          className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
-        >
-          保存
-        </Button>
-      </form>
-    </SettingsPanelCard>
-  )
-}
 
 export function PlaybackSettingsPanel() {
   return (
@@ -250,41 +77,6 @@ export function PlaybackSettingsPanel() {
         <SettingSwitchField
           title="优先转码兼容格式"
           description="当原始文件不可直放时优先选择兼容性更高的输出格式。"
-        />
-      </FieldGroup>
-    </SettingsPanelCard>
-  )
-}
-
-export function NotificationSettingsPanel() {
-  return (
-    <SettingsPanelCard
-      title="任务通知"
-      description="控制后台任务的完成提醒、失败提醒和通知邮箱。"
-      note="通知配置会在后续版本与服务端设置表打通。"
-    >
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="notification-email">通知邮箱</FieldLabel>
-          <Input
-            id="notification-email"
-            defaultValue="admin@mibo.local"
-            className="border-border/60 bg-background text-foreground placeholder:text-muted-foreground"
-          />
-          <FieldDescription>
-            后台扫描或识别失败时用于接收摘要通知。
-          </FieldDescription>
-        </Field>
-
-        <SettingSwitchField
-          title="任务完成提醒"
-          description="扫描、识别和刷新任务完成后显示通知。"
-          defaultChecked
-        />
-        <SettingSwitchField
-          title="仅提醒失败任务"
-          description="减少干扰，只在出错时发送重点提醒。"
-          defaultChecked
         />
       </FieldGroup>
     </SettingsPanelCard>
@@ -366,34 +158,5 @@ function SettingsPanelCard({
         {children}
       </CardContent>
     </Card>
-  )
-}
-
-function FormSwitchField({
-  title,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  title: string
-  description: string
-  checked: boolean
-  onCheckedChange: (checked: boolean) => void
-}) {
-  return (
-    <Field
-      orientation="horizontal"
-      className="items-start rounded-[1.25rem] border border-border/60 bg-muted/30 p-3.5"
-    >
-      <Switch
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        className="mt-0.5 data-[state=checked]:bg-emerald-600"
-      />
-      <FieldContent>
-        <FieldTitle className="text-foreground">{title}</FieldTitle>
-        <FieldDescription>{description}</FieldDescription>
-      </FieldContent>
-    </Field>
   )
 }

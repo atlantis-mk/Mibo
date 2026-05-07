@@ -10,33 +10,6 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 )
 
-func TestResolveLibraryMetadataProfileBackfillsMigratedDefaultBinding(t *testing.T) {
-	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	ctx := context.Background()
-	svc := NewService(db, config.MetadataConfig{TMDB: config.TMDBConfig{BaseURL: "https://tmdb.example", ImageBaseURL: "https://tmdb.example/images", Language: "en-US", Timeout: time.Second}})
-	enabled := true
-	if _, err := svc.UpsertMetadataProviderInstance(ctx, 0, UpdateMetadataProviderInstanceInput{Name: database.MigratedDefaultTMDBProviderInstanceName, ProviderType: database.MetadataProviderTypeTMDB, Enabled: &enabled, AvailabilityStatus: database.MetadataProviderAvailabilityAvailable, TMDB: &MetadataProviderInput{APIKey: "tmdb-key", BaseURL: "https://tmdb.example", ImageBaseURL: "https://tmdb.example/images", Language: "en-US", Timeout: "1s"}}); err != nil {
-		t.Fatalf("create migrated tmdb provider instance: %v", err)
-	}
-	if err := database.EnsureLibraryPolicyDefaults(db, 1); err != nil {
-		t.Fatalf("ensure library policy defaults: %v", err)
-	}
-
-	resolved, err := svc.ResolveLibraryMetadataProfile(ctx, 1)
-	if err != nil {
-		t.Fatalf("resolve library metadata profile: %v", err)
-	}
-	if resolved.Profile.Name != database.MigratedDefaultOnlineProfileName {
-		t.Fatalf("expected migrated online profile, got %#v", resolved.Profile)
-	}
-	if len(resolved.SearchProviders) != 1 || resolved.SearchProviders[0].Record.Name != database.MigratedDefaultTMDBProviderInstanceName || !resolved.SearchProviders[0].Configured {
-		t.Fatalf("expected migrated TMDB provider instance, got %#v", resolved.SearchProviders)
-	}
-}
-
 func TestListMetadataProviderInstancesIncludesBuiltInLocalScan(t *testing.T) {
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {

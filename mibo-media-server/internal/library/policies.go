@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
@@ -400,7 +401,21 @@ func (s *Service) UpdateLibraryPath(ctx context.Context, libraryID uint, input U
 		updates["enabled"] = *input.Enabled
 	}
 	if len(updates) > 0 {
-		if err := s.db.WithContext(ctx).Model(&database.LibraryPath{}).Where("library_id = ? AND id = ?", libraryID, input.PathID).Updates(updates).Error; err != nil {
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&database.LibraryPath{}).Where("library_id = ? AND id = ?", libraryID, input.PathID).Updates(updates).Error; err != nil {
+				return err
+			}
+			if enabled, ok := updates["enabled"].(bool); ok && !enabled {
+				return markContentShapeScopeDeleted(ctx, tx, time.Now().UTC(), "library_id = ? AND library_path_id = ?", libraryID, input.PathID)
+			}
+			if _, ok := updates["root_path"]; ok {
+				return markContentShapeScopeDeleted(ctx, tx, time.Now().UTC(), "library_id = ? AND library_path_id = ?", libraryID, input.PathID)
+			}
+			if _, ok := updates["media_source_id"]; ok {
+				return markContentShapeScopeDeleted(ctx, tx, time.Now().UTC(), "library_id = ? AND library_path_id = ?", libraryID, input.PathID)
+			}
+			return nil
+		}); err != nil {
 			return LibraryPathView{}, err
 		}
 	}

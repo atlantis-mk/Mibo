@@ -122,7 +122,6 @@ func (s *Service) RegisterWorkflowHandlers(runner *workflow.Runner) {
 	runner.Register(workflow.TaskTypeProbeInventory, s.RunWorkflowInventoryProbeBatch)
 	runner.Register(workflow.TaskTypeProbeInventoryFile, s.RunWorkflowInventoryFileProbe)
 	runner.Register(workflow.TaskTypeMatchMetadata, s.RunWorkflowCatalogMatchBatch)
-	runner.Register(workflow.TaskTypeCleanupMissing, s.RunWorkflowMissingMediaCleanup)
 }
 
 func (s *Service) queueStandaloneWorkflowTask(ctx context.Context, libraryID uint, rootPath string, reason string, taskType string, stage string, taskKeySuffix string, payload any) (database.WorkflowRun, error) {
@@ -224,15 +223,6 @@ func (s *Service) RunWorkflowInventoryFileProbe(ctx context.Context, task databa
 		return fmt.Errorf("inventory file id is required")
 	}
 	return s.RunInventoryProbeBatch(ctx, InventoryProbeBatchPayload{LibraryID: task.LibraryID, FileIDs: []uint{payload.InventoryFileID}})
-}
-
-func (s *Service) RunWorkflowMissingMediaCleanup(ctx context.Context, task database.WorkflowTask) error {
-	var payload MissingMediaCleanupPayload
-	if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-		return fmt.Errorf("decode missing cleanup workflow payload: %w", err)
-	}
-	_, err := s.RunMissingMediaCleanupJob(ctx, payload)
-	return err
 }
 
 func (s *Service) RunWorkflowCatalogMatchBatch(ctx context.Context, task database.WorkflowTask) error {

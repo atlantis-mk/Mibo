@@ -1,9 +1,7 @@
 import {
-  BellIcon,
   CalendarClockIcon,
   ClipboardListIcon,
   DatabaseIcon,
-  EraserIcon,
   FileX2Icon,
   GlobeIcon,
   LayoutDashboardIcon,
@@ -20,7 +18,6 @@ import {
 import type { ComponentType } from "react"
 
 export type SettingsSectionPath =
-  | "/settings/general"
   | "/settings/health"
   | "/settings/users"
   | "/settings/devices"
@@ -28,13 +25,10 @@ export type SettingsSectionPath =
   | "/settings/console"
   | "/settings/library"
   | "/settings/scan-exclusions"
-  | "/settings/cleanup"
-  | "/settings/database"
   | "/settings/network"
   | "/settings/live-tv"
   | "/settings/metadata-sources"
   | "/settings/playback"
-  | "/settings/notifications"
   | "/settings/security"
   | "/settings/schedules"
   | "/settings/jobs"
@@ -104,26 +98,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     matchPrefix: "/settings/logs",
   },
   {
-    key: "notifications",
-    group: "总览与监控",
-    icon: BellIcon,
-    title: "任务通知",
-    description: "任务提醒、失败提醒和通知邮箱。",
-    status: "提醒",
-    to: "/settings/notifications",
-    matchPrefix: "/settings/notifications",
-  },
-  {
-    key: "general",
-    group: "基础与访问",
-    icon: GlobeIcon,
-    title: "通用",
-    description: "服务器基础行为、界面语言、维护模式和全局 Web 外观。",
-    status: "基础",
-    to: "/settings/general",
-    matchPrefix: "/settings/general",
-  },
-  {
     key: "network",
     group: "基础与访问",
     icon: GlobeIcon,
@@ -184,16 +158,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     matchPrefix: "/settings/scan-exclusions",
   },
   {
-    key: "cleanup",
-    group: "媒体库",
-    icon: EraserIcon,
-    title: "清理",
-    description: "配置缺失媒体硬删除策略，并主动触发缺失媒体清理任务。",
-    status: "危险",
-    to: "/settings/cleanup",
-    matchPrefix: "/settings/cleanup",
-  },
-  {
     key: "metadata-sources",
     group: "元数据",
     icon: KeyRoundIcon,
@@ -242,15 +206,5 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     status: "设备",
     to: "/settings/dlna",
     matchPrefix: "/settings/dlna",
-  },
-  {
-    key: "database",
-    group: "高级系统",
-    icon: DatabaseIcon,
-    title: "数据库",
-    description: "调整缓存尺寸、关闭时优化和下次启动数据库清理行为。",
-    status: "高级",
-    to: "/settings/database",
-    matchPrefix: "/settings/database",
   },
 ]

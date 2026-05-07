@@ -38,7 +38,6 @@ import {
   getMediaCardBadgeCount,
   getMediaCardPosterUrl,
   getMediaCardType,
-  blocksMediaCardCatalogActions,
 } from "#/lib/media-presentation"
 import {
   createAuthedMiboApi,
@@ -108,7 +107,6 @@ export function MediaPosterCard({
     : undefined
   const organizingState = item.organizing_summary?.state
   const isOrganizing = Boolean(item.organizing || isInventoryOnly)
-  const blocksCatalogActions = blocksMediaCardCatalogActions(item)
   const canOpenDetails = !isInventoryOnly
   const canApplyIgnore =
     !isInventoryOnly &&
@@ -227,7 +225,7 @@ export function MediaPosterCard({
             assetId: undefined,
             inventoryFileId: playInventoryFileID,
           }}
-          preload={false}
+          preload="intent"
           aria-label={`${hasProgress ? "继续播放" : "播放"} ${title}`}
           className="absolute inset-0 z-10 rounded-[1.35rem] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
@@ -298,8 +296,11 @@ export function MediaPosterCard({
                 <Link
                   to="/media/$id"
                   params={{ id: String(item.id) }}
-                  search={{ view: mediaType === "show" ? "series" : undefined }}
-                  preload={false}
+                  search={{
+                    view: mediaType === "show" ? "series" : undefined,
+                    episodePage: undefined,
+                  }}
+                  preload="intent"
                 >
                   <InfoIcon className="size-3.5" />
                   <span className="sr-only">详情</span>
@@ -442,17 +443,19 @@ function useAuthedObjectUrl(url?: string) {
   const [objectUrl, setObjectUrl] = useState("")
 
   useEffect(() => {
-    if (!url || !token) {
+    const requestUrl = url
+    if (!requestUrl || !token) {
       setObjectUrl("")
       return
     }
 
+    const resolvedUrl = buildApiUrl(requestUrl)
     let cancelled = false
     let nextObjectUrl = ""
 
     async function loadImage() {
       try {
-        const response = await fetch(buildApiUrl(url), {
+        const response = await fetch(resolvedUrl, {
           headers: { Authorization: `Bearer ${token}` },
         })
         if (!response.ok) {

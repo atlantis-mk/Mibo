@@ -30,6 +30,8 @@ type LibraryProjectionRefreshPayload struct {
 	RootPath  string `json:"root_path"`
 }
 
+const projectionSQLBatchSize = 500
+
 func (s *Service) RefreshItemProjection(ctx context.Context, itemID uint) error {
 	if itemID == 0 {
 		return errors.New("item id is required")
@@ -101,19 +103,23 @@ func (s *Service) refreshProjectionWithDB(ctx context.Context, db *gorm.DB, requ
 
 	now := time.Now().UTC()
 	if len(targetRollupIDs) > 0 {
-		if err := db.WithContext(ctx).Where("item_id IN ?", targetRollupIDs).Delete(&database.ItemRollup{}).Error; err != nil {
+		if err := forEachProjectionUintBatch(targetRollupIDs, func(batch []uint) error {
+			return db.WithContext(ctx).Where("item_id IN ?", batch).Delete(&database.ItemRollup{}).Error
+		}); err != nil {
 			return err
 		}
 	}
 	if len(targetDocIDs) > 0 {
-		if err := db.WithContext(ctx).Where("item_id IN ?", targetDocIDs).Delete(&database.CatalogSearchDocument{}).Error; err != nil {
+		if err := forEachProjectionUintBatch(targetDocIDs, func(batch []uint) error {
+			return db.WithContext(ctx).Where("item_id IN ?", batch).Delete(&database.CatalogSearchDocument{}).Error
+		}); err != nil {
 			return err
 		}
 	}
 
 	rollups := buildItemRollups(items, targetRollupIDs, now)
 	if len(rollups) > 0 {
-		if err := db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&rollups).Error; err != nil {
+		if err := db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).CreateInBatches(&rollups, projectionSQLBatchSize).Error; err != nil {
 			return err
 		}
 	}
@@ -123,7 +129,7 @@ func (s *Service) refreshProjectionWithDB(ctx context.Context, db *gorm.DB, requ
 		return err
 	}
 	if len(docs) > 0 {
-		if err := db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&docs).Error; err != nil {
+		if err := db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).CreateInBatches(&docs, projectionSQLBatchSize).Error; err != nil {
 			return err
 		}
 	}
@@ -298,7 +304,14 @@ func (s *Service) buildCatalogSearchDocuments(ctx context.Context, tx *gorm.DB, 
 
 func (s *Service) loadExternalIDsByItem(ctx context.Context, tx *gorm.DB, itemIDs []uint) (map[uint][]string, error) {
 	var rows []database.CatalogExternalID
-	if err := tx.WithContext(ctx).Where("item_id IN ?", itemIDs).Order("item_id asc, provider asc, provider_type asc, external_id asc").Find(&rows).Error; err != nil {
+	if err := forEachProjectionUintBatch(itemIDs, func(batch []uint) error {
+		var batchRows []database.CatalogExternalID
+		if err := tx.WithContext(ctx).Where("item_id IN ?", batch).Order("item_id asc, provider asc, provider_type asc, external_id asc").Find(&batchRows).Error; err != nil {
+			return err
+		}
+		rows = append(rows, batchRows...)
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	byItem := make(map[uint][]string, len(itemIDs))
@@ -314,13 +327,23 @@ func (s *Service) loadPeopleByItem(ctx context.Context, tx *gorm.DB, itemIDs []u
 		ItemID uint
 		Name   string
 	}
-	if err := tx.WithContext(ctx).
-		Table("item_people").
-		Select("item_people.item_id, people.name").
-		Joins("JOIN people ON people.id = item_people.person_id").
-		Where("item_people.item_id IN ?", itemIDs).
-		Order("item_people.item_id asc, item_people.sort_order asc, people.name asc").
-		Scan(&rows).Error; err != nil {
+	if err := forEachProjectionUintBatch(itemIDs, func(batch []uint) error {
+		var batchRows []struct {
+			ItemID uint
+			Name   string
+		}
+		if err := tx.WithContext(ctx).
+			Table("item_people").
+			Select("item_people.item_id, people.name").
+			Joins("JOIN people ON people.id = item_people.person_id").
+			Where("item_people.item_id IN ?", batch).
+			Order("item_people.item_id asc, item_people.sort_order asc, people.name asc").
+			Scan(&batchRows).Error; err != nil {
+			return err
+		}
+		rows = append(rows, batchRows...)
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	byItem := make(map[uint][]string, len(itemIDs))
@@ -335,13 +358,23 @@ func (s *Service) loadTagsByItem(ctx context.Context, tx *gorm.DB, itemIDs []uin
 		ItemID uint
 		Name   string
 	}
-	if err := tx.WithContext(ctx).
-		Table("item_tags").
-		Select("item_tags.item_id, tags.name").
-		Joins("JOIN tags ON tags.id = item_tags.tag_id").
-		Where("item_tags.item_id IN ?", itemIDs).
-		Order("item_tags.item_id asc, tags.kind asc, tags.name asc").
-		Scan(&rows).Error; err != nil {
+	if err := forEachProjectionUintBatch(itemIDs, func(batch []uint) error {
+		var batchRows []struct {
+			ItemID uint
+			Name   string
+		}
+		if err := tx.WithContext(ctx).
+			Table("item_tags").
+			Select("item_tags.item_id, tags.name").
+			Joins("JOIN tags ON tags.id = item_tags.tag_id").
+			Where("item_tags.item_id IN ?", batch).
+			Order("item_tags.item_id asc, tags.kind asc, tags.name asc").
+			Scan(&batchRows).Error; err != nil {
+			return err
+		}
+		rows = append(rows, batchRows...)
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	byItem := make(map[uint][]string, len(itemIDs))
@@ -391,6 +424,19 @@ func sortedProjectionIDs(values map[uint]struct{}) []uint {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
+}
+
+func forEachProjectionUintBatch(values []uint, fn func([]uint) error) error {
+	for start := 0; start < len(values); start += projectionSQLBatchSize {
+		end := start + projectionSQLBatchSize
+		if end > len(values) {
+			end = len(values)
+		}
+		if err := fn(values[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func maxCatalogTime(current *time.Time, candidates ...*time.Time) *time.Time {
