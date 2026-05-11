@@ -8,7 +8,9 @@ type IngestDirtyUnit struct {
 	ScopeKind       string     `gorm:"size:64;not null;index:idx_ingest_dirty_units_claim,priority:2;index:idx_ingest_dirty_units_scope,priority:1" json:"scope_kind"`
 	LibraryID       uint       `gorm:"not null;index:idx_ingest_dirty_units_library,priority:1;index:idx_ingest_dirty_units_scope,priority:2" json:"library_id"`
 	InventoryFileID *uint      `gorm:"index" json:"inventory_file_id,omitempty"`
-	CatalogItemID   *uint      `gorm:"index" json:"catalog_item_id,omitempty"`
+	ResourceID      *uint      `gorm:"index" json:"resource_id,omitempty"`
+	MetadataItemID  *uint      `gorm:"index" json:"metadata_item_id,omitempty"`
+	ProjectionID    *uint      `gorm:"index" json:"projection_id,omitempty"`
 	RootPath        string     `gorm:"size:2048;index:idx_ingest_dirty_units_scope,priority:3" json:"root_path,omitempty"`
 	Reason          string     `gorm:"size:128;not null" json:"reason"`
 	Status          string     `gorm:"size:64;not null;default:dirty;index:idx_ingest_dirty_units_claim,priority:1" json:"status"`
@@ -25,7 +27,9 @@ type IngestCondition struct {
 	UnitKey             string     `gorm:"size:512;not null;uniqueIndex:idx_ingest_conditions_unit_type;index:idx_ingest_conditions_unit_status,priority:1" json:"unit_key"`
 	LibraryID           uint       `gorm:"not null;index:idx_ingest_conditions_library_status,priority:1" json:"library_id"`
 	InventoryFileID     *uint      `gorm:"index" json:"inventory_file_id,omitempty"`
-	CatalogItemID       *uint      `gorm:"index" json:"catalog_item_id,omitempty"`
+	ResourceID          *uint      `gorm:"index" json:"resource_id,omitempty"`
+	MetadataItemID      *uint      `gorm:"index" json:"metadata_item_id,omitempty"`
+	ProjectionID        *uint      `gorm:"index" json:"projection_id,omitempty"`
 	ConditionType       string     `gorm:"size:64;not null;uniqueIndex:idx_ingest_conditions_unit_type;index:idx_ingest_conditions_type_status,priority:1" json:"condition_type"`
 	Status              string     `gorm:"size:64;not null;index:idx_ingest_conditions_type_status,priority:2;index:idx_ingest_conditions_library_status,priority:2;index:idx_ingest_conditions_unit_status,priority:2" json:"status"`
 	Reason              string     `gorm:"size:128;index" json:"reason,omitempty"`
@@ -48,7 +52,9 @@ type IngestEvent struct {
 	UnitKey             string     `gorm:"size:512;not null;index:idx_ingest_events_unit_created,priority:1" json:"unit_key"`
 	LibraryID           uint       `gorm:"not null;index:idx_ingest_events_library_created,priority:1" json:"library_id"`
 	InventoryFileID     *uint      `gorm:"index" json:"inventory_file_id,omitempty"`
-	CatalogItemID       *uint      `gorm:"index" json:"catalog_item_id,omitempty"`
+	ResourceID          *uint      `gorm:"index" json:"resource_id,omitempty"`
+	MetadataItemID      *uint      `gorm:"index" json:"metadata_item_id,omitempty"`
+	ProjectionID        *uint      `gorm:"index" json:"projection_id,omitempty"`
 	ConditionID         *uint      `gorm:"index:idx_ingest_events_condition_created,priority:1" json:"condition_id,omitempty"`
 	ConditionType       string     `gorm:"size:64;index" json:"condition_type,omitempty"`
 	EventType           string     `gorm:"size:64;not null;index" json:"event_type"`

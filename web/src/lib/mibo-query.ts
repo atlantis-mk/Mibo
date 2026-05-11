@@ -22,7 +22,7 @@ export const miboQueryKeys = {
     ["library", "detail", token, libraryId] as const,
   libraryBrowse: (
     token: string,
-    libraryId: number,
+    scopeKey: string,
     tab: string,
     filters: unknown,
     page: number,
@@ -32,7 +32,7 @@ export const miboQueryKeys = {
       "library",
       "browse",
       token,
-      libraryId,
+      scopeKey,
       tab,
       filters,
       page,
@@ -40,14 +40,24 @@ export const miboQueryKeys = {
     ] as const,
   catalogItemDetail: (token: string, itemId: number) =>
     ["catalog", "detail", token, itemId] as const,
+  metadataItemResources: (token: string, itemId: number) =>
+    ["metadata", "resources", token, itemId] as const,
   catalogPersonDetail: (token: string, personId: number) =>
     ["catalog", "person-detail", token, personId] as const,
   catalogItemProgress: (token: string, itemId: number) =>
     ["catalog", "progress", token, itemId] as const,
-  catalogSeriesSeasons: (token: string, itemId: number) =>
-    ["catalog", "series-seasons", token, itemId] as const,
-  catalogPlayback: (token: string, itemId: number, assetId?: number) =>
-    ["catalog", "playback", token, itemId, assetId ?? "default"] as const,
+  catalogPlayback: (
+    token: string,
+    itemId: number,
+    options?: { resourceId?: number }
+  ) =>
+    [
+      "catalog",
+      "playback",
+      token,
+      itemId,
+      options?.resourceId ?? "default-resource",
+    ] as const,
   inventoryFilePlayback: (token: string, fileId: number) =>
     ["inventory-file", "playback", token, fileId] as const,
   catalogGovernanceWorkspace: (token: string, itemId: number) =>
@@ -103,26 +113,14 @@ export function loginSessionsQueryOptions(token: string) {
 export function homeDataQueryOptions(token: string) {
   return queryOptions({
     queryKey: miboQueryKeys.homeData(token),
-    refetchInterval: (query) => {
-      const libraries = query.state.data?.libraries ?? []
-      const hasActiveIngest = libraries.some((library) =>
-        ["pending", "syncing"].includes(library.status)
-      )
-      return hasActiveIngest ? 5000 : false
-    },
     queryFn: async () => {
       const api = createAuthedMiboApi(token)
-      const [
-        items,
-        continueWatching,
-        libraries,
-        latestByLibrary,
-        healthIssues,
-      ] = await Promise.all([
+      const [items, continueWatching, contentSections, mediaOverview, healthIssues] =
+        await Promise.all([
         api.recentlyAdded(6),
         api.continueWatching(),
-        api.listLibraries(),
-        api.latestByLibrary(),
+        api.homeSections(),
+        api.homeMediaOverview(),
         api.listHealthIssues().catch(() => []),
       ])
 
@@ -130,17 +128,16 @@ export function homeDataQueryOptions(token: string) {
       const safeContinueWatching = getLatestContinueWatchingEntries(
         continueWatching ?? []
       )
-      const safeLibraries = libraries ?? []
-      const safeLatestByLibrary = latestByLibrary ?? []
+      const safeContentSections = contentSections ?? []
+      const safeMediaOverview = mediaOverview ?? { sections: [] }
       const safeHealthIssues = healthIssues ?? []
 
       return {
         items: safeItems,
         continueWatching: safeContinueWatching,
         continueWatchingCount: safeContinueWatching.length,
-        libraries: safeLibraries,
-        libraryCount: safeLibraries.length,
-        latestByLibrary: safeLatestByLibrary,
+        contentSections: safeContentSections,
+        mediaOverview: safeMediaOverview,
         healthIssues: safeHealthIssues,
       }
     },
@@ -231,10 +228,25 @@ export function adminUsersQueryOptions(token: string) {
   })
 }
 
-export function catalogItemDetailQueryOptions(token: string, itemId: number) {
+export function metadataItemDetailQueryOptions(token: string, itemId: number) {
   return queryOptions({
     queryKey: miboQueryKeys.catalogItemDetail(token, itemId),
-    queryFn: () => createAuthedMiboApi(token).getCatalogItem(itemId),
+    queryFn: () => createAuthedMiboApi(token).getMetadataItem(itemId),
+  })
+}
+
+export function metadataItemResourcesQueryOptions(
+  token: string,
+  itemId: number,
+  libraryId?: number
+) {
+  return queryOptions({
+    queryKey: [...miboQueryKeys.metadataItemResources(token, itemId), libraryId ?? "all"],
+    queryFn: () =>
+      createAuthedMiboApi(token).listMetadataItemResources(itemId, {
+        libraryId,
+      }),
+    enabled: itemId > 0,
   })
 }
 
@@ -249,15 +261,17 @@ export function catalogPersonDetailQueryOptions(
   })
 }
 
-export function catalogItemProgressQueryOptions(token: string, itemId: number) {
-  return queryOptions({
-    queryKey: miboQueryKeys.catalogItemProgress(token, itemId),
-    queryFn: async () => {
-      try {
-        const progress =
-          await createAuthedMiboApi(token).getCatalogItemProgress(itemId)
+export function metadataItemProgressQueryOptions(token: string, itemId: number) {
+	return queryOptions({
+		queryKey: miboQueryKeys.catalogItemProgress(token, itemId),
+		queryFn: async () => {
+			try {
+				const progress =
+					await createAuthedMiboApi(token).getMetadataItemProgress(itemId)
 
-        return progress.position_seconds > 0 || progress.watched
+        return progress.position_seconds > 0 ||
+          progress.watched ||
+          typeof progress.preferred_resource_id === "number"
           ? progress
           : null
       } catch {
@@ -267,28 +281,17 @@ export function catalogItemProgressQueryOptions(token: string, itemId: number) {
   })
 }
 
-export function catalogSeriesSeasonsQueryOptions(
-  token: string,
-  itemId: number
-) {
-  return queryOptions({
-    queryKey: miboQueryKeys.catalogSeriesSeasons(token, itemId),
-    queryFn: () => createAuthedMiboApi(token).listCatalogSeriesSeasons(itemId),
-    enabled: itemId > 0,
-  })
-}
-
 export function catalogPlaybackQueryOptions(
   token: string,
   itemId: number,
-  assetId?: number
+  options?: { resourceId?: number }
 ) {
   return queryOptions({
-    queryKey: miboQueryKeys.catalogPlayback(token, itemId, assetId),
+    queryKey: miboQueryKeys.catalogPlayback(token, itemId, options),
     queryFn: () =>
       createAuthedMiboApi(token).getCatalogPlayback(itemId, {
         clientProfile: "web",
-        assetId,
+        resourceId: options?.resourceId,
       }),
     enabled: itemId > 0,
   })

@@ -300,7 +300,7 @@ function MetricGrid({ summary }: { summary: ConsoleSummary }) {
   const metrics = [
     ["媒体库", summary.media.libraries, DatabaseIcon],
     ["媒体源", summary.media.media_sources, HardDriveIcon],
-    ["目录项目", summary.media.catalog_items, LayoutDashboardIcon],
+    ["元数据项目", summary.media.metadata_items, LayoutDashboardIcon],
     ["库存文件", summary.media.inventory_files, HardDriveIcon],
     ["电影", summary.media.movies, PlayCircleIcon],
     ["剧集", summary.media.series, MonitorSmartphoneIcon],
@@ -472,7 +472,7 @@ function managementEntryStats(title: string, summary: ConsoleSummary) {
       ]
     case "数据库":
       return [
-        { label: "目录项目", value: summary.media.catalog_items },
+        { label: "元数据项目", value: summary.media.metadata_items },
         { label: "库存文件", value: summary.media.inventory_files },
       ]
     case "计划任务":

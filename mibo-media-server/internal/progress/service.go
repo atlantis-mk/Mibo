@@ -2,7 +2,6 @@ package progress
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -15,8 +14,8 @@ type Service struct {
 }
 
 type UpdateInput struct {
-	ItemID            uint   `json:"item_id,omitempty"`
-	AssetID           *uint  `json:"asset_id,omitempty"`
+	MetadataItemID    uint   `json:"metadata_item_id,omitempty"`
+	ResourceID        uint   `json:"resource_id,omitempty"`
 	PositionSeconds   int    `json:"position_seconds"`
 	DurationSeconds   *int   `json:"duration_seconds,omitempty"`
 	Completed         bool   `json:"completed"`
@@ -25,17 +24,18 @@ type UpdateInput struct {
 }
 
 type State struct {
-	UserID           uint       `json:"user_id"`
-	ItemID           uint       `json:"item_id,omitempty"`
-	AssetID          *uint      `json:"asset_id,omitempty"`
-	PositionSeconds  int        `json:"position_seconds"`
-	DurationSeconds  *int       `json:"duration_seconds,omitempty"`
-	PlayedPercentage *float64   `json:"played_percentage,omitempty"`
-	ProgressFrameURL string     `json:"progress_frame_url,omitempty"`
-	PlayCount        int        `json:"play_count,omitempty"`
-	Watched          bool       `json:"watched"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
-	LastPlayedAt     *time.Time `json:"last_played_at,omitempty"`
+	UserID              uint       `json:"user_id"`
+	MetadataItemID      uint       `json:"metadata_item_id,omitempty"`
+	ResourceID          uint       `json:"resource_id,omitempty"`
+	PreferredResourceID *uint      `json:"preferred_resource_id,omitempty"`
+	PositionSeconds     int        `json:"position_seconds"`
+	DurationSeconds     *int       `json:"duration_seconds,omitempty"`
+	PlayedPercentage    *float64   `json:"played_percentage,omitempty"`
+	ProgressFrameURL    string     `json:"progress_frame_url,omitempty"`
+	PlayCount           int        `json:"play_count,omitempty"`
+	Watched             bool       `json:"watched"`
+	CompletedAt         *time.Time `json:"completed_at,omitempty"`
+	LastPlayedAt        *time.Time `json:"last_played_at,omitempty"`
 }
 
 func NewService(db *gorm.DB, args ...any) *Service {
@@ -48,103 +48,14 @@ func (s *Service) Status() string {
 }
 
 func (s *Service) Update(ctx context.Context, userID uint, input UpdateInput) (State, error) {
-	return s.updateCatalog(ctx, userID, input)
-}
-
-func (s *Service) updateCatalog(ctx context.Context, userID uint, input UpdateInput) (State, error) {
-	if input.ItemID == 0 {
-		return State{}, fmt.Errorf("item_id is required")
-	}
-	if input.PositionSeconds < 0 {
-		input.PositionSeconds = 0
-	}
-
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", input.ItemID).
-		First(&item).Error; err != nil {
-		return State{}, err
-	}
-	if input.AssetID != nil {
-		var assetLink database.AssetItem
-		if err := s.db.WithContext(ctx).
-			Where("item_id = ? AND asset_id = ?", input.ItemID, *input.AssetID).
-			First(&assetLink).Error; err != nil {
-			return State{}, fmt.Errorf("invalid asset_id for catalog item")
-		}
-	}
-
-	duration := input.DurationSeconds
-	if duration == nil {
-		duration = item.RuntimeSeconds
-	}
-	policy, err := s.playbackPolicy(ctx, item.LibraryID)
-	if err != nil {
-		return State{}, err
-	}
-	if !input.Completed && !policy.shouldRecordResume(duration) {
-		return State{UserID: userID, ItemID: input.ItemID, AssetID: input.AssetID, DurationSeconds: duration, Watched: false}, nil
-	}
-
-	var data database.UserItemData
-	lookup := s.db.WithContext(ctx).Where("user_id = ? AND item_id = ?", userID, input.ItemID)
-	if input.AssetID == nil {
-		lookup = lookup.Where("asset_id IS NULL")
-	} else {
-		lookup = lookup.Where("asset_id = ?", *input.AssetID)
-	}
-	err = lookup.First(&data).Error
-	created := false
-	if err != nil {
-		if err != gorm.ErrRecordNotFound {
+	if input.MetadataItemID != 0 && input.ResourceID != 0 {
+		if state, ok, err := s.updateResource(ctx, userID, input); err != nil {
 			return State{}, err
-		}
-		data = database.UserItemData{UserID: userID, ItemID: input.ItemID, AssetID: input.AssetID}
-		created = true
-	}
-
-	now := time.Now().UTC()
-	data = mergeCatalogProgress(data, input, duration, now, policy)
-	if created {
-		if err := s.db.WithContext(ctx).Create(&data).Error; err != nil {
-			return State{}, err
-		}
-	} else {
-		if err := s.db.WithContext(ctx).Save(&data).Error; err != nil {
-			return State{}, err
+		} else if ok {
+			return state, nil
 		}
 	}
-
-	return toCatalogState(data, duration), nil
-}
-
-func mergeCatalogProgress(data database.UserItemData, input UpdateInput, duration *int, now time.Time, policy playbackPolicy) database.UserItemData {
-	completed := input.Completed || policy.isCompleted(input.PositionSeconds, duration)
-	data.LastPlayedAt = &now
-	data.PlayedPercentage = playedPercentage(input.PositionSeconds, duration)
-	if input.ProgressFrameURL != "" {
-		data.ProgressFrameURL = input.ProgressFrameURL
-	}
-	if input.AssetID != nil {
-		data.AssetID = input.AssetID
-	}
-
-	switch {
-	case completed:
-		data.PositionSeconds = maxInt(data.PositionSeconds, input.PositionSeconds)
-		data.PlayCount = maxInt(data.PlayCount, 1)
-		data.CompletedAt = &now
-	case data.CompletedAt != nil:
-		data.PositionSeconds = input.PositionSeconds
-		data.PlayCount = maxInt(data.PlayCount, 1)
-		data.CompletedAt = nil
-	default:
-		data.PositionSeconds = maxInt(data.PositionSeconds, input.PositionSeconds)
-		data.PlayCount = maxInt(data.PlayCount, 1)
-		data.CompletedAt = nil
-	}
-
-	return data
+	return State{}, fmt.Errorf("metadata_item_id and resource_id are required for progress updates")
 }
 
 type playbackPolicy struct {
@@ -186,41 +97,48 @@ func (p playbackPolicy) isCompleted(positionSeconds int, durationSeconds *int) b
 	return positionSeconds >= threshold
 }
 
-func (s *Service) GetCatalogState(ctx context.Context, userID, itemID uint) (State, error) {
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", itemID).
-		First(&item).Error; err != nil {
+func (s *Service) GetMetadataItemState(ctx context.Context, userID, metadataItemID uint) (State, error) {
+	if state, ok, err := s.GetMetadataState(ctx, userID, metadataItemID, 0); err != nil {
 		return State{}, err
+	} else if ok {
+		return state, nil
 	}
-
-	var data database.UserItemData
-	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id = ?", userID, itemID).
-		Order("last_played_at desc, id desc").
-		First(&data).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return State{UserID: userID, ItemID: itemID, DurationSeconds: item.RuntimeSeconds, Watched: false}, nil
-		}
-		return State{}, err
-	}
-	return toCatalogState(data, item.RuntimeSeconds), nil
+	return State{}, fmt.Errorf("metadata item %d not found", metadataItemID)
 }
 
-func toCatalogState(data database.UserItemData, duration *int) State {
-	return State{
-		UserID:           data.UserID,
-		ItemID:           data.ItemID,
-		AssetID:          data.AssetID,
-		PositionSeconds:  data.PositionSeconds,
-		DurationSeconds:  duration,
-		PlayedPercentage: data.PlayedPercentage,
-		ProgressFrameURL: data.ProgressFrameURL,
-		PlayCount:        data.PlayCount,
-		Watched:          data.CompletedAt != nil,
-		CompletedAt:      data.CompletedAt,
-		LastPlayedAt:     data.LastPlayedAt,
+func (s *Service) SetPreferredResource(ctx context.Context, userID, metadataItemID, resourceID uint) (State, error) {
+	if metadataItemID == 0 || resourceID == 0 {
+		return State{}, fmt.Errorf("metadata_item_id and resource_id are required")
 	}
+	var metadataItem database.MetadataItem
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", metadataItemID).First(&metadataItem).Error; err != nil {
+		return State{}, err
+	}
+	var link database.ResourceMetadataLink
+	if err := s.db.WithContext(ctx).Where("resource_id = ? AND metadata_item_id = ?", resourceID, metadataItemID).First(&link).Error; err != nil {
+		return State{}, err
+	}
+	var metadataData database.UserMetadataData
+	err := s.db.WithContext(ctx).Where("user_id = ? AND metadata_item_id = ?", userID, metadataItemID).First(&metadataData).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return State{}, err
+	}
+	created := err == gorm.ErrRecordNotFound
+	metadataData.UserID = userID
+	metadataData.MetadataItemID = metadataItemID
+	metadataData.PreferredResourceID = &resourceID
+	if created {
+		if err := s.db.WithContext(ctx).Create(&metadataData).Error; err != nil {
+			return State{}, err
+		}
+	} else if err := s.db.WithContext(ctx).Save(&metadataData).Error; err != nil {
+		return State{}, err
+	}
+	state, err := s.GetMetadataItemState(ctx, userID, metadataItemID)
+	if err != nil {
+		return State{}, err
+	}
+	return state, nil
 }
 
 func isCompleted(positionSeconds int, durationSeconds *int) bool {

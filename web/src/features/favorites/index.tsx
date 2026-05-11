@@ -115,7 +115,7 @@ export default function FavoritesPage() {
             <div className="grid gap-5 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
               {favorites.map((entry) => (
                 <MediaPosterCard
-                  key={entry.item.id}
+				  key={entry.item.metadata_item_id}
                   item={entry.item}
                   progress={entry}
                   layout="grid"

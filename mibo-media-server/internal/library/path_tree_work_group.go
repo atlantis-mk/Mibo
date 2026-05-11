@@ -164,9 +164,9 @@ func normalizedMovieWorkKeyFromSignal(signal filenameSignalModel) pathTreeWorkKe
 	if title == "" {
 		return pathTreeWorkKey{Kind: pathTreeWorkGroupShapeMovie}
 	}
-	normalizedTitle := normalizePathTreeMovieWorkTitle(title)
+	normalizedTitle := titleclean.NormalizeMovieWorkTitle(title)
 	displayTitle := cleanTitle(title)
-	if strings.EqualFold(normalizePathTreeMovieWorkTitle(displayTitle), normalizedTitle) {
+	if strings.EqualFold(titleclean.NormalizeMovieWorkTitle(displayTitle), normalizedTitle) {
 		displayTitle = titleTitleCase(normalizedTitle)
 	}
 	key := pathTreeWorkKey{Kind: pathTreeWorkGroupShapeMovie, Title: displayTitle, Year: signal.Identity.Year}
@@ -189,19 +189,12 @@ func pathTreeMovieTitleFromSignal(signal filenameSignalModel) string {
 	if strings.TrimSpace(signal.Identity.TitleCandidate) != "" {
 		return signal.Identity.TitleCandidate
 	}
-	kept := make([]string, 0, len(signal.TitleTokens))
-	for _, token := range signal.TitleTokens {
-		value := strings.TrimSpace(token.Value)
-		if value == "" || !token.Kept || pathTreeSuppressedMovieWorkToken(value) {
-			continue
-		}
-		kept = append(kept, value)
-	}
-	return cleanTitle(strings.Join(kept, " "))
+	rawTitle := strings.TrimSuffix(signal.RawPathData.Basename, signal.RawPathData.Extension)
+	return cleanTitle(titleclean.MovieWorkTitle(rawTitle))
 }
 
 func normalizedMovieWorkKeyString(title string, year *int) string {
-	normalizedTitle := normalizePathTreeMovieWorkTitle(title)
+	normalizedTitle := titleclean.NormalizeMovieWorkTitle(title)
 	if normalizedTitle == "" {
 		return ""
 	}
@@ -210,59 +203,6 @@ func normalizedMovieWorkKeyString(title string, year *int) string {
 	}
 	return normalizedTitle
 }
-
-func normalizePathTreeMovieWorkTitle(title string) string {
-	cleaned := titleclean.Normalize(titleclean.NormalizeInput{RawTitle: strings.TrimSpace(title)}).Title
-	cleaned = normalizeVersionCompareTitle(cleaned)
-	if cleaned == "" {
-		cleaned = normalizeVersionCompareTitle(title)
-	}
-	parts := strings.Fields(strings.NewReplacer(".", " ", "-", " ", "_", " ").Replace(cleaned))
-	kept := parts[:0]
-	for idx, part := range parts {
-		if pathTreeSuppressedMovieWorkToken(part) {
-			continue
-		}
-		if idx > 0 && pathTreeAudioTailToken(part, parts[idx-1]) {
-			continue
-		}
-		kept = append(kept, part)
-	}
-	return strings.ToLower(strings.Join(kept, " "))
-}
-
-func pathTreeAudioTailToken(token string, previous string) bool {
-	lower := strings.ToLower(strings.TrimSpace(token))
-	prev := strings.ToLower(strings.TrimSpace(previous))
-	if lower == "" || prev == "" {
-		return false
-	}
-	if _, err := fmt.Sscanf(lower, "%d", new(int)); err != nil {
-		return false
-	}
-	return strings.HasPrefix(prev, "ma") || prev == "dts" || prev == "hd" || prev == "ddp" || prev == "dd" || prev == "aac" || prev == "eac3"
-}
-
-func pathTreeSuppressedMovieWorkToken(token string) bool {
-	trimmed := strings.TrimSpace(token)
-	if trimmed == "" {
-		return true
-	}
-	lower := strings.ToLower(trimmed)
-	if suppressedFilenameProfileToken(trimmed) || qualitySignalPattern.MatchString(trimmed) || scanNoisePattern.MatchString(trimmed) || audioChannelPattern.MatchString(lower) {
-		return true
-	}
-	if strings.HasPrefix(lower, "ma") && len(lower) > 2 {
-		if _, err := fmt.Sscanf(lower, "ma%d", new(int)); err == nil {
-			return true
-		}
-	}
-	if _, err := fmt.Sscanf(lower, "%dx%d", new(int), new(int)); err == nil {
-		return true
-	}
-	return false
-}
-
 func pathTreeChildFingerprint(child pathTreeChildSummary) string {
 	parts := []string{"child=" + strings.TrimSpace(child.Path), "shape=" + strings.TrimSpace(child.Plan.Shape), fmt.Sprintf("confidence=%.3f", child.Plan.Confidence), "review=" + strings.TrimSpace(child.Plan.ReviewState)}
 	for _, file := range child.Files {
@@ -466,7 +406,7 @@ func compilePathTreeSeriesAssignmentsFromFiles(files []database.InventoryFile, l
 		seriesTitle := children[0].SeriesTitle
 		seasons := make(map[int]struct{})
 		for _, child := range children {
-			if !strings.EqualFold(normalizePathTreeMovieWorkTitle(child.SeriesTitle), normalizePathTreeMovieWorkTitle(seriesTitle)) || child.SeasonNumber == nil {
+			if !strings.EqualFold(titleclean.NormalizeMovieWorkTitle(child.SeriesTitle), titleclean.NormalizeMovieWorkTitle(seriesTitle)) || child.SeasonNumber == nil {
 				seriesTitle = ""
 				break
 			}
@@ -798,7 +738,7 @@ func pathTreeSiblingMovieVersionsHaveReleaseEvidence(children []pathTreeSiblingM
 		if pathTreeReleaseHintCount(child.Summary.Signal) > 0 {
 			withReleaseHints++
 		}
-		base := normalizePathTreeMovieWorkTitle(strings.TrimSuffix(path.Base(child.Summary.StoragePath), path.Ext(child.Summary.StoragePath)))
+		base := titleclean.NormalizeMovieWorkTitle(strings.TrimSuffix(path.Base(child.Summary.StoragePath), path.Ext(child.Summary.StoragePath)))
 		if base != "" {
 			basenames[base] = struct{}{}
 		}

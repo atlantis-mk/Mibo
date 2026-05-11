@@ -2,44 +2,12 @@ package database
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
-
-func TestValidateCatalogKernelUniquenessRejectsDuplicateAssetItems(t *testing.T) {
-	db := openConstraintTestDB(t)
-
-	if err := db.Exec(`
-		CREATE TABLE asset_items (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			asset_id INTEGER NOT NULL,
-			item_id INTEGER NOT NULL,
-			role TEXT NOT NULL,
-			segment_index INTEGER NOT NULL
-		)
-	`).Error; err != nil {
-		t.Fatalf("create asset_items table: %v", err)
-	}
-	if err := db.Exec(`
-		INSERT INTO asset_items (asset_id, item_id, role, segment_index) VALUES
-		(1, 2, 'primary', 0),
-		(1, 2, 'primary', 0)
-	`).Error; err != nil {
-		t.Fatalf("seed duplicate asset_items rows: %v", err)
-	}
-
-	err := validateCatalogKernelUniqueness(db)
-	if err == nil {
-		t.Fatal("expected duplicate asset item rows to be rejected")
-	}
-	if !strings.Contains(err.Error(), "asset item link") {
-		t.Fatalf("expected asset item duplicate error, got %v", err)
-	}
-}
 
 func TestValidateCatalogKernelUniquenessIgnoresSoftDeletedInventoryDuplicates(t *testing.T) {
 	db := openConstraintTestDB(t)
@@ -92,7 +60,7 @@ func TestRepairSQLiteContentShapePlanScopeIndexRebuildsStaleDefinition(t *testin
 	if err := repairSQLiteConflictIndexes(db); err != nil {
 		t.Fatalf("repair sqlite conflict indexes: %v", err)
 	}
-		exists, unique, columns, err := sqliteIndexDefinition(db, "content_shape_plans", "idx_content_shape_plan_scope")
+	exists, unique, columns, err := sqliteIndexDefinition(db, "content_shape_plans", "idx_content_shape_plan_scope")
 	if err != nil {
 		t.Fatalf("load repaired sqlite index definition: %v", err)
 	}

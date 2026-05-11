@@ -2,37 +2,6 @@ package database
 
 import "time"
 
-type MediaAsset struct {
-	ID                   uint       `gorm:"primaryKey" json:"id"`
-	LibraryID            uint       `gorm:"not null;index" json:"library_id"`
-	AssetType            string     `gorm:"size:64;not null;default:main;index" json:"asset_type"`
-	DisplayName          string     `gorm:"size:512" json:"display_name"`
-	Edition              string     `gorm:"size:128" json:"edition"`
-	QualityLabel         string     `gorm:"size:128;index" json:"quality_label"`
-	DurationSeconds      *float64   `json:"duration_seconds,omitempty"`
-	Status               string     `gorm:"size:64;not null;default:available;index" json:"status"`
-	MissingSince         *time.Time `gorm:"index" json:"missing_since,omitempty"`
-	ProbeStatus          string     `gorm:"size:64;not null;default:pending;index" json:"probe_status"`
-	TechnicalSummaryJSON string     `gorm:"type:text" json:"technical_summary_json"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
-	DeletedAt            *time.Time `gorm:"index" json:"deleted_at,omitempty"`
-}
-
-type AssetItem struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	AssetID      uint      `gorm:"not null;uniqueIndex:idx_asset_items_asset_item_role_segment" json:"asset_id"`
-	ItemID       uint      `gorm:"not null;uniqueIndex:idx_asset_items_asset_item_role_segment;index;index:idx_asset_items_item_role,priority:1" json:"item_id"`
-	Role         string    `gorm:"size:64;not null;uniqueIndex:idx_asset_items_asset_item_role_segment;index:idx_asset_items_item_role,priority:2" json:"role"`
-	SegmentIndex int       `gorm:"not null;default:0;uniqueIndex:idx_asset_items_asset_item_role_segment" json:"segment_index"`
-	StartSeconds *float64  `json:"start_seconds,omitempty"`
-	EndSeconds   *float64  `json:"end_seconds,omitempty"`
-	Confidence   *float64  `json:"confidence,omitempty"`
-	Source       string    `gorm:"size:64" json:"source"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
 type InventoryFile struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	LibraryID         uint       `gorm:"not null;index;index:idx_inventory_files_library_status_path,priority:1" json:"library_id"`
@@ -134,8 +103,6 @@ type ClassificationDecision struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	LibraryID         uint       `gorm:"not null;index;index:idx_classification_decisions_library_status,priority:1" json:"library_id"`
 	InventoryFileID   *uint      `gorm:"index" json:"inventory_file_id,omitempty"`
-	AssetID           *uint      `gorm:"index" json:"asset_id,omitempty"`
-	ItemID            *uint      `gorm:"index" json:"item_id,omitempty"`
 	SourcePath        string     `gorm:"size:2048;not null;index" json:"source_path"`
 	DecisionType      string     `gorm:"size:64;not null;index" json:"decision_type"`
 	Role              string     `gorm:"size:64;index" json:"role"`
@@ -183,16 +150,6 @@ type ClassificationRule struct {
 
 func (ClassificationRule) TableName() string {
 	return "classification_rules"
-}
-
-type AssetFile struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	AssetID   uint      `gorm:"not null;uniqueIndex:idx_asset_files_asset_file_role_part;index:idx_asset_files_asset_part,priority:1" json:"asset_id"`
-	FileID    uint      `gorm:"not null;uniqueIndex:idx_asset_files_asset_file_role_part;index" json:"file_id"`
-	Role      string    `gorm:"size:64;not null;uniqueIndex:idx_asset_files_asset_file_role_part" json:"role"`
-	PartIndex int       `gorm:"not null;default:0;uniqueIndex:idx_asset_files_asset_file_role_part;index:idx_asset_files_asset_part,priority:2" json:"part_index"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type MediaStream struct {

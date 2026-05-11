@@ -161,7 +161,7 @@ func TestListIssuesIncludesIngestConditionFailures(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	itemID := uint(9)
-	condition := database.IngestCondition{UnitKey: "catalog_item:9", LibraryID: 1, CatalogItemID: &itemID, ConditionType: ingest.ConditionMetadataMatched, Status: ingest.ConditionStatusReviewRequired, Reason: "no_candidate", Message: "Metadata match needed", Severity: ingest.SeverityWarning}
+	condition := database.IngestCondition{UnitKey: "metadata_item:9", LibraryID: 1, MetadataItemID: &itemID, ConditionType: ingest.ConditionMetadataMatched, Status: ingest.ConditionStatusReviewRequired, Reason: "no_candidate", Message: "Metadata match needed", Severity: ingest.SeverityWarning}
 	if err := svc.db.WithContext(ctx).Create(&condition).Error; err != nil {
 		t.Fatalf("create ingest condition: %v", err)
 	}

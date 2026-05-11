@@ -134,7 +134,7 @@ func saveContentShapeReviewDecision(ctx context.Context, db *gorm.DB, scope cont
 			affected = append(affected, assignment.StoragePath)
 		}
 	}
-	return db.WithContext(ctx).Create(&database.ClassificationDecision{LibraryID: scope.LibraryID, SourcePath: strings.TrimSpace(scope.DirectoryPath), DecisionType: "content_shape_plan", CandidateType: strings.TrimSpace(plan.Shape), TargetKind: "directory", TargetKey: strings.TrimSpace(scope.DirectoryPath), Status: "review_required", Confidence: &confidence, AlternativesJSON: mustJSON(plan.Alternatives), EvidenceJSON: mustJSON(plan.Evidence), AffectedFilesJSON: mustJSON(affected), Reason: "content shape plan requires review"}).Error
+	return db.WithContext(ctx).Create(&database.ClassificationDecision{LibraryID: scope.LibraryID, SourcePath: strings.TrimSpace(scope.DirectoryPath), DecisionType: "content_shape_plan", CandidateType: strings.TrimSpace(plan.Shape), TargetKind: "directory", TargetKey: strings.TrimSpace(scope.DirectoryPath), Status: "provisional", Confidence: &confidence, AlternativesJSON: mustJSON(plan.Alternatives), EvidenceJSON: mustJSON(plan.Evidence), AffectedFilesJSON: mustJSON(affected), Reason: "content shape plan remains provisional for resolver follow-up"}).Error
 }
 
 func saveContentShapeCorrectionRule(ctx context.Context, db *gorm.DB, scope contentShapeScope, ruleName string, shape string, payload map[string]any, createdByUserID *uint) error {

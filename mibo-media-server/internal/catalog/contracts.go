@@ -2,11 +2,8 @@ package catalog
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/atlan/mibo-media-server/internal/database"
 )
 
 // Catalog contracts keep the canonical TV root type as series.
@@ -123,8 +120,8 @@ type CatalogChildSummary struct {
 	LatestAddedAt   *time.Time `json:"latest_added_at,omitempty"`
 }
 
-type CatalogAssetLink struct {
-	ItemID       uint     `json:"item_id"`
+type CatalogResourceLink struct {
+	MetadataItemID uint   `json:"metadata_item_id"`
 	Role         string   `json:"role"`
 	SegmentIndex int      `json:"segment_index"`
 	StartSeconds *float64 `json:"start_seconds,omitempty"`
@@ -192,6 +189,7 @@ type CatalogEpisodeShelfItem struct {
 	EpisodeNumber      *int                      `json:"episode_number,omitempty"`
 	EpisodeNumberEnd   *int                      `json:"episode_number_end,omitempty"`
 	RuntimeSeconds     *int                      `json:"runtime_seconds,omitempty"`
+	InventoryFileID    uint                      `json:"inventory_file_id,omitempty"`
 	AvailabilityStatus string                    `json:"availability_status"`
 	GovernanceStatus   string                    `json:"governance_status"`
 	ReleaseDate        *time.Time                `json:"release_date,omitempty"`
@@ -202,7 +200,7 @@ type CatalogEpisodeShelfItem struct {
 	Progress           *CatalogUserProgressState `json:"progress,omitempty"`
 }
 
-type CatalogAssetFileSummary struct {
+type CatalogResourceFileSummary struct {
 	FileID              uint                        `json:"file_id"`
 	Role                string                      `json:"role"`
 	PartIndex           int                         `json:"part_index"`
@@ -255,7 +253,11 @@ type CatalogMediaStreamSummary struct {
 
 type CatalogListItem struct {
 	ID                 uint                      `json:"id"`
+	MetadataItemID     uint                      `json:"metadata_item_id,omitempty"`
 	LibraryID          uint                      `json:"library_id"`
+	ResourceCount      int                       `json:"resource_count,omitempty"`
+	AvailableCount     int                       `json:"available_count,omitempty"`
+	MissingCount       int                       `json:"missing_count,omitempty"`
 	SourceKind         string                    `json:"source_kind,omitempty"`
 	InventoryFileID    *uint                     `json:"inventory_file_id,omitempty"`
 	MaturityState      string                    `json:"maturity_state,omitempty"`
@@ -304,7 +306,11 @@ type CatalogOrganizingCondition struct {
 
 type CatalogItemDetail struct {
 	ID                   uint                         `json:"id"`
+	MetadataItemID       uint                         `json:"metadata_item_id,omitempty"`
 	LibraryID            uint                         `json:"library_id"`
+	ResourceCount        int                          `json:"resource_count,omitempty"`
+	AvailableCount       int                          `json:"available_count,omitempty"`
+	MissingCount         int                          `json:"missing_count,omitempty"`
 	Type                 string                       `json:"type"`
 	Path                 string                       `json:"path,omitempty"`
 	Title                string                       `json:"title"`
@@ -338,13 +344,13 @@ type CatalogItemDetail struct {
 	EpisodeContext       *CatalogEpisodeParentContext `json:"episode_context,omitempty"`
 	SeriesPlaybackTarget *CatalogSeriesPlaybackTarget `json:"series_playback_target,omitempty"`
 	SameSeasonEpisodes   []CatalogEpisodeShelfItem    `json:"same_season_episodes"`
-	Assets               []CatalogAssetDetail         `json:"assets"`
+	Resources            []CatalogResourceDetailFull  `json:"resources"`
 	RelatedItems         []CatalogListItem            `json:"related_items"`
 }
 
 type CatalogSeriesPlaybackTarget struct {
-	EpisodeItemID   uint   `json:"episode_item_id"`
-	AssetID         *uint  `json:"asset_id,omitempty"`
+	EpisodeMetadataItemID uint   `json:"episode_metadata_item_id"`
+	ResourceID      *uint  `json:"resource_id,omitempty"`
 	Title           string `json:"title"`
 	Label           string `json:"label,omitempty"`
 	SelectionReason string `json:"selection_reason"`
@@ -359,6 +365,7 @@ type CatalogSeasonDetail struct {
 	Year               *int                      `json:"year,omitempty"`
 	IndexNumber        *int                      `json:"index_number,omitempty"`
 	RuntimeSeconds     *int                      `json:"runtime_seconds,omitempty"`
+	InventoryFileID    uint                      `json:"inventory_file_id,omitempty"`
 	AvailabilityStatus string                    `json:"availability_status"`
 	GovernanceStatus   string                    `json:"governance_status"`
 	ChildSummary       *CatalogChildSummary      `json:"child_summary,omitempty"`
@@ -381,6 +388,7 @@ type CatalogEpisodeDetail struct {
 	IndexNumberEnd     *int                      `json:"index_number_end,omitempty"`
 	AbsoluteNumber     *int                      `json:"absolute_number,omitempty"`
 	RuntimeSeconds     *int                      `json:"runtime_seconds,omitempty"`
+	InventoryFileID    uint                      `json:"inventory_file_id,omitempty"`
 	AvailabilityStatus string                    `json:"availability_status"`
 	GovernanceStatus   string                    `json:"governance_status"`
 	ReleaseDate        *time.Time                `json:"release_date,omitempty"`
@@ -389,13 +397,12 @@ type CatalogEpisodeDetail struct {
 	ExternalIdentities []CatalogExternalIdentity `json:"external_identities,omitempty"`
 	SourceEvidence     []CatalogSourceEvidence   `json:"source_evidence"`
 	FieldStates        []CatalogFieldState       `json:"field_states"`
-	Assets             []CatalogAssetDetail      `json:"assets"`
 }
 
-type CatalogAssetDetail struct {
+type CatalogResourceDetailFull struct {
 	ID              uint                        `json:"id"`
 	LibraryID       uint                        `json:"library_id"`
-	AssetType       string                      `json:"asset_type"`
+	ResourceType    string                      `json:"resource_type"`
 	DisplayName     string                      `json:"display_name,omitempty"`
 	Edition         string                      `json:"edition,omitempty"`
 	QualityLabel    string                      `json:"quality_label,omitempty"`
@@ -403,13 +410,29 @@ type CatalogAssetDetail struct {
 	Status          string                      `json:"status"`
 	ProbeStatus     string                      `json:"probe_status"`
 	FileIDs         []uint                      `json:"file_ids,omitempty"`
-	Files           []CatalogAssetFileSummary   `json:"files"`
+	Files           []CatalogResourceFileSummary `json:"files"`
 	Streams         []CatalogMediaStreamSummary `json:"streams"`
-	Links           []CatalogAssetLink          `json:"links"`
+	Links           []CatalogResourceLink       `json:"links"`
+}
+
+type CatalogResourceDetail struct {
+	ID              uint     `json:"id"`
+	LibraryID       uint     `json:"library_id,omitempty"`
+	ResourceType    string   `json:"resource_type"`
+	ResourceShape   string   `json:"resource_shape"`
+	DisplayName     string   `json:"display_name,omitempty"`
+	Edition         string   `json:"edition,omitempty"`
+	QualityLabel    string   `json:"quality_label,omitempty"`
+	DurationSeconds *float64 `json:"duration_seconds,omitempty"`
+	Status          string   `json:"status"`
+	ProbeStatus     string   `json:"probe_status"`
+	Role            string   `json:"role"`
+	SegmentIndex    int      `json:"segment_index,omitempty"`
+	ReviewState     string   `json:"review_state,omitempty"`
 }
 
 type CatalogGovernanceWorkspace struct {
-	ItemID              uint                               `json:"item_id"`
+	MetadataItemID      uint                               `json:"metadata_item_id"`
 	LibraryID           uint                               `json:"library_id"`
 	Type                string                             `json:"type"`
 	Title               string                             `json:"title"`
@@ -420,320 +443,11 @@ type CatalogGovernanceWorkspace struct {
 	ExternalIdentities  []CatalogExternalIdentity          `json:"external_identities,omitempty"`
 	SourceEvidence      []CatalogSourceEvidence            `json:"source_evidence"`
 	FieldStates         []CatalogFieldState                `json:"field_states"`
-	Assets              []CatalogAssetDetail               `json:"assets"`
+	Resources           []CatalogResourceDetailFull        `json:"resources"`
 	Classification      []CatalogClassificationDecision    `json:"classification_decisions"`
 	ClassificationRules []CatalogClassificationRuleSummary `json:"classification_rules"`
 	RecommendedChildren []CatalogListItem                  `json:"recommended_children"`
 	MetadataOperation   any                                `json:"metadata_operation,omitempty"`
-}
-
-type CatalogListItemInput struct {
-	Item        database.CatalogItem
-	Rollup      *database.ItemRollup
-	Images      []database.ItemImage
-	ExternalIDs []database.CatalogExternalID
-}
-
-type CatalogItemDetailInput struct {
-	Item                 database.CatalogItem
-	Rollup               *database.ItemRollup
-	Images               []database.ItemImage
-	ExternalIDs          []database.CatalogExternalID
-	Sources              []database.MetadataSource
-	FieldStates          []database.MetadataFieldState
-	Cast                 []CatalogPersonDetail
-	Directors            []CatalogPersonDetail
-	Tags                 []CatalogTagDetail
-	Seasons              []CatalogSeasonDetail
-	Episodes             []CatalogEpisodeDetail
-	EpisodeContext       *CatalogEpisodeParentContext
-	SeriesPlaybackTarget *CatalogSeriesPlaybackTarget
-	SameSeasonEpisodes   []CatalogEpisodeShelfItem
-	Assets               []CatalogAssetDetail
-	Related              []CatalogListItem
-}
-
-type CatalogSeasonDetailInput struct {
-	Item        database.CatalogItem
-	Rollup      *database.ItemRollup
-	Images      []database.ItemImage
-	ExternalIDs []database.CatalogExternalID
-	Sources     []database.MetadataSource
-	FieldStates []database.MetadataFieldState
-	Episodes    []CatalogEpisodeDetail
-}
-
-type CatalogEpisodeDetailInput struct {
-	Item        database.CatalogItem
-	Images      []database.ItemImage
-	ExternalIDs []database.CatalogExternalID
-	Sources     []database.MetadataSource
-	FieldStates []database.MetadataFieldState
-	Assets      []CatalogAssetDetail
-}
-
-type CatalogAssetDetailInput struct {
-	Asset   database.MediaAsset
-	Links   []database.AssetItem
-	FileIDs []uint
-	Files   []CatalogAssetFileSummary
-	Streams []CatalogMediaStreamSummary
-}
-
-type CatalogEpisodeShelfItemInput struct {
-	Episode       CatalogEpisodeDetail
-	CurrentItemID uint
-	Progress      *CatalogUserProgressState
-}
-
-type CatalogGovernanceWorkspaceInput struct {
-	Item                database.CatalogItem
-	Images              []database.ItemImage
-	ExternalIDs         []database.CatalogExternalID
-	Sources             []database.MetadataSource
-	FieldStates         []database.MetadataFieldState
-	Assets              []CatalogAssetDetail
-	Classification      []database.ClassificationDecision
-	ClassificationRules []database.ClassificationRule
-	RecommendedChildren []CatalogListItem
-}
-
-func BuildCatalogListItem(input CatalogListItemInput) CatalogListItem {
-	item := input.Item
-	return CatalogListItem{
-		ID:                 item.ID,
-		LibraryID:          item.LibraryID,
-		SourceKind:         "catalog",
-		MaturityState:      "classified",
-		Type:               normalizeCatalogType(item.Type),
-		Title:              strings.TrimSpace(item.Title),
-		OriginalTitle:      strings.TrimSpace(item.OriginalTitle),
-		SortTitle:          strings.TrimSpace(item.SortTitle),
-		Overview:           item.Overview,
-		Year:               item.Year,
-		RuntimeSeconds:     item.RuntimeSeconds,
-		IndexNumber:        item.IndexNumber,
-		IndexNumberEnd:     item.IndexNumberEnd,
-		ParentIndexNumber:  item.ParentIndexNumber,
-		EpisodeLabel:       formatCatalogEpisodeLabel(item.ParentIndexNumber, item.IndexNumber, item.IndexNumberEnd),
-		CommunityRating:    item.CommunityRating,
-		OfficialRating:     strings.TrimSpace(item.OfficialRating),
-		SeriesStatus:       strings.TrimSpace(item.SeriesStatus),
-		AvailabilityStatus: normalizeAvailabilityStatus(item.AvailabilityStatus),
-		GovernanceStatus:   normalizeGovernanceStatus(item.GovernanceStatus),
-		ReleaseDate:        item.ReleaseDate,
-		FirstAirDate:       item.FirstAirDate,
-		LastAirDate:        item.LastAirDate,
-		ChildSummary:       buildCatalogChildSummary(input.Rollup),
-		SelectedImages:     buildCatalogSelectedImages(input.Images),
-		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
-	}
-}
-
-func BuildCatalogItemDetail(input CatalogItemDetailInput) CatalogItemDetail {
-	item := input.Item
-	return CatalogItemDetail{
-		ID:                   item.ID,
-		LibraryID:            item.LibraryID,
-		Type:                 normalizeCatalogType(item.Type),
-		Path:                 strings.TrimSpace(item.Path),
-		Title:                strings.TrimSpace(item.Title),
-		OriginalTitle:        strings.TrimSpace(item.OriginalTitle),
-		SortTitle:            strings.TrimSpace(item.SortTitle),
-		Overview:             item.Overview,
-		Year:                 item.Year,
-		EndYear:              item.EndYear,
-		RuntimeSeconds:       item.RuntimeSeconds,
-		IndexNumber:          item.IndexNumber,
-		ParentIndexNumber:    item.ParentIndexNumber,
-		CommunityRating:      item.CommunityRating,
-		OfficialRating:       strings.TrimSpace(item.OfficialRating),
-		SeriesStatus:         strings.TrimSpace(item.SeriesStatus),
-		AvailabilityStatus:   normalizeAvailabilityStatus(item.AvailabilityStatus),
-		GovernanceStatus:     normalizeGovernanceStatus(item.GovernanceStatus),
-		ReleaseDate:          item.ReleaseDate,
-		FirstAirDate:         item.FirstAirDate,
-		LastAirDate:          item.LastAirDate,
-		ChildSummary:         buildCatalogChildSummary(input.Rollup),
-		SelectedImages:       buildCatalogSelectedImages(input.Images),
-		ExternalIdentities:   buildCatalogExternalIdentities(input.ExternalIDs),
-		Tags:                 ensureCatalogTagDetails(input.Tags),
-		Genres:               buildCatalogGenres(input.Tags),
-		SourceEvidence:       buildCatalogSourceEvidence(input.Sources),
-		FieldStates:          buildCatalogFieldStates(input.FieldStates),
-		Cast:                 ensureCatalogPersonDetails(input.Cast),
-		Directors:            ensureCatalogPersonDetails(input.Directors),
-		Seasons:              ensureCatalogSeasonDetails(input.Seasons),
-		Episodes:             ensureCatalogEpisodeDetails(input.Episodes),
-		EpisodeContext:       input.EpisodeContext,
-		SeriesPlaybackTarget: input.SeriesPlaybackTarget,
-		SameSeasonEpisodes:   ensureCatalogEpisodeShelfItems(input.SameSeasonEpisodes),
-		Assets:               ensureCatalogAssetDetails(input.Assets),
-		RelatedItems:         ensureCatalogListItems(input.Related),
-	}
-}
-
-func BuildCatalogSeasonDetail(input CatalogSeasonDetailInput) CatalogSeasonDetail {
-	item := input.Item
-	return CatalogSeasonDetail{
-		ID:                 item.ID,
-		LibraryID:          item.LibraryID,
-		Type:               normalizeCatalogType(item.Type),
-		Title:              strings.TrimSpace(item.Title),
-		Overview:           item.Overview,
-		Year:               item.Year,
-		IndexNumber:        item.IndexNumber,
-		RuntimeSeconds:     item.RuntimeSeconds,
-		AvailabilityStatus: normalizeAvailabilityStatus(item.AvailabilityStatus),
-		GovernanceStatus:   normalizeGovernanceStatus(item.GovernanceStatus),
-		ChildSummary:       buildCatalogChildSummary(input.Rollup),
-		SelectedImages:     buildCatalogSelectedImages(input.Images),
-		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
-		SourceEvidence:     buildCatalogSourceEvidence(input.Sources),
-		FieldStates:        buildCatalogFieldStates(input.FieldStates),
-		Episodes:           ensureCatalogEpisodeDetails(input.Episodes),
-	}
-}
-
-func BuildCatalogEpisodeDetail(input CatalogEpisodeDetailInput) CatalogEpisodeDetail {
-	item := input.Item
-	return CatalogEpisodeDetail{
-		ID:                 item.ID,
-		LibraryID:          item.LibraryID,
-		Type:               normalizeCatalogType(item.Type),
-		Title:              strings.TrimSpace(item.Title),
-		Overview:           item.Overview,
-		Year:               item.Year,
-		ParentIndexNumber:  item.ParentIndexNumber,
-		IndexNumber:        item.IndexNumber,
-		IndexNumberEnd:     item.IndexNumberEnd,
-		AbsoluteNumber:     item.AbsoluteNumber,
-		RuntimeSeconds:     item.RuntimeSeconds,
-		AvailabilityStatus: normalizeAvailabilityStatus(item.AvailabilityStatus),
-		GovernanceStatus:   normalizeGovernanceStatus(item.GovernanceStatus),
-		ReleaseDate:        item.ReleaseDate,
-		FirstAirDate:       item.FirstAirDate,
-		SelectedImages:     buildCatalogSelectedImages(input.Images),
-		ExternalIdentities: buildCatalogExternalIdentities(input.ExternalIDs),
-		SourceEvidence:     buildCatalogSourceEvidence(input.Sources),
-		FieldStates:        buildCatalogFieldStates(input.FieldStates),
-		Assets:             ensureCatalogAssetDetails(input.Assets),
-	}
-}
-
-func BuildCatalogAssetDetail(input CatalogAssetDetailInput) CatalogAssetDetail {
-	asset := input.Asset
-	return CatalogAssetDetail{
-		ID:              asset.ID,
-		LibraryID:       asset.LibraryID,
-		AssetType:       strings.TrimSpace(asset.AssetType),
-		DisplayName:     strings.TrimSpace(asset.DisplayName),
-		Edition:         strings.TrimSpace(asset.Edition),
-		QualityLabel:    strings.TrimSpace(asset.QualityLabel),
-		DurationSeconds: asset.DurationSeconds,
-		Status:          normalizeAvailabilityStatus(asset.Status),
-		ProbeStatus:     strings.TrimSpace(asset.ProbeStatus),
-		FileIDs:         append([]uint(nil), input.FileIDs...),
-		Files:           ensureCatalogAssetFileSummaries(input.Files),
-		Streams:         ensureCatalogMediaStreamSummaries(input.Streams),
-		Links:           buildCatalogAssetLinks(input.Links),
-	}
-}
-
-func BuildCatalogEpisodeShelfItem(input CatalogEpisodeShelfItemInput) CatalogEpisodeShelfItem {
-	episode := input.Episode
-	return CatalogEpisodeShelfItem{
-		ID:                 episode.ID,
-		LibraryID:          episode.LibraryID,
-		Type:               episode.Type,
-		Title:              strings.TrimSpace(episode.Title),
-		Label:              formatCatalogEpisodeLabel(episode.ParentIndexNumber, episode.IndexNumber, episode.IndexNumberEnd),
-		Overview:           episode.Overview,
-		SeasonNumber:       episode.ParentIndexNumber,
-		EpisodeNumber:      episode.IndexNumber,
-		EpisodeNumberEnd:   episode.IndexNumberEnd,
-		RuntimeSeconds:     episode.RuntimeSeconds,
-		AvailabilityStatus: normalizeAvailabilityStatus(episode.AvailabilityStatus),
-		GovernanceStatus:   normalizeGovernanceStatus(episode.GovernanceStatus),
-		ReleaseDate:        episode.ReleaseDate,
-		FirstAirDate:       episode.FirstAirDate,
-		SelectedImages:     ensureCatalogSelectedImages(episode.SelectedImages),
-		ExternalIdentities: ensureCatalogExternalIdentities(episode.ExternalIdentities),
-		Current:            episode.ID == input.CurrentItemID,
-		Progress:           input.Progress,
-	}
-}
-
-func BuildCatalogEpisodeParentContext(series *database.CatalogItem, season *database.CatalogItem, seriesImages []database.ItemImage, seasonImages []database.ItemImage, episode database.CatalogItem) *CatalogEpisodeParentContext {
-	if episode.Type != ItemTypeEpisode {
-		return nil
-	}
-	context := &CatalogEpisodeParentContext{
-		SeasonNumber:        episode.ParentIndexNumber,
-		EpisodeNumber:       episode.IndexNumber,
-		EpisodeNumberEnd:    episode.IndexNumberEnd,
-		IncompleteHierarchy: series == nil || season == nil,
-	}
-	if series != nil {
-		context.Series = &CatalogEpisodeSeriesContext{
-			ID:             series.ID,
-			Title:          strings.TrimSpace(series.Title),
-			SelectedImages: buildCatalogSelectedImages(seriesImages),
-		}
-	}
-	if season != nil {
-		context.Season = &CatalogEpisodeSeasonContext{
-			ID:             season.ID,
-			Title:          strings.TrimSpace(season.Title),
-			Number:         season.IndexNumber,
-			SelectedImages: buildCatalogSelectedImages(seasonImages),
-		}
-		if context.SeasonNumber == nil {
-			context.SeasonNumber = season.IndexNumber
-		}
-	}
-	return context
-}
-
-func BuildCatalogGovernanceWorkspace(input CatalogGovernanceWorkspaceInput) CatalogGovernanceWorkspace {
-	item := input.Item
-	return CatalogGovernanceWorkspace{
-		ItemID:              item.ID,
-		LibraryID:           item.LibraryID,
-		Type:                normalizeCatalogType(item.Type),
-		Title:               strings.TrimSpace(item.Title),
-		AvailabilityStatus:  normalizeAvailabilityStatus(item.AvailabilityStatus),
-		GovernanceStatus:    normalizeGovernanceStatus(item.GovernanceStatus),
-		SelectedImages:      buildCatalogSelectedImages(input.Images),
-		ImageCandidates:     buildCatalogImageCandidates(input.Images),
-		ExternalIdentities:  buildCatalogExternalIdentities(input.ExternalIDs),
-		SourceEvidence:      buildCatalogSourceEvidence(input.Sources),
-		FieldStates:         buildCatalogFieldStates(input.FieldStates),
-		Assets:              ensureCatalogAssetDetails(input.Assets),
-		Classification:      buildCatalogClassificationDecisions(input.Classification),
-		ClassificationRules: buildCatalogClassificationRuleSummaries(input.ClassificationRules),
-		RecommendedChildren: ensureCatalogListItems(input.RecommendedChildren),
-	}
-}
-
-func buildCatalogSelectedImages(images []database.ItemImage) []CatalogSelectedImage {
-	if images == nil {
-		return []CatalogSelectedImage{}
-	}
-	selected := make([]CatalogSelectedImage, 0, len(images))
-	for _, image := range images {
-		if !image.IsSelected {
-			continue
-		}
-		selected = append(selected, CatalogSelectedImage{
-			ImageType: strings.TrimSpace(image.ImageType),
-			URL:       strings.TrimSpace(image.URL),
-			Language:  strings.TrimSpace(image.Language),
-			Width:     image.Width,
-			Height:    image.Height,
-		})
-	}
-	return selected
 }
 
 func ensureCatalogSelectedImages(images []CatalogSelectedImage) []CatalogSelectedImage {
@@ -748,41 +462,6 @@ func ensureCatalogExternalIdentities(items []CatalogExternalIdentity) []CatalogE
 		return []CatalogExternalIdentity{}
 	}
 	return items
-}
-
-func buildCatalogImageCandidates(images []database.ItemImage) []CatalogSelectedImage {
-	if images == nil {
-		return []CatalogSelectedImage{}
-	}
-	candidates := make([]CatalogSelectedImage, 0, len(images))
-	for _, image := range images {
-		candidates = append(candidates, CatalogSelectedImage{
-			ImageType: strings.TrimSpace(image.ImageType),
-			URL:       strings.TrimSpace(image.URL),
-			Language:  strings.TrimSpace(image.Language),
-			Width:     image.Width,
-			Height:    image.Height,
-		})
-	}
-	return candidates
-}
-
-func buildCatalogExternalIdentities(externalIDs []database.CatalogExternalID) []CatalogExternalIdentity {
-	if externalIDs == nil {
-		return []CatalogExternalIdentity{}
-	}
-	identities := make([]CatalogExternalIdentity, 0, len(externalIDs))
-	for _, externalID := range externalIDs {
-		identities = append(identities, CatalogExternalIdentity{
-			Provider:     strings.TrimSpace(externalID.Provider),
-			ProviderType: strings.TrimSpace(externalID.ProviderType),
-			ExternalID:   strings.TrimSpace(externalID.ExternalID),
-			IsPrimary:    externalID.IsPrimary,
-			Source:       strings.TrimSpace(externalID.Source),
-			Confidence:   externalID.Confidence,
-		})
-	}
-	return identities
 }
 
 func buildCatalogGenres(tags []CatalogTagDetail) []string {
@@ -824,192 +503,6 @@ func ensureCatalogTagDetails(items []CatalogTagDetail) []CatalogTagDetail {
 	return items
 }
 
-func buildCatalogSourceEvidence(sources []database.MetadataSource) []CatalogSourceEvidence {
-	if sources == nil {
-		return []CatalogSourceEvidence{}
-	}
-	evidence := make([]CatalogSourceEvidence, 0, len(sources))
-	for _, source := range sources {
-		evidence = append(evidence, CatalogSourceEvidence{
-			SourceType:           strings.TrimSpace(source.SourceType),
-			SourceName:           strings.TrimSpace(source.SourceName),
-			Language:             strings.TrimSpace(source.Language),
-			ExternalID:           strings.TrimSpace(source.ExternalID),
-			MetadataProfileID:    source.MetadataProfileID,
-			MetadataProfileName:  strings.TrimSpace(source.MetadataProfileName),
-			ProviderInstanceID:   source.ProviderInstanceID,
-			ProviderInstanceName: strings.TrimSpace(source.ProviderInstanceName),
-			FallbackSummary:      decodeCatalogSummaryPayload(source.FallbackSummaryJSON),
-			Confidence:           source.Confidence,
-			FetchedAt:            source.FetchedAt,
-			ExpiresAt:            source.ExpiresAt,
-			Summary:              projectCatalogSourceSummary(source.PayloadJSON),
-		})
-	}
-	return evidence
-}
-
-func decodeCatalogSummaryPayload(raw string) any {
-	decoded, ok := decodeCatalogJSONValue(raw)
-	if !ok {
-		return nil
-	}
-	return decoded
-}
-
-func buildCatalogFieldStates(states []database.MetadataFieldState) []CatalogFieldState {
-	if states == nil {
-		return []CatalogFieldState{}
-	}
-	fieldStates := make([]CatalogFieldState, 0, len(states))
-	for _, state := range states {
-		fieldStates = append(fieldStates, CatalogFieldState{
-			FieldKey:       strings.TrimSpace(state.FieldKey),
-			SourceID:       state.SourceID,
-			Value:          projectCatalogFieldStateValue(state.ValueJSON),
-			IsLocked:       state.IsLocked,
-			LockReason:     strings.TrimSpace(state.LockReason),
-			EditedByUserID: state.EditedByUserID,
-			EditedAt:       state.EditedAt,
-		})
-	}
-	return fieldStates
-}
-
-func buildCatalogClassificationDecisions(decisions []database.ClassificationDecision) []CatalogClassificationDecision {
-	if decisions == nil {
-		return []CatalogClassificationDecision{}
-	}
-	items := make([]CatalogClassificationDecision, 0, len(decisions))
-	for _, decision := range decisions {
-		items = append(items, CatalogClassificationDecision{
-			ID:             decision.ID,
-			SourcePath:     strings.TrimSpace(decision.SourcePath),
-			DecisionType:   strings.TrimSpace(decision.DecisionType),
-			Role:           strings.TrimSpace(decision.Role),
-			CandidateType:  strings.TrimSpace(decision.CandidateType),
-			TargetKind:     strings.TrimSpace(decision.TargetKind),
-			TargetKey:      strings.TrimSpace(decision.TargetKey),
-			Status:         strings.TrimSpace(decision.Status),
-			Confidence:     decision.Confidence,
-			Alternatives:   decodeCatalogClassificationAlternatives(decision.AlternativesJSON),
-			Evidence:       decodeCatalogClassificationEvidence(decision.EvidenceJSON),
-			AffectedFiles:  decodeCatalogStringList(decision.AffectedFilesJSON),
-			CorrectionActs: catalogClassificationCorrectionActions(decision),
-			Reason:         strings.TrimSpace(decision.Reason),
-			Warnings:       decodeCatalogStringList(decision.WarningsJSON),
-			CreatedAt:      decision.CreatedAt,
-			UpdatedAt:      decision.UpdatedAt,
-			ResolvedAt:     decision.ResolvedAt,
-		})
-	}
-	return items
-}
-
-func buildCatalogClassificationRuleSummaries(rules []database.ClassificationRule) []CatalogClassificationRuleSummary {
-	if rules == nil {
-		return []CatalogClassificationRuleSummary{}
-	}
-	items := make([]CatalogClassificationRuleSummary, 0, len(rules))
-	for _, rule := range rules {
-		items = append(items, CatalogClassificationRuleSummary{
-			ID:              rule.ID,
-			LibraryID:       rule.LibraryID,
-			Key:             strings.TrimSpace(rule.Key),
-			Name:            strings.TrimSpace(rule.Name),
-			PathPattern:     strings.TrimSpace(rule.PathPattern),
-			RuleType:        strings.TrimSpace(rule.RuleType),
-			Role:            strings.TrimSpace(rule.Role),
-			CandidateType:   strings.TrimSpace(rule.CandidateType),
-			SeriesTitle:     strings.TrimSpace(rule.SeriesTitle),
-			SeasonNumber:    rule.SeasonNumber,
-			NumberingSource: strings.TrimSpace(rule.NumberingSource),
-			Enabled:         rule.Enabled,
-		})
-	}
-	return items
-}
-
-func decodeCatalogClassificationAlternatives(raw string) []CatalogClassificationAlternative {
-	if strings.TrimSpace(raw) == "" {
-		return []CatalogClassificationAlternative{}
-	}
-	var decoded []CatalogClassificationAlternative
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return []CatalogClassificationAlternative{}
-	}
-	return decoded
-}
-
-func decodeCatalogClassificationEvidence(raw string) []CatalogClassificationEvidence {
-	if strings.TrimSpace(raw) == "" {
-		return []CatalogClassificationEvidence{}
-	}
-	var decoded []CatalogClassificationEvidence
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return []CatalogClassificationEvidence{}
-	}
-	return decoded
-}
-
-func decodeCatalogStringList(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return []string{}
-	}
-	var decoded []string
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return []string{}
-	}
-	return decoded
-}
-
-func catalogClassificationCorrectionActions(decision database.ClassificationDecision) []CatalogClassificationCorrection {
-	if strings.TrimSpace(decision.Status) != "review_required" {
-		return []CatalogClassificationCorrection{}
-	}
-	return []CatalogClassificationCorrection{
-		{Action: "episode_sequence", Label: "Treat as episode sequence", Description: "Create or update a series/season episode group."},
-		{Action: "movie_versions", Label: "Treat as one movie with versions", Description: "Link sibling videos as versions of one movie."},
-		{Action: "independent_movies", Label: "Treat as independent movies", Description: "Keep sibling videos as separate movie works."},
-		{Action: "attachment", Label: "Treat as attachment", Description: "Attach the file as a trailer, extra, sample, or related video."},
-	}
-}
-
-func buildCatalogChildSummary(rollup *database.ItemRollup) *CatalogChildSummary {
-	if rollup == nil {
-		return nil
-	}
-	return &CatalogChildSummary{
-		ChildCount:      rollup.ChildCount,
-		AvailableCount:  rollup.AvailableCount,
-		MissingCount:    rollup.MissingCount,
-		UnairedCount:    rollup.UnairedCount,
-		PlayedCount:     rollup.PlayedCount,
-		InProgressCount: rollup.InProgressCount,
-		LatestAirDate:   rollup.LatestAirDate,
-		LatestAddedAt:   rollup.LatestAddedAt,
-	}
-}
-
-func buildCatalogAssetLinks(links []database.AssetItem) []CatalogAssetLink {
-	if links == nil {
-		return []CatalogAssetLink{}
-	}
-	assetLinks := make([]CatalogAssetLink, 0, len(links))
-	for _, link := range links {
-		assetLinks = append(assetLinks, CatalogAssetLink{
-			ItemID:       link.ItemID,
-			Role:         strings.TrimSpace(link.Role),
-			SegmentIndex: link.SegmentIndex,
-			StartSeconds: link.StartSeconds,
-			EndSeconds:   link.EndSeconds,
-			Confidence:   link.Confidence,
-			Source:       strings.TrimSpace(link.Source),
-		})
-	}
-	return assetLinks
-}
-
 func ensureCatalogListItems(items []CatalogListItem) []CatalogListItem {
 	if items == nil {
 		return []CatalogListItem{}
@@ -1045,16 +538,25 @@ func ensureCatalogEpisodeShelfItems(items []CatalogEpisodeShelfItem) []CatalogEp
 	return items
 }
 
-func ensureCatalogAssetDetails(items []CatalogAssetDetail) []CatalogAssetDetail {
+func ensureCatalogResourceDetails(items []CatalogResourceDetailFull) []CatalogResourceDetailFull {
 	if items == nil {
-		return []CatalogAssetDetail{}
+		return []CatalogResourceDetailFull{}
 	}
 	return items
 }
 
-func ensureCatalogAssetFileSummaries(items []CatalogAssetFileSummary) []CatalogAssetFileSummary {
+func firstNonZeroUint(values ...uint) uint {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func ensureCatalogResourceFileSummaries(items []CatalogResourceFileSummary) []CatalogResourceFileSummary {
 	if items == nil {
-		return []CatalogAssetFileSummary{}
+		return []CatalogResourceFileSummary{}
 	}
 	return items
 }
@@ -1064,62 +566,6 @@ func ensureCatalogMediaStreamSummaries(items []CatalogMediaStreamSummary) []Cata
 		return []CatalogMediaStreamSummary{}
 	}
 	return items
-}
-
-func formatCatalogEpisodeLabel(seasonNumber, episodeNumber, episodeNumberEnd *int) string {
-	if seasonNumber == nil && episodeNumber == nil {
-		return ""
-	}
-	var builder strings.Builder
-	if seasonNumber != nil {
-		builder.WriteString("S")
-		builder.WriteString(strconv.Itoa(*seasonNumber))
-	}
-	if episodeNumber != nil {
-		if builder.Len() > 0 {
-			builder.WriteString(":")
-		}
-		builder.WriteString("E")
-		builder.WriteString(strconv.Itoa(*episodeNumber))
-		if episodeNumberEnd != nil && *episodeNumberEnd != *episodeNumber {
-			builder.WriteString("-E")
-			builder.WriteString(strconv.Itoa(*episodeNumberEnd))
-		}
-	}
-	return builder.String()
-}
-
-func projectCatalogSourceSummary(raw string) any {
-	decoded, ok := decodeCatalogJSONValue(raw)
-	if !ok {
-		return nil
-	}
-	payload, ok := decoded.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	const scalarSummaryKeys = "title,name,original_title,overview,release_date,first_air_date,last_air_date,runtime,status,media_type,external_id,matched_title,air_date,poster_path,still_path,series_tmdb_id,storage_path,stable_identity_key,provider_name,object_type,detected_title,series_title,season_number,episode_number"
-	summary := make(map[string]any)
-	for _, key := range strings.Split(scalarSummaryKeys, ",") {
-		value, exists := payload[key]
-		if !exists || !isCatalogScalarJSONValue(value) {
-			continue
-		}
-		summary[key] = value
-	}
-	if len(summary) == 0 {
-		return nil
-	}
-	return summary
-}
-
-func projectCatalogFieldStateValue(raw string) any {
-	decoded, ok := decodeCatalogJSONValue(raw)
-	if !ok || !isCatalogScalarJSONValue(decoded) {
-		return nil
-	}
-	return decoded
 }
 
 func decodeCatalogJSONValue(raw string) (any, bool) {
@@ -1157,8 +603,4 @@ func normalizeGovernanceStatus(status string) string {
 		return GovernancePending
 	}
 	return status
-}
-
-func normalizeCatalogType(itemType string) string {
-	return strings.TrimSpace(itemType)
 }

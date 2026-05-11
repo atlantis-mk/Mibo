@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,24 +21,18 @@ func TestRunnerProcessesDifferentLibrariesConcurrentlyWhenResourcesAllow(t *test
 	first := createSchedulerTask(t, ctx, svc, firstRun, "task:runner:library:1", map[string]int{ResourceDBWrite: 1})
 	second := createSchedulerTask(t, ctx, svc, secondRun, "task:runner:library:2", map[string]int{ResourceDBWrite: 1})
 
-	runner := NewRunner(svc, RunnerConfig{Enabled: true, LeaseDuration: time.Minute})
+	runner := NewRunner(svc, RunnerConfig{Enabled: true, LeaseDuration: time.Minute, MaxConcurrent: 2, Owner: "test-runner"})
 	started := make(chan uint, 2)
 	release := make(chan struct{})
-	var once sync.Once
 	runner.Register(TaskTypeDiscoverStorage, func(ctx context.Context, task database.WorkflowTask) error {
 		started <- task.ID
-		once.Do(func() {
-			go runner.runOnce(ctx)
-		})
 		<-release
 		return nil
 	})
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runner.runOnce(ctx)
-	}()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go runner.Run(runCtx)
 
 	seen := map[uint]bool{}
 	deadline := time.After(time.Second)
@@ -55,14 +48,140 @@ func TestRunnerProcessesDifferentLibrariesConcurrentlyWhenResourcesAllow(t *test
 		t.Fatalf("expected tasks %d and %d to start, seen=%v", first.ID, second.ID, seen)
 	}
 	close(release)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("runner did not finish")
+	deadline = time.After(time.Second)
+	for _, taskID := range []uint{first.ID, second.ID} {
+		for {
+			var task database.WorkflowTask
+			if err := db.First(&task, taskID).Error; err != nil {
+				t.Fatalf("load task: %v", err)
+			}
+			if task.Status == TaskStatusCompleted {
+				break
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("task %d did not complete, status=%s", taskID, task.Status)
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}
 
 	assertTaskStatus(t, db, first.ID, TaskStatusCompleted)
 	assertTaskStatus(t, db, second.ID, TaskStatusCompleted)
+}
+
+func TestRunnerHeartbeatRenewsLeaseWhileTaskRuns(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	run := createTestRun(t, ctx, svc)
+	task := createSchedulerTask(t, ctx, svc, run, "task:runner:heartbeat", nil)
+
+	runner := NewRunner(svc, RunnerConfig{Enabled: true, LeaseDuration: 80 * time.Millisecond, PollInterval: 10 * time.Millisecond, MaxConcurrent: 1, Owner: "test-runner"})
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	runner.Register(TaskTypeDiscoverStorage, func(ctx context.Context, task database.WorkflowTask) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go runner.Run(runCtx)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+
+	var initialLease database.WorkflowTaskLease
+	deadline := time.After(time.Second)
+	for {
+		if err := db.Where("task_id = ?", task.ID).First(&initialLease).Error; err == nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("initial lease not created")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	time.Sleep(60 * time.Millisecond)
+
+	var renewedLease database.WorkflowTaskLease
+	if err := db.Where("task_id = ?", task.ID).First(&renewedLease).Error; err != nil {
+		t.Fatalf("load renewed lease: %v", err)
+	}
+	if !renewedLease.LeaseUntil.After(initialLease.LeaseUntil) {
+		t.Fatalf("expected lease renewal after %s, got %s", initialLease.LeaseUntil, renewedLease.LeaseUntil)
+	}
+
+	close(release)
+	deadline = time.After(time.Second)
+	for {
+		var current database.WorkflowTask
+		if err := db.First(&current, task.ID).Error; err != nil {
+			t.Fatalf("load task: %v", err)
+		}
+		if current.Status == TaskStatusCompleted {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("task did not complete, status=%s", current.Status)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func TestRunnerFailsTaskWhenExecutionTimesOut(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	run := createTestRun(t, ctx, svc)
+	task := createSchedulerTask(t, ctx, svc, run, "task:runner:timeout", nil)
+
+	runner := NewRunner(svc, RunnerConfig{Enabled: true, LeaseDuration: time.Second, TaskTimeout: 50 * time.Millisecond, PollInterval: 10 * time.Millisecond, MaxConcurrent: 1, Owner: "test-runner"})
+	started := make(chan struct{}, 1)
+	runner.Register(TaskTypeDiscoverStorage, func(ctx context.Context, task database.WorkflowTask) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go runner.Run(runCtx)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		var current database.WorkflowTask
+		if err := db.First(&current, task.ID).Error; err != nil {
+			t.Fatalf("load task: %v", err)
+		}
+		if current.Status == TaskStatusFailed {
+			if !strings.Contains(current.ErrorMessage, context.DeadlineExceeded.Error()) {
+				t.Fatalf("expected timeout error message, got %q", current.ErrorMessage)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("task did not fail, status=%s", current.Status)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 }
 
 func TestRunnerRegisterPanicsOnDuplicateTaskType(t *testing.T) {

@@ -14,8 +14,6 @@ import (
 
 type MarkScanExclusionInput struct {
 	InventoryFileID uint
-	AssetID         uint
-	ItemID          uint
 	Reason          string
 	UserID          *uint
 }
@@ -28,8 +26,6 @@ type SetScanExclusionEnabledInput struct {
 
 type FilenameExclusionTargetInput struct {
 	InventoryFileID uint
-	AssetID         uint
-	ItemID          uint
 }
 
 type CreateFilenameExclusionRuleInput struct {
@@ -64,6 +60,7 @@ type ScanExclusionView struct {
 
 type FilenameExclusionFileView struct {
 	ID                uint   `json:"id"`
+	LibraryID         uint   `json:"library_id"`
 	StoragePath       string `json:"storage_path"`
 	StableIdentityKey string `json:"stable_identity_key,omitempty"`
 	Status            string `json:"status"`
@@ -142,7 +139,7 @@ func (s *Service) MarkScanExclusion(ctx context.Context, input MarkScanExclusion
 
 	var result database.ScanExclusion
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		file, assetIDs, itemIDs, err := scanExclusionTarget(ctx, tx, input)
+		file, err := scanExclusionTarget(ctx, tx, input)
 		if err != nil {
 			return err
 		}
@@ -160,21 +157,13 @@ func (s *Service) MarkScanExclusion(ctx context.Context, input MarkScanExclusion
 		if err := tx.WithContext(ctx).Model(&database.InventoryFile{}).Where("id = ?", file.ID).Updates(map[string]any{"status": inventory.FileStatusMissing, "missing_since": gorm.Expr("COALESCE(missing_since, ?)", missingAt), "deleted_at": nil}).Error; err != nil {
 			return err
 		}
-		if len(assetIDs) > 0 {
-			if err := tx.WithContext(ctx).Model(&database.MediaAsset{}).Where("id IN ?", assetIDs).Updates(map[string]any{"status": inventory.AssetStatusMissing, "missing_since": gorm.Expr("COALESCE(missing_since, ?)", missingAt)}).Error; err != nil {
-				return err
-			}
-			if err := tx.WithContext(ctx).Where("asset_id IN ?", assetIDs).Delete(&database.AssetItem{}).Error; err != nil {
-				return err
-			}
-		}
-		return updateCatalogAvailabilityForScanExclusion(ctx, tx, itemIDs)
+		return catalog.NewService(tx).RefreshLibraryProjectionScope(ctx, file.LibraryID)
 	})
 	return result, err
 }
 
 func (s *Service) PreviewFilenameExclusion(ctx context.Context, input FilenameExclusionTargetInput) (FilenameExclusionPreview, error) {
-	file, _, _, err := scanExclusionTarget(ctx, s.db, MarkScanExclusionInput{InventoryFileID: input.InventoryFileID, AssetID: input.AssetID, ItemID: input.ItemID})
+	file, err := scanExclusionTarget(ctx, s.db, MarkScanExclusionInput{InventoryFileID: input.InventoryFileID})
 	if err != nil {
 		return FilenameExclusionPreview{}, err
 	}
@@ -200,7 +189,7 @@ func (s *Service) CreateFilenameExclusionRule(ctx context.Context, input CreateF
 	}
 	var result database.FilenameExclusionRule
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		file, _, _, err := scanExclusionTarget(ctx, tx, MarkScanExclusionInput{InventoryFileID: input.InventoryFileID, AssetID: input.AssetID, ItemID: input.ItemID})
+		file, err := scanExclusionTarget(ctx, tx, MarkScanExclusionInput{InventoryFileID: input.InventoryFileID})
 		if err != nil {
 			return err
 		}
@@ -309,17 +298,11 @@ func (s *Service) SetScanExclusionEnabled(ctx context.Context, input SetScanExcl
 	return exclusion, nil
 }
 
-func scanExclusionTarget(ctx context.Context, tx *gorm.DB, input MarkScanExclusionInput) (database.InventoryFile, []uint, []uint, error) {
-	switch {
-	case input.InventoryFileID != 0:
-		return scanExclusionTargetFromFile(ctx, tx, input.InventoryFileID)
-	case input.AssetID != 0:
-		return scanExclusionTargetFromAsset(ctx, tx, input.AssetID)
-	case input.ItemID != 0:
-		return scanExclusionTargetFromItem(ctx, tx, input.ItemID)
-	default:
-		return database.InventoryFile{}, nil, nil, errors.New("inventory file id, asset id, or item id is required")
+func scanExclusionTarget(ctx context.Context, tx *gorm.DB, input MarkScanExclusionInput) (database.InventoryFile, error) {
+	if input.InventoryFileID == 0 {
+		return database.InventoryFile{}, errors.New("inventory file id is required")
 	}
+	return scanExclusionTargetFromFile(ctx, tx, input.InventoryFileID)
 }
 
 func upsertFilenameExclusionRule(ctx context.Context, tx *gorm.DB, filename string, reason string, userID *uint) (database.FilenameExclusionRule, error) {
@@ -356,22 +339,21 @@ func (s *Service) hideFilenameExclusionRuleMatches(ctx context.Context, tx *gorm
 	if len(fileIDs) == 0 {
 		return nil
 	}
-	assetIDs, itemIDs, err := scanExclusionLinkedAssetAndItemIDs(ctx, tx, fileIDs)
-	if err != nil {
-		return err
+	libraryIDs := make(map[uint]struct{})
+	for _, file := range files {
+		if !file.Restored && file.LibraryID != 0 {
+			libraryIDs[file.LibraryID] = struct{}{}
+		}
 	}
 	if err := updateInventoryFilesMissingInBatches(ctx, tx, fileIDs); err != nil {
 		return err
 	}
-	if len(assetIDs) > 0 {
-		if err := updateMediaAssetsMissingInBatches(ctx, tx, assetIDs); err != nil {
-			return err
-		}
-		if err := deleteAssetItemsInBatches(ctx, tx, assetIDs); err != nil {
+	for libraryID := range libraryIDs {
+		if err := catalog.NewService(tx).RefreshLibraryProjectionScope(ctx, libraryID); err != nil {
 			return err
 		}
 	}
-	return updateCatalogAvailabilityForScanExclusion(ctx, tx, itemIDs)
+	return nil
 }
 
 func (s *Service) ListFilenameExclusionRules(ctx context.Context, input ListScanExclusionsInput) ([]FilenameExclusionRuleView, error) {
@@ -427,7 +409,7 @@ func (s *Service) filenameExclusionAffectedFiles(ctx context.Context, tx *gorm.D
 		if normalizedFilenameFromPath(file.StoragePath) != filename {
 			continue
 		}
-		files = append(files, FilenameExclusionFileView{ID: file.ID, StoragePath: normalizePath(file.StoragePath), StableIdentityKey: strings.TrimSpace(file.StableIdentityKey), Status: file.Status, Restored: restored[file.ID]})
+		files = append(files, FilenameExclusionFileView{ID: file.ID, LibraryID: file.LibraryID, StoragePath: normalizePath(file.StoragePath), StableIdentityKey: strings.TrimSpace(file.StableIdentityKey), Status: file.Status, Restored: restored[file.ID]})
 	}
 	return files, nil
 }
@@ -439,90 +421,18 @@ func filenameRestoreMatchesFile(restore database.FilenameExclusionRestore, file 
 	return normalizePath(restore.StoragePath) == normalizePath(file.StoragePath)
 }
 
-func scanExclusionTargetFromFile(ctx context.Context, tx *gorm.DB, fileID uint) (database.InventoryFile, []uint, []uint, error) {
+func scanExclusionTargetFromFile(ctx context.Context, tx *gorm.DB, fileID uint) (database.InventoryFile, error) {
 	var file database.InventoryFile
 	if err := tx.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", fileID).First(&file).Error; err != nil {
-		return database.InventoryFile{}, nil, nil, err
+		return database.InventoryFile{}, err
 	}
-	assetIDs, itemIDs, err := scanExclusionLinkedAssetAndItemIDs(ctx, tx, []uint{file.ID})
-	return file, assetIDs, itemIDs, err
-}
-
-func scanExclusionTargetFromAsset(ctx context.Context, tx *gorm.DB, assetID uint) (database.InventoryFile, []uint, []uint, error) {
-	var file database.InventoryFile
-	err := tx.WithContext(ctx).
-		Joins("JOIN asset_files ON asset_files.file_id = inventory_files.id").
-		Where("asset_files.asset_id = ? AND asset_files.role = ? AND asset_files.part_index = 0 AND inventory_files.deleted_at IS NULL", assetID, inventory.FileRoleSource).
-		Order("inventory_files.id asc").
-		First(&file).Error
-	if err != nil {
-		return database.InventoryFile{}, nil, nil, err
-	}
-	assetIDs, itemIDs, err := scanExclusionLinkedAssetAndItemIDs(ctx, tx, []uint{file.ID})
-	return file, appendMissingUint(assetIDs, assetID), itemIDs, err
-}
-
-func scanExclusionTargetFromItem(ctx context.Context, tx *gorm.DB, itemID uint) (database.InventoryFile, []uint, []uint, error) {
-	var file database.InventoryFile
-	err := tx.WithContext(ctx).
-		Joins("JOIN asset_files ON asset_files.file_id = inventory_files.id").
-		Joins("JOIN asset_items ON asset_items.asset_id = asset_files.asset_id").
-		Where("asset_items.item_id = ? AND asset_files.role = ? AND asset_files.part_index = 0 AND inventory_files.deleted_at IS NULL", itemID, inventory.FileRoleSource).
-		Order("inventory_files.id asc").
-		First(&file).Error
-	if err != nil {
-		return database.InventoryFile{}, nil, nil, err
-	}
-	assetIDs, itemIDs, err := scanExclusionLinkedAssetAndItemIDs(ctx, tx, []uint{file.ID})
-	return file, assetIDs, appendMissingUint(itemIDs, itemID), err
-}
-
-func scanExclusionLinkedAssetAndItemIDs(ctx context.Context, tx *gorm.DB, fileIDs []uint) ([]uint, []uint, error) {
-	var assetIDs []uint
-	if err := forEachUintBatch(fileIDs, func(batch []uint) error {
-		var batchAssetIDs []uint
-		if err := tx.WithContext(ctx).Table("asset_files").Distinct("asset_id").Where("file_id IN ? AND role = ?", batch, inventory.FileRoleSource).Pluck("asset_id", &batchAssetIDs).Error; err != nil {
-			return err
-		}
-		assetIDs = appendUniqueUintValues(assetIDs, batchAssetIDs)
-		return nil
-	}); err != nil {
-		return nil, nil, err
-	}
-	if len(assetIDs) == 0 {
-		return nil, nil, nil
-	}
-	var itemIDs []uint
-	if err := forEachUintBatch(assetIDs, func(batch []uint) error {
-		var batchItemIDs []uint
-		if err := tx.WithContext(ctx).Table("asset_items").Distinct("item_id").Where("asset_id IN ?", batch).Pluck("item_id", &batchItemIDs).Error; err != nil {
-			return err
-		}
-		itemIDs = appendUniqueUintValues(itemIDs, batchItemIDs)
-		return nil
-	}); err != nil {
-		return nil, nil, err
-	}
-	return assetIDs, itemIDs, nil
+	return file, nil
 }
 
 func updateInventoryFilesMissingInBatches(ctx context.Context, tx *gorm.DB, fileIDs []uint) error {
 	missingAt := time.Now().UTC()
 	return forEachUintBatch(fileIDs, func(batch []uint) error {
 		return tx.WithContext(ctx).Model(&database.InventoryFile{}).Where("id IN ?", batch).Updates(map[string]any{"status": inventory.FileStatusMissing, "missing_since": gorm.Expr("COALESCE(missing_since, ?)", missingAt), "deleted_at": nil}).Error
-	})
-}
-
-func updateMediaAssetsMissingInBatches(ctx context.Context, tx *gorm.DB, assetIDs []uint) error {
-	missingAt := time.Now().UTC()
-	return forEachUintBatch(assetIDs, func(batch []uint) error {
-		return tx.WithContext(ctx).Model(&database.MediaAsset{}).Where("id IN ?", batch).Updates(map[string]any{"status": inventory.AssetStatusMissing, "missing_since": gorm.Expr("COALESCE(missing_since, ?)", missingAt)}).Error
-	})
-}
-
-func deleteAssetItemsInBatches(ctx context.Context, tx *gorm.DB, assetIDs []uint) error {
-	return forEachUintBatch(assetIDs, func(batch []uint) error {
-		return tx.WithContext(ctx).Where("asset_id IN ?", batch).Delete(&database.AssetItem{}).Error
 	})
 }
 
@@ -550,88 +460,6 @@ func upsertScanExclusion(ctx context.Context, tx *gorm.DB, file database.Invento
 		return database.ScanExclusion{}, err
 	}
 	return exclusion, nil
-}
-
-func updateCatalogAvailabilityForScanExclusion(ctx context.Context, tx *gorm.DB, itemIDs []uint) error {
-	ids := catalogItemAndAncestorIDsFromIDs(ctx, tx, itemIDs)
-	for _, itemID := range ids {
-		availability, err := catalogItemAvailabilityStatus(ctx, tx, itemID)
-		if err != nil {
-			return err
-		}
-		if err := tx.WithContext(ctx).Model(&database.CatalogItem{}).Where("id = ?", itemID).Updates(missingAwareCatalogUpdates(availability)).Error; err != nil {
-			return err
-		}
-	}
-	libraryID := catalogLibraryIDForItems(ctx, tx, ids)
-	if libraryID == 0 {
-		return nil
-	}
-	return catalog.NewService(tx).RefreshLibraryProjection(ctx, libraryID, "")
-}
-
-func catalogLibraryIDForItems(ctx context.Context, tx *gorm.DB, itemIDs []uint) uint {
-	if len(itemIDs) == 0 {
-		return 0
-	}
-	var libraryID uint
-	_ = forEachUintBatch(itemIDs, func(batch []uint) error {
-		if libraryID != 0 {
-			return nil
-		}
-		return tx.WithContext(ctx).Model(&database.CatalogItem{}).Select("library_id").Where("id IN ?", batch).Order("id asc").Limit(1).Scan(&libraryID).Error
-	})
-	return libraryID
-}
-
-func catalogItemAndAncestorIDsFromIDs(ctx context.Context, tx *gorm.DB, itemIDs []uint) []uint {
-	if len(itemIDs) == 0 {
-		return nil
-	}
-	var items []database.CatalogItem
-	if err := tx.WithContext(ctx).Select("id", "parent_id").Find(&items).Error; err != nil {
-		return itemIDs
-	}
-	parentByID := make(map[uint]*uint, len(items))
-	for _, item := range items {
-		parentByID[item.ID] = item.ParentID
-	}
-	seen := map[uint]struct{}{}
-	var ids []uint
-	for _, itemID := range itemIDs {
-		for current := itemID; current != 0; {
-			if _, ok := seen[current]; ok {
-				break
-			}
-			seen[current] = struct{}{}
-			ids = append(ids, current)
-			parentID := parentByID[current]
-			if parentID == nil {
-				break
-			}
-			current = *parentID
-		}
-	}
-	return ids
-}
-
-func appendMissingUint(values []uint, value uint) []uint {
-	if value == 0 {
-		return values
-	}
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func appendUniqueUintValues(values []uint, additions []uint) []uint {
-	for _, value := range additions {
-		values = appendMissingUint(values, value)
-	}
-	return values
 }
 
 func forEachUintBatch(values []uint, fn func([]uint) error) error {

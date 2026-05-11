@@ -18,7 +18,7 @@ type ScheduledJobResult struct {
 }
 
 func (s *Service) RunScheduledScan(ctx context.Context, due schedule.DueSchedule) (ScheduledJobResult, error) {
-	if s.workflow != nil {
+	if s.workflowCapability() != nil {
 		libraries, err := s.resolveScheduledLibraries(ctx, due)
 		if err != nil {
 			return ScheduledJobResult{}, err

@@ -12,7 +12,8 @@ import (
 )
 
 type LocalScannerEvidence struct {
-	Source      database.MetadataSource
+	ItemSource  database.MetadataItemSource
+	ResourceID  uint
 	Sidecars    []LocalScannerSidecarEvidence
 	Images      []LocalScannerImageEvidence
 	ExternalIDs []LocalScannerExternalIDEvidence
@@ -39,16 +40,37 @@ type LocalScannerExternalIDEvidence struct {
 	ExternalID   string
 }
 
-func (s *Service) loadLocalScannerEvidence(ctx context.Context, itemID uint) (LocalScannerEvidence, error) {
-	var source database.MetadataSource
-	if err := s.db.WithContext(ctx).Where("item_id = ? AND source_type = ? AND source_name = ?", itemID, catalog.SourceTypeLocalFile, "scanner").Order("fetched_at desc, id desc").First(&source).Error; err != nil {
+func (s *Service) loadMetadataItemLocalScannerEvidence(ctx context.Context, metadataItemID uint) (LocalScannerEvidence, error) {
+	var source database.MetadataItemSource
+	if err := s.db.WithContext(ctx).Where("metadata_item_id = ? AND source_type = ? AND source_name = ?", metadataItemID, catalog.SourceTypeLocalFile, "scanner").Order("fetched_at desc, id desc").First(&source).Error; err == nil {
+		return localScannerEvidenceFromMetadataItemSource(source)
+	}
+	var resourceLink database.ResourceMetadataLink
+	if err := s.db.WithContext(ctx).Where("metadata_item_id = ?", metadataItemID).Order("id asc").First(&resourceLink).Error; err != nil {
 		return LocalScannerEvidence{}, err
 	}
+	var libraryLink database.ResourceLibraryLink
+	if err := s.db.WithContext(ctx).Where("resource_id = ?", resourceLink.ResourceID).Order("last_seen_at desc, id asc").First(&libraryLink).Error; err != nil {
+		return LocalScannerEvidence{}, err
+	}
+	source = database.MetadataItemSource{MetadataItemID: metadataItemID, SourceType: catalog.SourceTypeLocalFile, SourceName: "scanner", TriggeringLibraryID: &libraryLink.LibraryID, PayloadJSON: libraryLink.EvidenceJSON, EvidenceJSON: libraryLink.EvidenceJSON, FetchedAt: libraryLink.LastSeenAt}
+	if err := s.db.WithContext(ctx).Create(&source).Error; err != nil {
+		return LocalScannerEvidence{}, err
+	}
+	evidence, err := localScannerEvidenceFromMetadataItemSource(source)
+	if err != nil {
+		return LocalScannerEvidence{}, err
+	}
+	evidence.ResourceID = resourceLink.ResourceID
+	return evidence, nil
+}
+
+func localScannerEvidenceFromMetadataItemSource(source database.MetadataItemSource) (LocalScannerEvidence, error) {
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(source.PayloadJSON)), &payload); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(firstNonEmpty(source.PayloadJSON, source.EvidenceJSON))), &payload); err != nil {
 		return LocalScannerEvidence{}, err
 	}
-	evidence := LocalScannerEvidence{Source: source}
+	evidence := LocalScannerEvidence{ItemSource: source}
 	evidence.Sidecars = localScannerSidecars(payload["metadata_sidecars"])
 	evidence.Images = localScannerImages(payload["image_candidates"])
 	evidence.ExternalIDs = localScannerExternalIDs(payload["external_ids"])
@@ -173,21 +195,20 @@ func localExternalIDCandidate(provider string, providerType string, value string
 }
 
 func localEvidenceDetail(evidence LocalScannerEvidence, itemType string) (NormalizedMetadataDetail, bool) {
-	if len(evidence.Sidecars) == 0 {
-		return NormalizedMetadataDetail{}, false
-	}
-	sidecar := evidence.Sidecars[0]
 	detail := NormalizedMetadataDetail{Provider: database.MetadataProviderTypeLocalScan, ProviderType: itemType, ExternalIDs: make([]NormalizedMetadataExternalID, 0)}
-	if itemType == catalog.ItemTypeSeries {
-		detail.Title = strings.TrimSpace(fmt.Sprint(sidecar.Hints["series_title"]))
-	}
-	if detail.Title == "" {
-		detail.Title = strings.TrimSpace(fmt.Sprint(sidecar.Hints["title"]))
-	}
-	detail.OriginalTitle = strings.TrimSpace(fmt.Sprint(sidecar.Hints["original_title"]))
-	detail.Overview = strings.TrimSpace(fmt.Sprint(sidecar.Hints["overview"]))
-	if year := intFromAny(sidecar.Hints["year"]); year > 0 {
-		detail.Year = &year
+	if len(evidence.Sidecars) > 0 {
+		sidecar := evidence.Sidecars[0]
+		if itemType == catalog.ItemTypeSeries {
+			detail.Title = strings.TrimSpace(fmt.Sprint(sidecar.Hints["series_title"]))
+		}
+		if detail.Title == "" {
+			detail.Title = strings.TrimSpace(fmt.Sprint(sidecar.Hints["title"]))
+		}
+		detail.OriginalTitle = strings.TrimSpace(fmt.Sprint(sidecar.Hints["original_title"]))
+		detail.Overview = strings.TrimSpace(fmt.Sprint(sidecar.Hints["overview"]))
+		if year := intFromAny(sidecar.Hints["year"]); year > 0 {
+			detail.Year = &year
+		}
 	}
 	for _, candidate := range localEvidenceCandidates(evidence, catalogTMDBMediaType(itemType)) {
 		detail.ExternalIDs = append(detail.ExternalIDs, NormalizedMetadataExternalID{Provider: candidate.Provider, ProviderType: candidate.ProviderType, ExternalID: candidate.ExternalID, IsPrimary: true, Confidence: &candidate.Confidence})
@@ -204,7 +225,7 @@ func localEvidenceDetail(evidence LocalScannerEvidence, itemType string) (Normal
 		}
 		detail.Images = append(detail.Images, NormalizedMetadataImage{ImageType: imageType, URL: url, SortOrder: sortOrder, Selected: !image.Provisional})
 	}
-	return detail, detail.Title != "" || detail.OriginalTitle != "" || detail.Overview != "" || detail.Year != nil || len(detail.ExternalIDs) > 0
+	return detail, detail.Title != "" || detail.OriginalTitle != "" || detail.Overview != "" || detail.Year != nil || len(detail.ExternalIDs) > 0 || len(detail.Images) > 0
 }
 
 func localEvidenceProviderAttempt(provider settings.ResolvedMetadataProviderInstance, selected bool) MetadataProviderAttempt {

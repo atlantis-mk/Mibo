@@ -204,7 +204,7 @@ func (s *Service) realtimeRefreshEnabled(ctx context.Context, libraryID uint) (b
 	if err != nil {
 		return false, err
 	}
-	return config.ScanPolicy.RealtimeMonitorEnabled, nil
+	return config.RealtimeRefreshEnabled(), nil
 }
 
 func refreshJobKey(libraryID uint, rootPath string, fallback bool) string {

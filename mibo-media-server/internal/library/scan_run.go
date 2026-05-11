@@ -39,7 +39,7 @@ type discoveredStableIdentityUpdate struct {
 	resultKey string
 }
 
-const catalogMaterializeScanBatchSize = 25
+const recognitionResolveScanBatchSize = 25
 
 func (s *Service) QueueLibraryScan(ctx context.Context, libraryID uint) (database.Job, error) {
 	var record database.Library
@@ -88,7 +88,7 @@ func (s *Service) RunSyncLibrary(ctx context.Context, job database.Job) error {
 		libraryForPath := config.Library
 		libraryForPath.MediaSourceID = pathRecord.MediaSourceID
 		libraryForPath.RootPath = pathRecord.RootPath
-		scanMode := scanMode{deferCatalogMaterialization: s.cfg.Worker.Enabled}
+		scanMode := scanMode{deferRecognitionResolution: s.cfg.Worker.Enabled}
 		pathResult, err := s.scanLibraryWithMode(ctx, provider, libraryForPath, pathRecord.RootPath, &scanMode)
 		if err != nil {
 			_ = s.updateLibraryStatus(ctx, config.Library.ID, "error")
@@ -129,7 +129,7 @@ func (s *Service) RunTargetedRefresh(ctx context.Context, job database.Job) erro
 	libraryForPath := config.Library
 	libraryForPath.MediaSourceID = pathRecord.MediaSourceID
 	libraryForPath.RootPath = pathRecord.RootPath
-	scanMode := scanMode{partial: true, rootPath: rootPath, deferCatalogMaterialization: s.cfg.Worker.Enabled}
+	scanMode := scanMode{partial: true, rootPath: rootPath, deferRecognitionResolution: s.cfg.Worker.Enabled}
 	result, err := s.scanLibraryWithMode(ctx, provider, libraryForPath, rootPath, &scanMode)
 	if err != nil {
 		_ = s.updateLibraryStatus(ctx, config.Library.ID, "error")
@@ -154,7 +154,7 @@ func (r *SyncResult) add(other SyncResult) {
 	}
 	r.DirectoriesScanned += other.DirectoriesScanned
 	r.FilesSeen += other.FilesSeen
-	r.CatalogItemsSeen += other.CatalogItemsSeen
+	r.MetadataItemsSeen += other.MetadataItemsSeen
 	r.InventoryFilesSeen += other.InventoryFilesSeen
 	r.ExcludedFilesSkipped += other.ExcludedFilesSkipped
 	for reason, count := range other.ExcludedFilesSkippedByReason {
@@ -211,10 +211,10 @@ func (s *Service) scanDecisionSnapshot(ctx context.Context, provider storage.Pro
 }
 
 func (s *Service) canShortCircuitDirectoryMaterialization(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy, mode *scanMode) (bool, error) {
-	if mode == nil || s.db == nil || mode.partial || !mode.deferCatalogMaterialization {
+	if mode == nil || s.db == nil || mode.partial || !mode.deferRecognitionResolution {
 		return false, nil
 	}
-	if mode.directoryMaterialized(snapshot.Path) {
+	if mode.directoryResolved(snapshot.Path) {
 		return false, nil
 	}
 	decisionSnapshot, err := s.scanDecisionSnapshot(ctx, provider, library, snapshot, exclusionRules, scanPolicy, mode)
@@ -225,13 +225,16 @@ func (s *Service) canShortCircuitDirectoryMaterialization(ctx context.Context, p
 	if len(visiblePaths) == 0 {
 		return false, nil
 	}
+	if !s.db.Migrator().HasTable("resource_files") {
+		return false, nil
+	}
 	var rows []struct {
 		StoragePath string
 	}
 	if err := s.db.WithContext(ctx).
 		Table("inventory_files").
 		Select("DISTINCT inventory_files.storage_path").
-		Joins("JOIN asset_files ON asset_files.file_id = inventory_files.id AND asset_files.role = ? AND asset_files.part_index = 0", inventory.FileRoleSource).
+		Joins("JOIN resource_files ON resource_files.inventory_file_id = inventory_files.id AND resource_files.role = ? AND resource_files.part_index = 0", inventory.FileRoleSource).
 		Where("inventory_files.library_id = ? AND inventory_files.deleted_at IS NULL AND inventory_files.status = ? AND inventory_files.storage_provider = ? AND inventory_files.storage_path IN ?", library.ID, inventory.FileStatusAvailable, strings.TrimSpace(provider.Name()), visiblePaths).
 		Scan(&rows).Error; err != nil {
 		return false, err
@@ -239,7 +242,7 @@ func (s *Service) canShortCircuitDirectoryMaterialization(ctx context.Context, p
 	if len(rows) != len(visiblePaths) {
 		return false, nil
 	}
-	mode.markDirectoryMaterialized(snapshot.Path)
+	mode.markDirectoryResolved(snapshot.Path)
 	return true, nil
 }
 
@@ -269,7 +272,8 @@ func (s *Service) scanLibraryWithMode(ctx context.Context, provider storage.Prov
 	if err != nil {
 		return SyncResult{}, err
 	}
-	if !scanPolicy.ScannerEnabled {
+	effectiveConfig := EffectiveLibraryConfig{ScanPolicy: scanPolicy}
+	if !effectiveConfig.ScannerEnabled() {
 		return result, nil
 	}
 	subtitlePolicy, err := loadSubtitlePolicy(ctx, s.db, library.ID)
@@ -371,7 +375,7 @@ func (s *Service) walkDirectory(ctx context.Context, provider storage.Provider, 
 	if err := s.flushPendingSiblingMovieFiles(ctx, mode, snapshot.Path, seenFiles, result); err != nil {
 		return err
 	}
-	if err := s.flushCatalogMaterializeCandidates(ctx, library.ID, rootPathForScanMode(library.RootPath, mode), mode, catalogMaterializeScanBatchSize); err != nil {
+	if err := s.flushRecognitionResolveCandidates(ctx, library.ID, rootPathForScanMode(library.RootPath, mode), mode, recognitionResolveScanBatchSize); err != nil {
 		return err
 	}
 	return nil
@@ -404,6 +408,7 @@ func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provid
 		mode.recordDiscoveredFiles(files)
 		mode.mergePathTreeAssignments(compilePathTreeAssignmentsFromFiles(mode.discoveredVideoFilesInSnapshot(decisionSnapshot), library.RootPath, nil, newFilenameTokenProfileCache()))
 	}
+	batchFiles := make([]database.InventoryFile, 0, len(candidates))
 	for _, candidate := range candidates {
 		fileKey := strings.TrimSpace(provider.Name()) + "\x00" + strings.TrimSpace(candidate.object.Path)
 		file, ok := files[fileKey]
@@ -411,43 +416,25 @@ func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provid
 			return fmt.Errorf("discovered inventory file missing after bulk upsert for %s", candidate.object.Path)
 		}
 		result.InventoryFilesSeen++
-		if mode != nil && mode.deferCatalogMaterialization {
-			mode.recordCatalogMaterializeCandidate(file.ID)
-			mode.markDirectoryMaterialized(snapshot.Path)
-			continue
-		}
-		if s.shouldDelaySiblingMovieMaterialization(ctx, mode, library, file, candidate.object) {
-			mode.recordPendingSiblingMovieFile(pendingSiblingMovieFile{Provider: provider, Library: library, Object: candidate.object, Snapshot: snapshot, DecisionSnapshot: decisionSnapshot, DirectorySnapshots: mode.directorySnapshots, SubtitlePolicy: subtitlePolicy, FileID: file.ID})
-			continue
-		}
-		directorySnapshots := map[string]scanDirectorySnapshot{}
-		if mode != nil {
-			directorySnapshots = mode.directorySnapshots
-		}
-		tokenCache := newFilenameTokenProfileCache()
-		shapePlan := compileContentShapePlan(buildContentShapeDirectoryProfile(effectiveVideoLibraryType(library.Type), library.RootPath, decisionSnapshot, tokenCache))
-		shapeAssignments := contentShapeAssignmentsByPath(generateContentShapeAssignments(shapePlan, decisionSnapshot, tokenCache))
-		writeResult, sidecarPaths, err := s.materializeObjectFromSnapshotWithDirectorySnapshotsAndPlan(ctx, provider, library, candidate.object, snapshot, decisionSnapshot, directorySnapshots, tokenCache, shapePlan, shapeAssignments, map[string]pathTreeWorkGroupAssignment{candidate.object.Path: mode.pathTreeAssignment(candidate.object.Path)}, subtitlePolicy, nil)
-		if err != nil {
-			return err
-		}
-		for _, sidecarPath := range sidecarPaths {
-			seenFiles[sidecarPath] = struct{}{}
-			result.InventoryFilesSeen++
-		}
-		if writeResult.Item.ID != 0 {
-			result.CatalogItemsSeen++
-			mode.recordCatalogMatchCandidateForItem(writeResult.Item)
-		}
-		if writeResult.File.ID != 0 {
-			mode.recordInventoryProbeCandidate(writeResult.File.ID)
-		}
+		batchFiles = append(batchFiles, file)
 	}
+	materializeResult, err := s.runRecognitionMaterializeBatch(ctx, library, rootPathForScanMode(library.RootPath, mode), batchFiles, mode)
+	if err != nil {
+		return err
+	}
+	result.MetadataItemsSeen += len(materializeResult.MetadataIDs)
+	if mode != nil {
+		mode.markDirectoryResolved(snapshot.Path)
+	}
+	_ = exclusionRules
+	_ = scanPolicy
+	_ = subtitlePolicy
+	_ = seenFiles
 	return nil
 }
 
 func (s *Service) shouldDelaySiblingMovieMaterialization(ctx context.Context, mode *scanMode, library database.Library, file database.InventoryFile, object storage.Object) bool {
-	if mode == nil || mode.deferCatalogMaterialization || mode.partial || file.ID == 0 || strings.TrimSpace(file.StoragePath) == "" {
+	if mode == nil || mode.deferRecognitionResolution || mode.partial || file.ID == 0 || strings.TrimSpace(file.StoragePath) == "" {
 		return false
 	}
 	childDir := path.Dir(file.StoragePath)
@@ -497,72 +484,39 @@ func (m *scanMode) recordPendingSiblingMovieFile(pending pendingSiblingMovieFile
 }
 
 func (s *Service) flushPendingSiblingMovieFiles(ctx context.Context, mode *scanMode, parentPath string, seenFiles map[string]struct{}, result *SyncResult) error {
-	if mode == nil || len(mode.pendingSiblingMovieFiles) == 0 {
-		return nil
-	}
-	pending := mode.pendingSiblingMovieFiles[strings.TrimSpace(parentPath)]
-	if len(pending) == 0 {
-		return nil
-	}
-	delete(mode.pendingSiblingMovieFiles, strings.TrimSpace(parentPath))
-	files := make([]database.InventoryFile, 0, len(pending))
-	for _, entry := range pending {
-		if entry.FileID == 0 {
-			continue
-		}
-		var file database.InventoryFile
-		if err := s.db.WithContext(ctx).First(&file, entry.FileID).Error; err != nil {
-			return err
-		}
-		files = append(files, file)
-	}
-	assignments := compilePathTreeAssignmentsFromFiles(files, pending[0].Library.RootPath, nil, newFilenameTokenProfileCache())
-	rules, err := loadPathTreeClassificationRules(ctx, s.db, pending[0].Library.ID)
-	if err != nil {
-		return err
-	}
-	for storagePath, assignment := range applyPathTreeClassificationRules(files, rules, nil, newFilenameTokenProfileCache()) {
-		if assignments == nil {
-			assignments = make(map[string]pathTreeWorkGroupAssignment)
-		}
-		assignments[storagePath] = assignment
-	}
-	mode.mergePathTreeAssignments(assignments)
-	for _, entry := range pending {
-		tokenCache := newFilenameTokenProfileCache()
-		shapePlan := compileContentShapePlan(buildContentShapeDirectoryProfile(effectiveVideoLibraryType(entry.Library.Type), entry.Library.RootPath, entry.DecisionSnapshot, tokenCache))
-		shapeAssignments := contentShapeAssignmentsByPath(generateContentShapeAssignments(shapePlan, entry.DecisionSnapshot, tokenCache))
-		pathAssignments := map[string]pathTreeWorkGroupAssignment{entry.Object.Path: mode.pathTreeAssignment(entry.Object.Path)}
-		writeResult, sidecarPaths, err := s.materializeObjectFromSnapshotWithDirectorySnapshotsAndPlan(ctx, entry.Provider, entry.Library, entry.Object, entry.Snapshot, entry.DecisionSnapshot, entry.DirectorySnapshots, tokenCache, shapePlan, shapeAssignments, pathAssignments, entry.SubtitlePolicy, nil)
-		if err != nil {
-			return err
-		}
-		for _, sidecarPath := range sidecarPaths {
-			seenFiles[sidecarPath] = struct{}{}
-			result.InventoryFilesSeen++
-		}
-		if writeResult.Item.ID != 0 {
-			result.CatalogItemsSeen++
-			mode.recordCatalogMatchCandidateForItem(writeResult.Item)
-		}
-		if writeResult.File.ID != 0 {
-			mode.recordInventoryProbeCandidate(writeResult.File.ID)
-		}
-	}
+	_ = ctx
+	_ = mode
+	_ = parentPath
+	_ = seenFiles
+	_ = result
 	return nil
 }
 
-func (s *Service) flushCatalogMaterializeCandidates(ctx context.Context, libraryID uint, rootPath string, mode *scanMode, minBatchSize int) error {
-	if mode == nil || !mode.deferCatalogMaterialization || len(mode.catalogMaterializeFileIDs) == 0 {
+func (s *Service) flushRecognitionResolveCandidates(ctx context.Context, libraryID uint, rootPath string, mode *scanMode, minBatchSize int) error {
+	if mode == nil || !mode.deferRecognitionResolution || len(mode.recognitionResolveFileIDs) == 0 {
 		return nil
 	}
-	if minBatchSize > 0 && len(mode.catalogMaterializeFileIDs) < minBatchSize {
-		return nil
-	}
-	fileIDs := append([]uint(nil), mode.catalogMaterializeFileIDs...)
-	mode.catalogMaterializeFileIDs = nil
-	err := s.RunCatalogMaterializeBatch(ctx, CatalogMaterializeBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: fileIDs, mode: mode})
-	return err
+	_ = ctx
+	_ = libraryID
+	_ = rootPath
+	_ = minBatchSize
+	return nil
+	/*
+		if minBatchSize > 0 && len(mode.recognitionResolveFileIDs) < minBatchSize {
+			return nil
+		}
+		fileIDs := append([]uint(nil), mode.recognitionResolveFileIDs...)
+		mode.recognitionResolveFileIDs = nil
+		var library database.Library
+		if err := s.db.WithContext(ctx).First(&library, libraryID).Error; err != nil {
+			return err
+		}
+		if strings.TrimSpace(rootPath) != "" {
+			library.RootPath = strings.TrimSpace(rootPath)
+		}
+		_, err := s.runRecognitionMaterializeBatchByFileIDs(ctx, library, rootPath, fileIDs, mode)
+		return err
+	*/
 }
 
 func rootPathForScanMode(defaultRoot string, mode *scanMode) string {
@@ -673,13 +627,14 @@ func (s *Service) bulkUpsertDiscoveredInventoryFiles(ctx context.Context, provid
 			dirtyFileIDs = append(dirtyFileIDs, file.ID)
 		}
 	}
-	if len(dirtyFileIDs) > 0 && s.ingest != nil {
-		if err := s.ingest.MarkInventoryFilesDirty(ctx, dirtyFileIDs, "scanner_discovery"); err != nil {
+	ingestSvc := s.ingestCapability()
+	if len(dirtyFileIDs) > 0 && ingestSvc != nil {
+		if err := ingestSvc.MarkInventoryFilesDirty(ctx, dirtyFileIDs, "scanner_discovery"); err != nil {
 			return nil, err
 		}
 	}
-	if len(events) > 0 && s.ingest != nil {
-		if err := s.ingest.AppendEvents(ctx, events); err != nil {
+	if len(events) > 0 && ingestSvc != nil {
+		if err := ingestSvc.AppendEvents(ctx, events); err != nil {
 			return nil, err
 		}
 	}
@@ -799,13 +754,14 @@ func (s *Service) applyDiscoveredReuseBindings(ctx context.Context, updates []di
 }
 
 func (s *Service) queuePostScanEnrichment(ctx context.Context, libraryID uint, rootPath string, mode scanMode, scanPolicy database.LibraryScanPolicy) error {
-	if err := s.flushCatalogMaterializeCandidates(ctx, libraryID, rootPath, &mode, 0); err != nil {
+	if len(mode.recognitionResolveFileIDs) > 0 {
+		return s.queueStandaloneRecognitionResolveTasks(ctx, libraryID, rootPath, mode.recognitionResolveFileIDs)
+	}
+	if _, err := s.QueueMetadataMatchBatch(ctx, libraryID, rootPath, mode.metadataMatchItemIDs); err != nil {
 		return err
 	}
-	if _, err := s.QueueCatalogMatchBatch(ctx, libraryID, rootPath, mode.catalogMatchItemIDs); err != nil {
-		return err
-	}
-	if !scanPolicy.InventoryProbeBatchEnabled {
+	effectiveConfig := EffectiveLibraryConfig{ScanPolicy: scanPolicy}
+	if !effectiveConfig.InventoryProbeBatchEnabled() {
 		return nil
 	}
 	if _, err := s.QueueInventoryProbeBatch(ctx, libraryID, rootPath, mode.inventoryProbeFileIDs); err != nil {
@@ -961,11 +917,10 @@ func catalogScanArtifactFromObject(storageProvider string, libraryType string, l
 	}
 
 	if classified.Type == "episode" {
-		if assetType, assetRole := movieExtraAssetDisposition(classified.SourcePath); strings.TrimSpace(assetType) != "" || strings.TrimSpace(assetRole) != "" {
+		if linkRole := movieExtraLinkRole(classified.SourcePath); strings.TrimSpace(linkRole) != "" {
 			artifact.ItemType = catalog.ItemTypeMovie
 			artifact.ItemPath = movieCatalogItemPath(libraryType, libraryRoot, classified.SourcePath, classified.Title)
-			artifact.PreferredAssetType = assetType
-			artifact.PreferredAssetRole = assetRole
+			artifact.PreferredLinkRole = linkRole
 			return artifact, catalogScanItemPaths(artifact)
 		}
 		artifact.ItemType = catalog.ItemTypeEpisode
@@ -986,7 +941,7 @@ func catalogScanArtifactFromObject(storageProvider string, libraryType string, l
 
 	artifact.ItemType = catalog.ItemTypeMovie
 	artifact.ItemPath = movieCatalogItemPath(libraryType, libraryRoot, classified.SourcePath, classified.Title)
-	artifact.PreferredAssetType, artifact.PreferredAssetRole = movieExtraAssetDisposition(classified.SourcePath)
+	artifact.PreferredLinkRole = movieExtraLinkRole(classified.SourcePath)
 	return artifact, catalogScanItemPaths(artifact)
 }
 
@@ -1003,16 +958,16 @@ func movieCatalogItemPath(libraryType string, libraryRoot string, sourcePath str
 	return sourcePath
 }
 
-func movieExtraAssetDisposition(sourcePath string) (string, string) {
+func movieExtraLinkRole(sourcePath string) string {
 	switch extraTypeSignal(strings.TrimSuffix(path.Base(sourcePath), path.Ext(sourcePath))) {
 	case "trailer":
-		return inventory.AssetTypeTrailer, inventory.AssetItemRoleTrailer
+		return database.ResourceLinkRoleTrailer
 	case "sample":
-		return inventory.AssetTypeSample, inventory.AssetItemRoleExtra
+		return database.ResourceLinkRoleSample
 	case "behind_the_scenes", "featurette", "preview", "interview", "deleted_scene":
-		return inventory.AssetTypeExtra, inventory.AssetItemRoleExtra
+		return database.ResourceLinkRoleExtra
 	default:
-		return "", ""
+		return ""
 	}
 }
 

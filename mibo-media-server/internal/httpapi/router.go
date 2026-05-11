@@ -52,199 +52,97 @@ type Router struct {
 	workflow *workflow.Service
 }
 
-type homeDiscoveryResponse struct {
-	ContinueWatching []catalog.CatalogUserItemEntry          `json:"continue_watching"`
-	RecentlyPlayed   []catalog.CatalogUserItemEntry          `json:"recently_played"`
-	LatestByLibrary  []catalog.CatalogLatestByLibrarySection `json:"latest_by_library"`
+type Dependencies struct {
+	Config   config.Config
+	DB       *gorm.DB
+	Registry *providers.Registry
+
+	Auth     *auth.Service
+	Catalog  *catalog.Service
+	Library  *library.Service
+	Listener *listener.Service
+	Ingest   *ingest.Service
+	Playback *playback.Service
+	Progress *progress.Service
+	Search   *search.Service
+	Metadata *metadata.Service
+	Schedule *schedule.Service
+	Settings *settings.Service
+	Health   *health.Service
+	Workflow *workflow.Service
 }
 
-func New(cfg config.Config, db *gorm.DB, registry *providers.Registry, authSvc *auth.Service, librarySvc *library.Service, _ any, playbackSvc *playback.Service, progressSvc *progress.Service, searchSvc *search.Service, metadataSvc *metadata.Service, settingsSvc *settings.Service, args ...any) http.Handler {
-	scheduleSvc := schedule.NewService(db)
-	listenerSvc := listener.NewService(db, nil, librarySvc, registry)
-	var catalogSvc *catalog.Service
-	var healthSvc *health.Service
-	var ingestSvc *ingest.Service
-	var workflowSvc *workflow.Service
-	for _, arg := range args {
-		if provided, ok := arg.(*catalog.Service); ok && provided != nil {
-			catalogSvc = provided
-		}
-		if provided, ok := arg.(*schedule.Service); ok && provided != nil {
-			scheduleSvc = provided
-		}
-		if provided, ok := arg.(*listener.Service); ok && provided != nil {
-			listenerSvc = provided
-		}
-		if provided, ok := arg.(*health.Service); ok && provided != nil {
-			healthSvc = provided
-		}
-		if provided, ok := arg.(*ingest.Service); ok && provided != nil {
-			ingestSvc = provided
-		}
-		if provided, ok := arg.(*workflow.Service); ok && provided != nil {
-			workflowSvc = provided
-		}
-	}
-	if ingestSvc == nil {
-		ingestSvc = ingest.NewService(db)
-	}
-	if healthSvc == nil {
-		healthSvc = health.NewService(db, registry, librarySvc, cfg.OpenList.BaseURL)
-	}
-	if workflowSvc == nil {
-		workflowSvc = workflow.NewService(db)
-	}
-	router := &Router{
-		cfg:      cfg,
-		db:       db,
-		storage:  registry,
-		auth:     authSvc,
-		catalog:  catalogSvc,
-		library:  librarySvc,
-		listener: listenerSvc,
-		ingest:   ingestSvc,
-		playback: playbackSvc,
-		progress: progressSvc,
-		search:   searchSvc,
-		metadata: metadataSvc,
-		schedule: scheduleSvc,
-		settings: settingsSvc,
-		health:   healthSvc,
-		workflow: workflowSvc,
-	}
+func New(deps Dependencies) http.Handler {
+	deps = withDefaults(deps)
+	router := newRouter(deps)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", router.handleHealth)
-	mux.HandleFunc("GET /readyz", router.handleReady)
-	mux.HandleFunc("GET /api/v1/setup/status", router.handleSetupStatus)
-	mux.HandleFunc("POST /api/v1/auth/register", router.handleRegister)
-	mux.HandleFunc("POST /api/v1/auth/login", router.handleLogin)
-	mux.HandleFunc("POST /api/v1/auth/logout", router.handleLogout)
-	mux.HandleFunc("GET /api/v1/auth/sessions", router.handleListAuthSessions)
-	mux.HandleFunc("DELETE /api/v1/auth/sessions/others", router.handleRevokeOtherAuthSessions)
-	mux.HandleFunc("DELETE /api/v1/auth/sessions/{id}", router.handleRevokeAuthSession)
-	mux.HandleFunc("GET /api/v1/me", router.handleMe)
-	mux.HandleFunc("POST /api/v1/me/progress", router.handleUpdateProgress)
-	mux.HandleFunc("GET /api/v1/me/progress-frames/{id}/{name}", router.handleGetProgressFrame)
-	mux.HandleFunc("GET /api/v1/me/continue-watching", router.handleContinueWatching)
-	mux.HandleFunc("GET /api/v1/me/recently-played", router.handleRecentlyPlayed)
-	mux.HandleFunc("GET /api/v1/me/favorites", router.handleListFavorites)
-	mux.HandleFunc("POST /api/v1/me/favorites/{id}", router.handleAddFavorite)
-	mux.HandleFunc("DELETE /api/v1/me/favorites/{id}", router.handleRemoveFavorite)
-	mux.HandleFunc("GET /api/v1/home/latest-by-library", router.handleLatestByLibrary)
-	mux.HandleFunc("GET /api/v1/home/recently-added", router.handleRecentlyAdded)
-	mux.HandleFunc("GET /api/v1/system/info", router.handleSystemInfo)
-	mux.HandleFunc("GET /api/v1/health/summary", router.handleHealthSummary)
-	mux.HandleFunc("GET /api/v1/health/issues", router.handleHealthIssues)
-	mux.HandleFunc("POST /api/v1/health/issues/{id}/ignore", router.handleIgnoreHealthIssue)
-	mux.HandleFunc("POST /api/v1/health/issues/{id}/rescan", router.handleRescanHealthIssueLibraries)
-	mux.HandleFunc("POST /api/v1/media-sources/{id}/validate", router.handleValidateMediaSource)
-	mux.HandleFunc("GET /api/v1/admin/console", router.handleAdminConsoleSummary)
-	mux.HandleFunc("GET /api/v1/admin/ingest/diagnostics", router.handleAdminIngestDiagnostics)
-	mux.HandleFunc("POST /api/v1/admin/ingest/reconcile", router.handleAdminIngestReconcile)
-	mux.HandleFunc("POST /api/v1/admin/ingest/stages/{id}/retry", router.handleAdminRetryIngestStage)
-	mux.HandleFunc("POST /api/v1/admin/ingest/stages/{id}/resolve-review", router.handleAdminResolveIngestReviewStage)
-	mux.HandleFunc("POST /api/v1/admin/console/actions/scan-libraries", router.handleAdminConsoleScanLibraries)
-	mux.HandleFunc("GET /api/v1/admin/users", router.handleListAdminUsers)
-	mux.HandleFunc("POST /api/v1/admin/users", router.handleCreateAdminUser)
-	mux.HandleFunc("GET /api/v1/admin/logs", router.handleListAdminLogs)
-	mux.HandleFunc("GET /api/v1/admin/logs/{name}", router.handleGetAdminLog)
-	mux.HandleFunc("GET /api/v1/admin/logs/{name}/download", router.handleDownloadAdminLog)
-	mux.HandleFunc("DELETE /api/v1/admin/logs/{name}", router.handleDeleteAdminLog)
-	mux.HandleFunc("GET /api/v1/settings/metadata/providers", router.handleListMetadataProviderInstances)
-	mux.HandleFunc("POST /api/v1/settings/metadata/providers", router.handleCreateMetadataProviderInstance)
-	mux.HandleFunc("PATCH /api/v1/settings/metadata/providers/{provider_id}", router.handleUpdateMetadataProviderInstance)
-	mux.HandleFunc("GET /api/v1/settings/metadata/profiles", router.handleListMetadataProfiles)
-	mux.HandleFunc("POST /api/v1/settings/metadata/profiles", router.handleCreateMetadataProfile)
-	mux.HandleFunc("PATCH /api/v1/settings/metadata/profiles/{profile_id}", router.handleUpdateMetadataProfile)
-	mux.HandleFunc("GET /api/v1/settings/network", router.handleGetNetworkSettings)
-	mux.HandleFunc("PUT /api/v1/settings/network", router.handleUpdateNetworkSettings)
-	mux.HandleFunc("GET /api/v1/settings/scan", router.handleGetScanSettings)
-	mux.HandleFunc("PUT /api/v1/settings/scan", router.handleUpdateScanSettings)
-	mux.HandleFunc("GET /api/v1/storage-change/diagnostics", router.handleStorageChangeDiagnostics)
-	mux.HandleFunc("POST /api/v1/storage/providers/browse", router.handleBrowseStorageProvider)
-	mux.HandleFunc("POST /api/v1/storage/openlist/test", router.handleTestTemporaryOpenList)
-	mux.HandleFunc("POST /api/v1/storage/openlist/browse", router.handleBrowseTemporaryOpenList)
-	mux.HandleFunc("GET /api/v1/media-sources", router.handleListMediaSources)
-	mux.HandleFunc("POST /api/v1/media-sources", router.handleCreateMediaSource)
-	mux.HandleFunc("PATCH /api/v1/media-sources/{id}", router.handleUpdateMediaSource)
-	mux.HandleFunc("DELETE /api/v1/media-sources/{id}", router.handleDeleteMediaSource)
-	mux.HandleFunc("POST /api/v1/media-sources/browse", router.handleBrowseMediaSource)
-	mux.HandleFunc("GET /api/v1/libraries", router.handleListLibraries)
-	mux.HandleFunc("POST /api/v1/libraries", router.handleCreateLibrary)
-	mux.HandleFunc("GET /api/v1/libraries/{id}", router.handleGetLibrary)
-	mux.HandleFunc("DELETE /api/v1/libraries/{id}", router.handleDeleteLibrary)
-	mux.HandleFunc("GET /api/v1/libraries/{id}/paths", router.handleListLibraryPaths)
-	mux.HandleFunc("POST /api/v1/libraries/{id}/paths", router.handleAddLibraryPath)
-	mux.HandleFunc("PATCH /api/v1/libraries/{id}/paths/{path_id}", router.handleUpdateLibraryPath)
-	mux.HandleFunc("GET /api/v1/libraries/{id}/policies", router.handleGetLibraryPolicies)
-	mux.HandleFunc("GET /api/v1/libraries/{id}/metadata-strategy", router.handleGetLibraryMetadataStrategy)
-	mux.HandleFunc("PUT /api/v1/libraries/{id}/metadata-strategy", router.handleUpdateLibraryMetadataStrategy)
-	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/scan", router.handleUpdateLibraryScanPolicy)
-	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/metadata", router.handleUpdateLibraryMetadataPolicy)
-	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/playback", router.handleUpdateLibraryPlaybackPolicy)
-	mux.HandleFunc("PUT /api/v1/libraries/{id}/policies/subtitle", router.handleUpdateLibrarySubtitlePolicy)
-	mux.HandleFunc("PUT /api/v1/libraries/{id}/scan-exclusion-rules", router.handleReplaceLibraryScanExclusionRules)
-	mux.HandleFunc("POST /api/v1/libraries/{id}/scan", router.handleQueueLibraryScan)
-	mux.HandleFunc("POST /api/v1/storage-events", router.handleStorageEvent)
-	mux.HandleFunc("GET /api/v1/libraries/{id}/items", router.handleListLibraryItems)
-	mux.HandleFunc("GET /api/v1/items/{id}", router.handleGetCatalogItem)
-	mux.HandleFunc("GET /api/v1/people/{id}", router.handleGetCatalogPerson)
-	mux.HandleFunc("GET /api/v1/items/{id}/artwork/{kind}", router.handleGetCatalogItemArtwork)
-	mux.HandleFunc("GET /api/v1/items/{id}/children", router.handleListCatalogItemChildren)
-	mux.HandleFunc("GET /api/v1/items/{id}/progress", router.handleGetCatalogItemProgress)
-	mux.HandleFunc("GET /api/v1/items/{id}/playback", router.handleGetCatalogPlaybackSource)
-	mux.HandleFunc("GET /api/v1/series/{id}/seasons", router.handleListCatalogSeriesSeasons)
-	mux.HandleFunc("GET /api/v1/series/{id}/episodes", router.handleListCatalogSeriesEpisodes)
-	mux.HandleFunc("GET /api/v1/series/{id}/missing", router.handleListCatalogSeriesMissing)
-	mux.HandleFunc("GET /api/v1/series/{id}/next-up", router.handleGetCatalogSeriesNextUp)
-	mux.HandleFunc("GET /api/v1/assets/{id}/link", router.handleGetCatalogAssetLink)
-	mux.HandleFunc("POST /api/v1/assets/{id}/scan-exclusion", router.handleMarkAssetScanExclusion)
-	mux.HandleFunc("GET /api/v1/assets/{id}/scan-exclusion-preview", router.handlePreviewAssetFilenameExclusion)
-	mux.HandleFunc("GET /api/v1/items/{id}/governance", router.handleGetCatalogGovernanceWorkspace)
-	mux.HandleFunc("POST /api/v1/items/{id}/scan-exclusion", router.handleMarkItemScanExclusion)
-	mux.HandleFunc("GET /api/v1/items/{id}/scan-exclusion-preview", router.handlePreviewItemFilenameExclusion)
-	mux.HandleFunc("POST /api/v1/items/{id}/filename-exclusion-rule", router.handleCreateItemFilenameExclusionRule)
-	mux.HandleFunc("PUT /api/v1/items/{id}/governance/fields", router.handleUpdateCatalogGovernanceField)
-	mux.HandleFunc("PUT /api/v1/items/{id}/governance/images", router.handleSelectCatalogGovernanceImage)
-	mux.HandleFunc("PUT /api/v1/items/{id}/governance/episode-numbering", router.handleCorrectCatalogEpisodeNumbering)
-	mux.HandleFunc("POST /api/v1/libraries/{id}/manual-series-restructure/preview", router.handlePreviewManualSeriesRestructure)
-	mux.HandleFunc("POST /api/v1/libraries/{id}/manual-series-restructure/apply", router.handleApplyManualSeriesRestructure)
-	mux.HandleFunc("POST /api/v1/items/{id}/governance/classification-rules", router.handleCreateCatalogGovernanceClassificationRule)
-	mux.HandleFunc("POST /api/v1/items/{id}/governance/classification-corrections", router.handleApplyCatalogGovernanceClassificationCorrection)
-	mux.HandleFunc("POST /api/v1/items/{id}/governance/assets/{asset_id}/links", router.handleLinkCatalogGovernanceAsset)
-	mux.HandleFunc("DELETE /api/v1/items/{id}/governance/assets/{asset_id}/links/{target_item_id}", router.handleUnlinkCatalogGovernanceAsset)
-	mux.HandleFunc("POST /api/v1/items/{id}/metadata/search", router.handleSearchCatalogItemMetadata)
-	mux.HandleFunc("POST /api/v1/items/{id}/metadata/apply", router.handleApplyCatalogItemMetadata)
-	mux.HandleFunc("POST /api/v1/items/{id}/metadata/refetch", router.handleRefetchCatalogItemMetadata)
-	mux.HandleFunc("POST /api/v1/items/{id}/match", router.handleMatchCatalogItem)
-	mux.HandleFunc("GET /api/v1/discovery", router.handleDiscoverMedia)
-	mux.HandleFunc("GET /api/v1/search/history", router.handleListSearchHistory)
-	mux.HandleFunc("GET /api/v1/inventory-files/{id}/stream", router.handleStreamInventoryFile)
-	mux.HandleFunc("GET /api/v1/inventory-files/{id}/playback", router.handleGetInventoryFilePlaybackSource)
-	mux.HandleFunc("POST /api/v1/inventory-files/{id}/probe", router.handleQueueInventoryFileProbe)
-	mux.HandleFunc("POST /api/v1/inventory-files/{id}/scan-exclusion", router.handleMarkInventoryFileScanExclusion)
-	mux.HandleFunc("GET /api/v1/inventory-files/{id}/scan-exclusion-preview", router.handlePreviewInventoryFileFilenameExclusion)
-	mux.HandleFunc("GET /api/v1/scan-exclusions", router.handleListScanExclusions)
-	mux.HandleFunc("PATCH /api/v1/scan-exclusions/{id}", router.handleSetScanExclusionEnabled)
-	mux.HandleFunc("GET /api/v1/filename-exclusion-rules", router.handleListFilenameExclusionRules)
-	mux.HandleFunc("PATCH /api/v1/filename-exclusion-rules/{id}", router.handleSetFilenameExclusionRuleEnabled)
-	mux.HandleFunc("POST /api/v1/filename-exclusion-rules/{id}/restores", router.handleRestoreFilenameExclusionMatch)
-	mux.HandleFunc("GET /api/v1/scan-exclusion-rules", router.handleListScanExclusionRules)
-	mux.HandleFunc("POST /api/v1/scan-exclusion-rules", router.handleCreateScanExclusionRule)
-	mux.HandleFunc("PATCH /api/v1/scan-exclusion-rules/{id}", router.handleUpdateScanExclusionRule)
-	mux.HandleFunc("DELETE /api/v1/scan-exclusion-rules/{id}", router.handleDeleteScanExclusionRule)
-	mux.HandleFunc("GET /api/v1/workflows", router.handleListWorkflows)
-	mux.HandleFunc("GET /api/v1/workflows/{id}", router.handleGetWorkflow)
-	mux.HandleFunc("GET /api/v1/workflows/diagnostics", router.handleWorkflowDiagnostics)
-	mux.HandleFunc("GET /api/v1/schedules", router.handleListSchedules)
-	mux.HandleFunc("POST /api/v1/schedules", router.handleCreateSchedule)
-	mux.HandleFunc("GET /api/v1/schedules/{id}", router.handleGetSchedule)
-	mux.HandleFunc("PATCH /api/v1/schedules/{id}", router.handleUpdateSchedule)
-	mux.HandleFunc("POST /api/v1/schedules/{id}/toggle", router.handleToggleSchedule)
-	mux.HandleFunc("POST /api/v1/schedules/{id}/run", router.handleRunScheduleNow)
-	mux.HandleFunc("GET /api/v1/schedules/{id}/history", router.handleListScheduleHistory)
-	mux.Handle("/", newWebAppHandler(cfg.Web, webui.EmbeddedDist()))
+	router.registerRoutes(mux)
+	mux.Handle("/", newWebAppHandler(deps.Config.Web, webui.EmbeddedDist()))
 
-	return corsMiddleware(cfg.CORS, loggingMiddleware(mux))
+	return corsMiddleware(deps.Config.CORS, loggingMiddleware(mux))
+}
+
+func withDefaults(deps Dependencies) Dependencies {
+	if deps.Schedule == nil {
+		deps.Schedule = schedule.NewService(deps.DB)
+	}
+	if deps.Listener == nil {
+		deps.Listener = listener.NewService(deps.DB, nil, deps.Library, deps.Registry)
+	}
+	if deps.Ingest == nil {
+		deps.Ingest = ingest.NewService(deps.DB)
+	}
+	if deps.Health == nil {
+		deps.Health = health.NewService(deps.DB, deps.Registry, deps.Library, deps.Config.OpenList.BaseURL)
+	}
+	if deps.Workflow == nil {
+		deps.Workflow = workflow.NewService(deps.DB)
+	}
+	return deps
+}
+
+func newRouter(deps Dependencies) *Router {
+	return &Router{
+		cfg:      deps.Config,
+		db:       deps.DB,
+		storage:  deps.Registry,
+		auth:     deps.Auth,
+		catalog:  deps.Catalog,
+		library:  deps.Library,
+		listener: deps.Listener,
+		ingest:   deps.Ingest,
+		playback: deps.Playback,
+		progress: deps.Progress,
+		search:   deps.Search,
+		metadata: deps.Metadata,
+		schedule: deps.Schedule,
+		settings: deps.Settings,
+		health:   deps.Health,
+		workflow: deps.Workflow,
+	}
+}
+
+func (r *Router) registerRoutes(mux *http.ServeMux) {
+	for _, register := range r.routeRegistrations() {
+		register(mux)
+	}
+}
+
+func (r *Router) routeRegistrations() []func(*http.ServeMux) {
+	return []func(*http.ServeMux){
+		r.registerSystemRoutes,
+		r.registerSetupRoutes,
+		r.registerAuthRoutes,
+		r.registerHomeRoutes,
+		r.registerHealthRoutes,
+		r.registerAdminRoutes,
+		r.registerSettingsRoutes,
+		r.registerStorageRoutes,
+		r.registerLibraryRoutes,
+		r.registerCatalogRoutes,
+		r.registerSearchRoutes,
+		r.registerWorkflowRoutes,
+		r.registerScheduleRoutes,
+	}
 }

@@ -21,7 +21,7 @@ function summary(): ConsoleSummary {
     media: {
       libraries: 1,
       media_sources: 1,
-      catalog_items: 1,
+      metadata_items: 1,
       inventory_files: 1,
       movies: 1,
       series: 0,

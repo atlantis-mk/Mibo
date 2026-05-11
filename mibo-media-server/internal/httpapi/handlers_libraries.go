@@ -341,7 +341,7 @@ func (r *Router) handleListLibraryItems(w http.ResponseWriter, req *http.Request
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	normalizeCatalogListItemsArtworkURLs(req, items)
+	normalizeCatalogItemListArtworkURLs(req, items)
 	writeJSON(req.Context(), w, http.StatusOK, items)
 }
 

@@ -25,21 +25,9 @@ func TestDatabaseOpenMigratesCatalogIndexes(t *testing.T) {
 		model any
 		name  string
 	}{
-		{&CatalogItem{}, "idx_catalog_items_library_type_availability_sort"},
-		{&CatalogItem{}, "idx_catalog_items_parent_order"},
-		{&CatalogItem{}, "idx_catalog_items_root_type_order"},
-		{&CatalogSearchDocument{}, "idx_catalog_search_documents_library_type_availability_title"},
-		{&CatalogExternalID{}, "idx_catalog_external_identity"},
-		{&CatalogIdentity{}, "idx_catalog_identity_key"},
-		{&MetadataFieldState{}, "idx_metadata_field_state_item_field"},
-		{&AssetItem{}, "idx_asset_items_asset_item_role_segment"},
-		{&AssetItem{}, "idx_asset_items_item_role"},
 		{&InventoryFile{}, "idx_inventory_file_source_storage_path"},
 		{&InventoryFile{}, "idx_inventory_files_library_status_path"},
-		{&AssetFile{}, "idx_asset_files_asset_file_role_part"},
-		{&AssetFile{}, "idx_asset_files_asset_part"},
 		{&MediaStream{}, "idx_media_stream_file_index"},
-		{&UserItemData{}, "idx_user_item_data_user_item_asset"},
 		{&SystemSetting{}, "idx_system_setting_category_key"},
 		{&LibraryPath{}, "idx_library_paths_library_source_path"},
 	}

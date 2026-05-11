@@ -12,7 +12,7 @@ const (
 const (
 	TaskTypeDiscoverStorage     = "discover_storage"
 	TaskTypeScanLibraryPath     = "scan_library_path"
-	TaskTypeMaterializeCatalog  = "materialize_catalog"
+	TaskTypeResolveRecognition  = "resolve_recognition"
 	TaskTypeRefreshProjection   = "refresh_projection"
 	TaskTypeProbeInventory      = "probe_inventory"
 	TaskTypeProbeInventoryFile  = "probe_inventory_file"
@@ -39,7 +39,7 @@ type TaskTypeDefinition struct {
 var defaultTaskTypes = map[string]TaskTypeDefinition{
 	TaskTypeDiscoverStorage:     {TaskType: TaskTypeDiscoverStorage, Stage: StageScan, Resources: map[string]int{ResourceDBWrite: 1, ResourceLocalDiskIO: 1}},
 	TaskTypeScanLibraryPath:     {TaskType: TaskTypeScanLibraryPath, Stage: StageScan, Resources: map[string]int{ResourceDBWrite: 1, ResourceLocalDiskIO: 1}},
-	TaskTypeMaterializeCatalog:  {TaskType: TaskTypeMaterializeCatalog, Stage: StageMaterialize, Resources: map[string]int{ResourceDBWrite: 1, ResourceCPUHeavy: 1}},
+	TaskTypeResolveRecognition:  {TaskType: TaskTypeResolveRecognition, Stage: StageMaterialize, Resources: map[string]int{ResourceDBWrite: 1, ResourceCPUHeavy: 1}},
 	TaskTypeRefreshProjection:   {TaskType: TaskTypeRefreshProjection, Stage: StageProjection, Resources: map[string]int{ResourceDBWrite: 1}},
 	TaskTypeProbeInventory:      {TaskType: TaskTypeProbeInventory, Stage: StageProbe, Resources: map[string]int{ResourceFFprobe: 1, ResourceLocalDiskIO: 1, ResourceCPUHeavy: 1, ResourceDBWrite: 1}},
 	TaskTypeProbeInventoryFile:  {TaskType: TaskTypeProbeInventoryFile, Stage: StageProbe, Resources: map[string]int{ResourceFFprobe: 1, ResourceLocalDiskIO: 1, ResourceCPUHeavy: 1, ResourceDBWrite: 1}},

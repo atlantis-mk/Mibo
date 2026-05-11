@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -345,12 +346,26 @@ func classifiedMediaFromContentShapePlan(plan contentShapeDirectoryPlan, object 
 
 func contentShapeMovieTitle(plan contentShapeDirectoryPlan, assignment contentShapeFileAssignment, object storage.Object, model filenameSignalModel) string {
 	rawTitle := strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))
-	if strings.TrimSpace(model.ReleaseHints.GenericNoise) != "" || isGenericMediaName(rawTitle) {
+	if strings.TrimSpace(model.ReleaseHints.GenericNoise) != "" || isGenericMediaName(rawTitle) || !filenameHasKeptTitleToken(model.TitleTokens) || shortNumericMediaNamePattern.MatchString(strings.TrimSpace(rawTitle)) || segmentedMediaNamePattern.MatchString(strings.TrimSpace(rawTitle)) {
 		if parent := cleanTitle(path.Base(path.Dir(object.Path))); strings.TrimSpace(parent) != "" {
 			return parent
 		}
 	}
 	return firstNonEmptyString(model.Identity.TitleCandidate, assignment.SeriesTitle, plan.SeriesTitle, cleanTitle(plan.MovieWorkKey), cleanTitle(path.Base(path.Dir(object.Path))))
+}
+
+var (
+	shortNumericMediaNamePattern = regexp.MustCompile(`^\d{1,2}$`)
+	segmentedMediaNamePattern    = regexp.MustCompile(`(?i)^(?:cd|disc|disk|part)[\s._-]*\d{1,2}$`)
+)
+
+func filenameHasKeptTitleToken(tokens []filenameTitleToken) bool {
+	for _, token := range tokens {
+		if token.Kept {
+			return true
+		}
+	}
+	return false
 }
 
 func contentShapeEpisodeTitleAndNumbers(seriesTitle string, seasonNumber int, episodeNumber int, model filenameSignalModel) (string, []int) {

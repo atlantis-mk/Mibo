@@ -1,5 +1,4 @@
 import type {
-  CatalogAssetDetail,
   CatalogEpisodeParentContext,
   CatalogEpisodeShelfItem,
   CatalogItemDetail,
@@ -9,6 +8,7 @@ import type {
   CatalogSourceEvidence,
   CatalogExternalIdentity,
   CatalogTagDetail,
+  MediaResourceDetail,
 } from "#/lib/mibo-api"
 
 export type MediaDetailView = "episode" | "series"
@@ -23,9 +23,10 @@ export type CatalogSeasonRail = {
 }
 
 export type CatalogEpisodeRail = {
-  item_id: number
-  season_number: number
-  episode_number: number
+	metadata_item_id: number
+	inventory_file_id?: number
+	season_number: number
+	episode_number: number
   name: string
   overview: string
   still_url: string
@@ -37,7 +38,7 @@ export type CatalogEpisodeRail = {
   current?: boolean
 }
 
-export type CatalogDetailPresentation = {
+export type MediaDetailPresentation = {
   id: number
   type: string
   title: string
@@ -75,7 +76,7 @@ export type CatalogDetailPresentation = {
   source_evidence: CatalogSourceEvidence[]
   cast: CatalogPersonDetail[]
   directors: CatalogPersonDetail[]
-  assets: CatalogAssetDetail[]
+  resources: MediaResourceDetail[]
 }
 
 const seasonFolderPattern =
@@ -85,9 +86,9 @@ export function parseMediaDetailView(value: unknown): MediaDetailView {
   return value === "series" ? "series" : "episode"
 }
 
-export function catalogItemDetailToPresentation(
+export function metadataItemDetailToPresentation(
   item: CatalogItemDetail
-): CatalogDetailPresentation {
+): MediaDetailPresentation {
   const primaryIdentity = item.external_identities?.[0]
   const seasons = item.seasons ?? []
   const episodeContext = item.episode_context
@@ -155,12 +156,12 @@ export function catalogItemDetailToPresentation(
     source_evidence: item.source_evidence ?? [],
     cast: item.cast ?? [],
     directors: item.directors ?? [],
-    assets: item.assets ?? [],
+    resources: item.resources ?? [],
   }
 }
 
 export function catalogEpisodeShelfToSeasonRails(
-  item: CatalogDetailPresentation
+  item: MediaDetailPresentation
 ): CatalogSeasonRail[] {
   if (item.type !== "episode" || item.same_season_episodes.length === 0) {
     return []
@@ -193,9 +194,10 @@ export function catalogSeasonsToRails(
     overview: season.overview ?? "",
     poster_url: selectedCatalogImageUrl(season.selected_images, "poster"),
     runtime_seconds: season.runtime_seconds,
-    episodes: (season.episodes ?? []).map((episode) => ({
-      item_id: episode.id,
-      season_number: episode.parent_index_number ?? season.index_number ?? 0,
+		episodes: (season.episodes ?? []).map((episode) => ({
+			metadata_item_id: episode.id,
+			inventory_file_id: episode.inventory_file_id,
+			season_number: episode.parent_index_number ?? season.index_number ?? 0,
       episode_number: episode.index_number ?? 0,
       name: episode.title,
       overview: episode.overview ?? "",
@@ -220,7 +222,7 @@ export function formatMediaRating(value?: number) {
 
 export function formatMediaDetailYearRange(
   item: Pick<
-    CatalogDetailPresentation,
+    MediaDetailPresentation,
     | "type"
     | "year"
     | "end_year"
@@ -247,7 +249,7 @@ export function formatMediaDetailYearRange(
 }
 
 export function formatSeasonSummary(
-  item: Pick<CatalogDetailPresentation, "type" | "child_summary">
+  item: Pick<MediaDetailPresentation, "type" | "child_summary">
 ) {
   if (item.type !== "series" && item.type !== "show") return ""
   const summary = item.child_summary
@@ -328,8 +330,8 @@ export function formatMediaCardTitle(
   return episodeTitle
 }
 
-export function buildPresentedCatalogItem(
-  item: CatalogDetailPresentation,
+export function buildPresentedMediaItem(
+  item: MediaDetailPresentation,
   _seasons: CatalogSeasonRail[],
   view: MediaDetailView
 ) {
@@ -541,8 +543,9 @@ function selectedCatalogImageUrl(
 function catalogEpisodeShelfToRails(
   episodes: CatalogEpisodeShelfItem[]
 ): CatalogEpisodeRail[] {
-  return episodes.map((episode) => ({
-    item_id: episode.id,
+	return episodes.map((episode) => ({
+	  metadata_item_id: episode.id,
+	  inventory_file_id: episode.inventory_file_id,
     season_number: episode.season_number ?? 0,
     episode_number: episode.episode_number ?? 0,
     name: episode.title,

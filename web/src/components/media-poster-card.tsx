@@ -100,16 +100,22 @@ export function MediaPosterCard({
   const progressPercent = progress ? getProgressPercent(progress) : 0
   const mediaType = getMediaCardType(item)
   const yearRange = formatMediaCardYearRange(item)
+  const resourceSummary = formatResourceSummary(item)
+  const metadataLine = [yearRange, resourceSummary, progressMeta]
+    .filter(Boolean)
+    .join(" · ")
   const playTarget = playbackItem ?? item
   const isInventoryOnly = item.source_kind === "inventory_file"
   const playInventoryFileID = isInventoryOnly
     ? item.inventory_file_id
     : undefined
+  const ignoreInventoryFileID = playTarget.inventory_file_id ?? item.inventory_file_id
   const organizingState = item.organizing_summary?.state
   const isOrganizing = Boolean(item.organizing || isInventoryOnly)
   const canOpenDetails = !isInventoryOnly
   const canApplyIgnore =
-    !isInventoryOnly &&
+    typeof ignoreInventoryFileID === "number" &&
+    ignoreInventoryFileID > 0 &&
     (!item.organizing || organizingState === "review_required")
   const organizingLabel = getMediaCardOrganizingLabel(item)
   const favoritesQuery = useQuery({
@@ -120,16 +126,21 @@ export function MediaPosterCard({
   const isFavorite = isOrganizing
     ? Boolean(
         favorite ??
-        favoritesQuery.data?.some((entry) => entry.item.id === item.id)
+          favoritesQuery.data?.some((entry) => sameFavoriteItem(entry.item, item))
       )
     : (favorite ??
-      Boolean(favoritesQuery.data?.some((entry) => entry.item.id === item.id)))
+      Boolean(
+        favoritesQuery.data?.some((entry) => sameFavoriteItem(entry.item, item))
+      ))
   const favoriteMutation = useMutation({
     mutationFn: async (favorite: boolean) => {
       if (!token) throw new Error("当前未登录，无法更新收藏。")
       const api = createAuthedMiboApi(token)
       if (isInventoryOnly) throw new Error("生成条目后可收藏。")
-      return favorite ? api.addFavorite(item.id) : api.removeFavorite(item.id)
+		const metadataItemId = item.metadata_item_id
+		return favorite
+        ? api.addFavorite(metadataItemId)
+        : api.removeFavorite(metadataItemId)
     },
     onSuccess: async () => {
       await Promise.all([
@@ -147,8 +158,11 @@ export function MediaPosterCard({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法标记忽略。")
       if (!canApplyIgnore) throw new Error("当前条目暂不支持标记忽略。")
-      return createAuthedMiboApi(token).markCatalogItemScanExclusion(
-        playTarget.id,
+      if (typeof ignoreInventoryFileID !== "number") {
+        throw new Error("当前条目缺少文件锚点，无法标记忽略。")
+      }
+      return createAuthedMiboApi(token).markInventoryFileScanExclusion(
+        ignoreInventoryFileID,
         "advertisement"
       )
     },
@@ -165,8 +179,11 @@ export function MediaPosterCard({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法预览忽略影响。")
       if (!canApplyIgnore) throw new Error("当前条目暂不支持标记忽略。")
-      return createAuthedMiboApi(token).previewCatalogItemScanExclusion(
-        playTarget.id
+      if (typeof ignoreInventoryFileID !== "number") {
+        throw new Error("当前条目缺少文件锚点，无法预览忽略影响。")
+      }
+      return createAuthedMiboApi(token).previewInventoryFileScanExclusion(
+        ignoreInventoryFileID
       )
     },
     onSuccess: (preview) => {
@@ -178,8 +195,11 @@ export function MediaPosterCard({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法标记同名忽略。")
       if (!canApplyIgnore) throw new Error("当前条目暂不支持同名忽略。")
-      return createAuthedMiboApi(token).createCatalogItemFilenameExclusionRule(
-        playTarget.id,
+      if (typeof ignoreInventoryFileID !== "number") {
+        throw new Error("当前条目缺少文件锚点，无法标记同名忽略。")
+      }
+      return createAuthedMiboApi(token).createInventoryFileFilenameExclusionRule(
+        ignoreInventoryFileID,
         "advertisement"
       )
     },
@@ -222,7 +242,6 @@ export function MediaPosterCard({
           }}
           search={{
             fromStart: !hasProgress,
-            assetId: undefined,
             inventoryFileId: playInventoryFileID,
           }}
           preload="intent"
@@ -282,7 +301,7 @@ export function MediaPosterCard({
               {title}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
-              {[yearRange, progressMeta].filter(Boolean).join(" · ")}
+              {metadataLine}
             </div>
             {progressDescription ? (
               <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">
@@ -506,6 +525,24 @@ function clampProgressPercent(value: number) {
   return Math.min(100, Math.max(0, value))
 }
 
+function formatResourceSummary(item: CatalogListItem) {
+  if (typeof item.resource_count !== "number" || item.resource_count <= 0) {
+    return ""
+  }
+  const parts = [`${item.resource_count} 个资源`]
+  if (typeof item.available_count === "number" && item.available_count > 0) {
+    parts.push(`${item.available_count} 可播`)
+  }
+  if (typeof item.missing_count === "number" && item.missing_count > 0) {
+    parts.push(`${item.missing_count} 缺失`)
+  }
+  return parts.join(" / ")
+}
+
+function sameFavoriteItem(candidate: CatalogListItem, item: CatalogListItem) {
+	return candidate.metadata_item_id === item.metadata_item_id
+}
+
 async function invalidateMediaCardQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   queryToken: string
@@ -526,7 +563,7 @@ export function MediaRail({
   children,
 }: {
   title: string
-  href?: { libraryId: number }
+  href?: { type?: "movie" | "show" }
   children: ReactNode
 }) {
   return (
@@ -534,8 +571,8 @@ export function MediaRail({
       <div className="mb-4 flex items-center justify-between gap-3">
         {href ? (
           <Link
-            to="/library/$id"
-            params={{ id: String(href.libraryId) }}
+            to="/library"
+            search={{ type: href.type }}
             className="text-xl font-semibold tracking-tight text-foreground underline-offset-4 hover:underline"
           >
             {title}

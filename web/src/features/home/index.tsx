@@ -51,9 +51,9 @@ import { useAuthStore } from "#/stores/auth-store"
 import { getHomeDashboardState } from "./home-state"
 import {
   ContinueWatchingRail,
+  ContentSectionRail,
+  ContentShapeEntrance,
   HeroCarousel,
-  LatestLibraryRail,
-  MyMediaSection,
 } from "./home-sections"
 
 export default function Home() {
@@ -73,9 +73,8 @@ export default function Home() {
     items: [],
     continueWatching: [],
     continueWatchingCount: 0,
-    libraries: [],
-    libraryCount: 0,
-    latestByLibrary: [],
+    contentSections: [],
+    mediaOverview: { sections: [] },
     healthIssues: [],
   }
   const homeState = getHomeDashboardState(data)
@@ -184,7 +183,7 @@ export default function Home() {
           <div className="flex min-w-0 items-baseline gap-2">
             <div className="shrink-0 text-lg font-semibold">Mibo Home</div>
             <div className="truncate text-xs text-muted-foreground">
-              最近加入轮播 · {data.items.length} 条内容
+              内容形态发现 · {data.items.length} 条最近加入
             </div>
           </div>
         </>
@@ -201,7 +200,7 @@ export default function Home() {
             className="border-border/50 bg-background/80"
             variant="outline"
           >
-            媒体库 {data.libraryCount}
+            内容区块 {homeState.contentSections.length}
           </Badge>
           {data.healthIssues.length > 0 ? (
             <TooltipProvider>
@@ -349,7 +348,7 @@ export default function Home() {
               className="border-destructive/40 bg-destructive/10 text-destructive"
               variant="outline"
             >
-              媒体库需要处理
+              媒体源需要处理
             </Badge>
             <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10">
               <ShieldAlertIcon className="size-6 text-destructive" />
@@ -362,7 +361,7 @@ export default function Home() {
             </p>
             {affectedLibraryNames(homeBlockingIssue) ? (
               <p className="text-sm text-muted-foreground">
-                受影响媒体库：{affectedLibraryNames(homeBlockingIssue)}
+                受影响来源：{affectedLibraryNames(homeBlockingIssue)}
               </p>
             ) : null}
             <div className="flex flex-col justify-center gap-3 sm:flex-row">
@@ -390,19 +389,16 @@ export default function Home() {
           continueWatchingCount={data.continueWatchingCount}
           movieCount={homeState.movieCount}
           showCount={homeState.showCount}
-          hasBottomOverlay={data.libraries.length > 0}
+          hasBottomOverlay
         />
-
-        <MyMediaSection
-          libraries={data.libraries}
-          latestLibrarySections={homeState.latestLibrarySections}
-          variant="heroOverlay"
+        <ContentShapeEntrance
+          movieCount={homeState.movieCount}
+          showCount={homeState.showCount}
+          sections={homeState.mediaOverviewSections}
         />
       </div>
       <ContinueWatchingRail entries={data.continueWatching} />
-      <LatestLibraryRail
-        latestLibrarySections={homeState.latestLibrarySections}
-      />
+      <ContentSectionRail contentSections={homeState.contentSections} />
     </div>
   )
 }

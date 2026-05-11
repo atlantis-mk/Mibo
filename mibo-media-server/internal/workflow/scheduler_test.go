@@ -96,7 +96,7 @@ func TestClaimNextTaskSkipsBlockedDependencies(t *testing.T) {
 	}
 	run := createTestRun(t, ctx, svc)
 	first := createSchedulerTask(t, ctx, svc, run, "task:dependency:first", map[string]int{ResourceDBWrite: 1})
-	blocked, err := svc.CreateTask(ctx, run, CreateTaskInput{TaskKey: "task:dependency:blocked", TaskType: TaskTypeMaterializeCatalog, Stage: StageMaterialize, Resources: map[string]int{ResourceDBWrite: 1}, DependsOnTaskIDs: []uint{first.ID}})
+	blocked, err := svc.CreateTask(ctx, run, CreateTaskInput{TaskKey: "task:dependency:blocked", TaskType: TaskTypeResolveRecognition, Stage: StageMaterialize, Resources: map[string]int{ResourceDBWrite: 1}, DependsOnTaskIDs: []uint{first.ID}})
 	if err != nil {
 		t.Fatalf("create blocked task: %v", err)
 	}

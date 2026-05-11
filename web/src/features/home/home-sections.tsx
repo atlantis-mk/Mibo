@@ -1,7 +1,6 @@
 import type { ComponentType } from "react"
 import { Link } from "@tanstack/react-router"
 import {
-  ArrowUpRightIcon,
   ClapperboardIcon,
   InfoIcon,
   LibraryBigIcon,
@@ -17,9 +16,9 @@ import { MediaPosterCard } from "#/components/media-poster-card"
 import type {
   CatalogListItem,
   CatalogUserItemEntry,
-  Library,
+  HomeContentSection,
+  HomeMediaSectionSummary,
 } from "#/lib/mibo-api"
-import { formatSourceContentClass } from "#/lib/library-presentation"
 import {
   formatMediaCardTitle,
   getMediaCardBackdropUrl,
@@ -77,7 +76,7 @@ export function HeroCarousel({
               等待扫描后的最近加入内容
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
-              媒体库入口已显示在下方。扫描完成后，最近加入的影片或剧集会自动切换为首页轮播。
+              添加媒体源并完成扫描后，最近加入的影片或剧集会自动切换为首页轮播。
             </p>
           </div>
         </div>
@@ -174,7 +173,7 @@ export function HeroCarousel({
                           params={{ id: String(item.id) }}
                           search={{
                             fromStart: false,
-                            assetId: undefined,
+                            resourceId: undefined,
                             inventoryFileId: undefined,
                           }}
                         >
@@ -246,16 +245,16 @@ export function HeroCarousel({
   )
 }
 
-export function LatestLibraryRail({
-  latestLibrarySections,
+export function ContentSectionRail({
+  contentSections,
 }: {
-  latestLibrarySections: any[]
+  contentSections: HomeContentSection[]
 }) {
-  if (latestLibrarySections.length === 0) {
+  if (contentSections.length === 0) {
     return (
       <section className="relative flex min-h-[calc(100svh-18rem)] items-center justify-center border-t border-border/40 bg-background px-4 py-16 sm:px-6 lg:px-8">
         <div className="rounded-[2rem] border border-border/40 bg-card/70 px-6 py-8 text-center text-sm text-muted-foreground backdrop-blur-sm">
-          还没有可展示的最新内容，稍后会按媒体库自动补充到这里。
+          还没有可展示的最新内容，稍后会按电影、剧集等内容形态自动补充到这里。
         </div>
       </section>
     )
@@ -265,16 +264,12 @@ export function LatestLibraryRail({
     <section className="relative border-t border-border/40 bg-background px-4 pt-10 pb-16 sm:px-6 lg:px-8">
       <div>
         <div className="space-y-8">
-          {latestLibrarySections.map((section) => (
-            <section key={section.library_id}>
+          {contentSections.map((section) => (
+            <section key={section.key}>
               <div className="mb-4 flex items-center justify-between gap-3">
-                <Link
-                  to="/library/$id"
-                  params={{ id: String(section.library_id) }}
-                  className="text-xl font-semibold tracking-tight text-foreground underline-offset-4 hover:underline"
-                >
-                  最新{section.library_name}
-                </Link>
+                <h2 className="text-xl font-semibold tracking-tight text-foreground">
+                  最新{section.title}
+                </h2>
               </div>
               <div className="-mx-4 sm:-mx-6 lg:-mx-8">
                 <Swiper
@@ -290,11 +285,11 @@ export function LatestLibraryRail({
                   className="!overflow-x-clip !overflow-y-visible pt-1 pb-3"
                 >
                   {section.items.map((item: CatalogListItem) => (
-                    <SwiperSlide key={item.id} className="!w-auto">
-                      <MediaPosterCard
-                        item={item}
-                        libraryName={section.library_name}
-                      />
+                    <SwiperSlide
+                      key={`${section.key}-${item.library_id}-${item.metadata_item_id ?? item.id}`}
+                      className="!w-auto"
+                    >
+                      <MediaPosterCard item={item} />
                     </SwiperSlide>
                   ))}
                 </Swiper>
@@ -307,90 +302,113 @@ export function LatestLibraryRail({
   )
 }
 
-export function MyMediaSection({
-  libraries,
-  latestLibrarySections,
-  variant = "default",
+export function ContentShapeEntrance({
+  movieCount,
+  showCount,
+  sections,
 }: {
-  libraries: Library[]
-  latestLibrarySections: { library_id: number; items: CatalogListItem[] }[]
-  variant?: "default" | "heroOverlay"
+  movieCount: number
+  showCount: number
+  sections: HomeMediaSectionSummary[]
 }) {
-  const postersByLibrary = new Map(
-    latestLibrarySections.map((section) => [
-      section.library_id,
-      section.items.map(getMediaCardPosterUrl).filter(Boolean).slice(0, 4),
-    ])
-  )
-
-  if (libraries.length === 0) {
-    return (
-      <section
-        className={cn(
-          variant === "heroOverlay"
-            ? "pointer-events-none absolute inset-x-0 bottom-8 z-20 px-4 sm:px-6 lg:px-8"
-            : "px-4 py-10 sm:px-6 lg:px-8"
-        )}
-      >
-        <div
-          className={cn(
-            "mx-auto max-w-[1600px] rounded-[2rem] border border-border/40 px-6 py-8 text-sm text-muted-foreground backdrop-blur-sm",
-            variant === "heroOverlay"
-              ? "pointer-events-auto bg-background/70 shadow-2xl shadow-black/25"
-              : "bg-card/70"
-          )}
-        >
-          还没有媒体库。前往设置添加媒体源和媒体库后，这里会显示你的媒体入口。
-        </div>
-      </section>
-    )
-  }
+  const moviePosters = getEntrancePosters(sections, "movies")
+  const showPosters = getEntrancePosters(sections, "series")
 
   return (
-    <section
-      className={cn(
-        variant === "heroOverlay"
-          ? "pointer-events-none absolute inset-x-0 bottom-8 z-20 px-4 sm:px-6 lg:px-8"
-          : "px-4 py-10 sm:px-6 lg:px-8"
-      )}
-    >
-      <div
-        className={cn(
-          variant === "heroOverlay"
-            ? "pointer-events-auto"
-            : "mx-auto max-w-[1600px]"
-        )}
-      >
-        {variant === "default" ? (
-          <div className="mb-5 flex items-end justify-between gap-4">
-            <div>
-              <div className="text-xs tracking-[0.24em] text-muted-foreground uppercase">
-                My Media
-              </div>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-                我的媒体
-              </h2>
-            </div>
-          </div>
-        ) : null}
-        <div
-          className={cn(
-            variant === "heroOverlay"
-              ? "flex h-64 gap-3 overflow-x-auto px-1 pt-3 pb-1"
-              : "grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
-          )}
-        >
-          {libraries.map((library) => (
-            <LibraryCollageCard
-              key={library.id}
-              library={library}
-              posters={postersByLibrary.get(library.id) ?? []}
-              variant={variant}
-            />
-          ))}
-        </div>
+    <section className="pointer-events-none absolute inset-x-0 bottom-8 z-20 px-4 sm:px-6 lg:px-8">
+      <div className="pointer-events-auto flex h-64 gap-3 overflow-x-auto px-1 pt-3 pb-1">
+        <ContentShapeEntranceCard
+          title="电影"
+          description="进入全部电影，按最近加入继续发现。"
+          count={movieCount}
+          type="movie"
+          posters={moviePosters}
+        />
+        <ContentShapeEntranceCard
+          title="剧集"
+          description="进入全部剧集，快速回到连续内容。"
+          count={showCount}
+          type="show"
+          posters={showPosters}
+        />
       </div>
     </section>
+  )
+}
+
+function getEntrancePosters(
+  sections: HomeMediaSectionSummary[],
+  key: "movies" | "series"
+) {
+  return (
+    sections
+      .find((section) => section.key === key)
+      ?.items.map(getMediaCardPosterUrl)
+      .filter(Boolean)
+      .slice(0, 4) ?? []
+  )
+}
+
+function ContentShapeEntranceCard({
+  title,
+  description,
+  count,
+  type,
+  posters,
+}: {
+  title: string
+  description: string
+  count: number
+  type: "movie" | "show"
+  posters: string[]
+}) {
+  const shouldUseCollage = posters.length >= 3
+  const primaryPoster = posters[0]
+
+  return (
+    <Link
+      to="/library"
+      search={{ type }}
+      className="group flex h-full w-[240px] shrink-0 flex-col overflow-hidden rounded-[1rem] border border-border/40 bg-card/70 shadow-2xl shadow-black/25 backdrop-blur-xl transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:w-[280px] lg:w-[320px]"
+    >
+      <div className="relative overflow-hidden bg-muted">
+        {shouldUseCollage ? (
+          <div className="flex justify-center overflow-hidden">
+            {posters.slice(0, 3).map((poster, index) => (
+              <div
+                key={`${poster}-${index}`}
+                className="aspect-[2/3] w-1/3 shrink-0 rounded-none bg-cover bg-center"
+                style={{ backgroundImage: `url(${poster})` }}
+              />
+            ))}
+          </div>
+        ) : primaryPoster ? (
+          <div
+            className="aspect-[2/3] w-full bg-cover bg-center"
+            style={{ backgroundImage: `url(${primaryPoster})` }}
+          />
+        ) : (
+          <div className="flex aspect-[2/3] w-full items-center justify-center bg-card/80 px-4 text-center text-sm text-muted-foreground">
+            暂无封面
+          </div>
+        )}
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,hsl(var(--background)/0.92)_0%,hsl(var(--background)/0.58)_34%,transparent_34.5%,transparent_61%,hsl(var(--background)/0.74)_61.5%,hsl(var(--background)/0.9)_100%)] opacity-95 transition-opacity group-hover:opacity-80" />
+      </div>
+      <div className="flex items-center justify-between gap-3 px-4 py-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold tracking-tight">
+            {title}
+          </div>
+          <div className="mt-1 truncate text-xs text-muted-foreground">
+            {description}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-lg font-semibold">{count}</div>
+          <div className="text-[10px] text-muted-foreground">条内容</div>
+        </div>
+      </div>
+    </Link>
   )
 }
 
@@ -427,7 +445,7 @@ export function ContinueWatchingRail({
 
               return (
                 <SwiperSlide
-                  key={`${entry.item.id}-${entry.asset_id ?? "default"}`}
+				  key={`${entry.item.metadata_item_id}-${entry.resource_id ?? "default"}`}
                   className="!w-auto"
                 >
                   <MediaPosterCard
@@ -486,89 +504,6 @@ function formatEpisodeProgressLabel(item: CatalogUserItemEntry["item"]) {
       : ""
 
   return [season, episode].filter(Boolean).join(":")
-}
-
-function LibraryCollageCard({
-  library,
-  posters,
-  variant = "default",
-}: {
-  library: Library
-  posters: string[]
-  variant?: "default" | "heroOverlay"
-}) {
-  const shouldUseCollage = posters.length >= 3
-  const primaryPoster = posters[0]
-
-  return (
-    <Link
-      to="/library/$id"
-      params={{ id: String(library.id) }}
-      className={cn(
-        "group flex flex-col overflow-hidden rounded-[1.75rem] border border-border/40 bg-card/70 shadow-lg transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-        variant === "heroOverlay"
-          ? "h-full w-[240px] shrink-0 rounded-[1rem] sm:w-[280px] lg:w-[320px]"
-          : ""
-      )}
-    >
-      <div
-        className={cn(
-          "relative overflow-hidden bg-muted"
-        )}
-      >
-        {shouldUseCollage ? (
-          <div className="flex justify-center overflow-hidden">
-            {posters.slice(0, 3).map((poster, index) => (
-              <div
-                key={`${poster}-${index}`}
-                className="aspect-[2/3] w-1/3 shrink-0 rounded-none bg-cover bg-center"
-                style={{ backgroundImage: `url(${poster})` }}
-              />
-            ))}
-          </div>
-        ) : primaryPoster ? (
-          <div
-            className="aspect-[2/3] w-full bg-cover bg-center"
-            style={{ backgroundImage: `url(${primaryPoster})` }}
-          />
-        ) : (
-          <div className="flex aspect-[2/3] w-full items-center justify-center bg-card/80 px-4 text-center text-sm text-muted-foreground">
-            暂无封面
-          </div>
-        )}
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,hsl(var(--background)/0.92)_0%,hsl(var(--background)/0.58)_34%,transparent_34.5%,transparent_61%,hsl(var(--background)/0.74)_61.5%,hsl(var(--background)/0.9)_100%)] opacity-95 transition-opacity group-hover:opacity-80" />
-      </div>
-      <div
-        className={cn(
-          "flex items-center justify-between gap-3 px-4",
-          variant === "heroOverlay" ? "py-2" : "py-4"
-        )}
-      >
-        <div className="min-w-0">
-          <div
-            className={cn(
-              "truncate font-semibold tracking-tight",
-              variant === "heroOverlay" ? "text-sm" : "text-lg"
-            )}
-          >
-            {library.name}
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {formatSourceContentClass(library.probe_summary?.dominant_class)} ·{" "}
-            {library.status}
-          </div>
-          {library.collections?.length ? (
-            <div className="mt-1 truncate text-xs text-muted-foreground">
-              {library.collections
-                .map((collection) => `${collection.label} ${collection.count}`)
-                .join(" · ")}
-            </div>
-          ) : null}
-        </div>
-        <ArrowUpRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-      </div>
-    </Link>
-  )
 }
 
 export function StatCard({

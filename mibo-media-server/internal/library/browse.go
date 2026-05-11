@@ -30,7 +30,7 @@ type OpenListTestResult struct {
 }
 
 func (s *Service) BrowseProviderPath(ctx context.Context, providerName, inputPath string, refresh bool) (BrowseResult, error) {
-	provider, err := s.storage.Get(providerName)
+	provider, err := s.storageRegistry().Get(providerName)
 	if err != nil {
 		return BrowseResult{}, err
 	}
@@ -49,7 +49,7 @@ func (s *Service) BrowseMediaSourcePath(ctx context.Context, sourceID uint, inpu
 }
 
 func (s *Service) BrowseTemporaryOpenListPath(ctx context.Context, cfg providers.OpenListSourceConfig, inputPath string, refresh bool) (BrowseResult, error) {
-	provider, err := s.storage.Build("openlist", &providers.SourceConfig{OpenList: &cfg}, "/")
+	provider, err := s.storageRegistry().Build("openlist", &providers.SourceConfig{OpenList: &cfg}, "/")
 	if err != nil {
 		return BrowseResult{}, err
 	}
@@ -57,7 +57,7 @@ func (s *Service) BrowseTemporaryOpenListPath(ctx context.Context, cfg providers
 }
 
 func (s *Service) TestTemporaryOpenListConnection(ctx context.Context, cfg providers.OpenListSourceConfig) (OpenListTestResult, error) {
-	provider, err := s.storage.Build("openlist", &providers.SourceConfig{OpenList: &cfg}, "/")
+	provider, err := s.storageRegistry().Build("openlist", &providers.SourceConfig{OpenList: &cfg}, "/")
 	if err != nil {
 		return OpenListTestResult{}, err
 	}

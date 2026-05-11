@@ -406,3 +406,17 @@ mibo-media-server/
 - 没有因为局部功能而污染共享层或上游边界
 
 如果不满足，优先调整代码落点和依赖方向，而不是继续追加说明性注释掩盖结构问题。
+
+## 10. 当前后端收敛基线
+
+针对当前 `mibo-media-server` 的后端收敛，补充以下强约束：
+
+- 领域词汇以仓库根 `CONTEXT.md` 为准。
+- 后端模块边界、分层和依赖方向以 `docs/architecture/backend-module-boundaries.md` 为准。
+- `httpapi` 继续保持薄 adapter，不新增核心业务规则。
+- `library` 是媒体库运行规则中心，尤其是扫描、refresh、policy、materialize。
+- `metadata` 是媒体语义和治理规则中心。
+- `catalog` 是读模型中心，不承担写侧治理规则。
+- `playback` 只负责播放来源解析，不回流承担扫描或 catalog 规则。
+
+如果实现与上述基线冲突，应优先调整实现，而不是扩展例外说明。

@@ -13,6 +13,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
+	"github.com/atlan/mibo-media-server/internal/titleclean"
 	"gorm.io/gorm"
 )
 
@@ -245,11 +246,7 @@ func sortedContentShapeHints(values map[string]struct{}) []string {
 }
 
 func normalizeVersionCompareTitle(input string) string {
-	cleaned := cleanTitle(input)
-	cleaned = qualitySignalPattern.ReplaceAllString(cleaned, " ")
-	cleaned = editionSignalPattern.ReplaceAllString(cleaned, " ")
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	return strings.ToLower(cleaned)
+	return titleclean.NormalizeMovieWorkTitle(input)
 }
 
 func contentShapeDirectoryFingerprint(input contentShapeFingerprintInput) string {

@@ -2,19 +2,19 @@ package metadata
 
 func OperationResponseFromResult(value MetadataOperationResult) MetadataOperationResponse {
 	return MetadataOperationResponse{
-		Operation:         value.Operation,
-		OriginItemID:      value.OriginItemID,
-		TargetItemID:      value.TargetItemID,
-		TargetType:        value.TargetType,
-		Status:            value.Status,
-		GovernanceStatus:  value.GovernanceStatus,
-		Plan:              value.Plan,
-		ProviderAttempts:  value.ProviderAttempts,
-		MetadataSourceIDs: value.MetadataSourceIDs,
-		AppliedFields:     value.AppliedFields,
-		SkippedFields:     value.SkippedFields,
-		AffectedScope:     value.AffectedScope,
-		Warnings:          value.Warnings,
+		Operation:            value.Operation,
+		OriginMetadataItemID: value.OriginMetadataItemID,
+		TargetMetadataItemID: value.TargetMetadataItemID,
+		TargetType:           value.TargetType,
+		Status:               value.Status,
+		GovernanceStatus:     value.GovernanceStatus,
+		Plan:                 value.Plan,
+		ProviderAttempts:     value.ProviderAttempts,
+		MetadataSourceIDs:    value.MetadataSourceIDs,
+		AppliedFields:        value.AppliedFields,
+		SkippedFields:        value.SkippedFields,
+		AffectedScope:        value.AffectedScope,
+		Warnings:             value.Warnings,
 	}
 }
 

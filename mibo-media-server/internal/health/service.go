@@ -148,8 +148,8 @@ func (s *Service) addIngestConditionIssues(ctx context.Context, groups map[strin
 			groups[key] = builder
 		}
 		builder.issue.Impact.AffectedFiles++
-		if condition.CatalogItemID != nil {
-			builder.issue.Impact.AffectedCatalogItems++
+		if condition.MetadataItemID != nil {
+			builder.issue.Impact.AffectedMetadataItems++
 		}
 	}
 	return nil
@@ -382,8 +382,10 @@ func (s *Service) addAffectedCounts(ctx context.Context, issue *Issue) error {
 	for _, ref := range issue.Affected.Libraries {
 		libraryIDs = append(libraryIDs, ref.ID)
 	}
-	if err := s.db.WithContext(ctx).Model(&database.CatalogItem{}).Where("library_id IN ? AND deleted_at IS NULL", libraryIDs).Count(&issue.Impact.AffectedCatalogItems).Error; err != nil {
-		return err
+	if s.db.Migrator().HasTable(&database.LibraryMetadataProjection{}) {
+		if err := s.db.WithContext(ctx).Model(&database.LibraryMetadataProjection{}).Where("library_id IN ? AND hidden = ?", libraryIDs, false).Count(&issue.Impact.AffectedMetadataItems).Error; err != nil {
+			return err
+		}
 	}
 	return s.db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id IN ?", libraryIDs).Count(&issue.Impact.AffectedFiles).Error
 }

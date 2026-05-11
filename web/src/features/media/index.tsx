@@ -1,26 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { LoaderCircleIcon } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert"
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import { StandaloneMediaDetail } from "#/features/media/components/standalone-media-detail"
 import {
-  buildPresentedCatalogItem,
+  buildPresentedMediaItem,
   catalogEpisodeShelfToSeasonRails,
-  catalogItemDetailToPresentation,
+  metadataItemDetailToPresentation,
   catalogSeasonsToRails,
   type MediaDetailView,
 } from "#/lib/media-presentation"
 import {
-  catalogItemDetailQueryOptions,
-  catalogItemProgressQueryOptions,
-  catalogSeriesSeasonsQueryOptions,
-  createAuthedMiboApi,
-  favoritesQueryOptions,
-  homeDataQueryOptions,
-  miboQueryKeys,
+	createAuthedMiboApi,
+	favoritesQueryOptions,
+	homeDataQueryOptions,
+	metadataItemDetailQueryOptions,
+	metadataItemProgressQueryOptions,
+	metadataItemResourcesQueryOptions,
+	miboQueryKeys,
 } from "#/lib/mibo-query"
 import { useAuthStore } from "#/stores/auth-store"
 
@@ -41,12 +42,16 @@ export default function MediaDetail({
   const queryToken = token ?? "guest"
   const hasValidItemId = Number.isFinite(itemId) && itemId > 0
 
-  const itemQuery = useQuery({
-    ...catalogItemDetailQueryOptions(queryToken, itemId),
-    enabled: hasHydrated && !!token && hasValidItemId,
-  })
-  const progressQuery = useQuery({
-    ...catalogItemProgressQueryOptions(queryToken, itemId),
+	const itemQuery = useQuery({
+		...metadataItemDetailQueryOptions(queryToken, itemId),
+		enabled: hasHydrated && !!token && hasValidItemId,
+	})
+	const progressQuery = useQuery({
+		...metadataItemProgressQueryOptions(queryToken, itemId),
+		enabled: hasHydrated && !!token && hasValidItemId,
+	})
+  const resourcesQuery = useQuery({
+    ...metadataItemResourcesQueryOptions(queryToken, itemId),
     enabled: hasHydrated && !!token && hasValidItemId,
   })
   const favoritesQuery = useQuery({
@@ -54,46 +59,46 @@ export default function MediaDetail({
     enabled: hasHydrated && !!token && hasValidItemId,
   })
   const detailItem = itemQuery.data
-  const detailAssets = itemQuery.data?.assets ?? []
+  const detailResources = itemQuery.data?.resources ?? []
   const presentationItem = itemQuery.data
-    ? catalogItemDetailToPresentation(itemQuery.data)
+    ? metadataItemDetailToPresentation(itemQuery.data)
     : null
-  const seriesEpisodesQuery = useQuery({
-    ...catalogSeriesSeasonsQueryOptions(queryToken, detailItem?.id ?? 0),
-    enabled: hasHydrated && !!token && detailItem?.type === "series",
-  })
+  const detailSeasonRails = catalogSeasonsToRails(detailItem?.seasons ?? [])
   const presentedItem = itemQuery.data
-    ? buildPresentedCatalogItem(
-        presentationItem ?? catalogItemDetailToPresentation(itemQuery.data),
-        catalogSeasonsToRails(seriesEpisodesQuery.data ?? []),
+    ? buildPresentedMediaItem(
+        presentationItem ?? metadataItemDetailToPresentation(itemQuery.data),
+        detailSeasonRails,
         detailView
       )
     : null
   const displayedSeasonRails = presentedItem
     ? presentedItem.type === "episode"
       ? catalogEpisodeShelfToSeasonRails(presentedItem)
-      : catalogSeasonsToRails(seriesEpisodesQuery.data ?? [])
+      : detailSeasonRails
     : []
+  const selectedResourceId = useMemo(() => {
+    const preferredResourceId = progressQuery.data?.preferred_resource_id
+    if (typeof preferredResourceId === "number") {
+      return preferredResourceId
+    }
+    return resourcesQuery.data?.[0]?.id
+  }, [progressQuery.data?.preferred_resource_id, resourcesQuery.data])
+  const [selectedResourceIdState, setSelectedResourceIdState] = useState<
+    number | undefined
+  >(selectedResourceId)
+  const [hasUserSelectedResource, setHasUserSelectedResource] = useState(false)
 
-  const rematchMutation = useMutation({
-    mutationFn: async () => {
-      if (!token) {
-        throw new Error("当前未登录，无法重新匹配媒体。")
-      }
+  useEffect(() => {
+    setHasUserSelectedResource(false)
+    setSelectedResourceIdState(undefined)
+  }, [itemId])
 
-      return createAuthedMiboApi(token).refetchCatalogItemMetadata(itemId)
-    },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: catalogItemDetailQueryOptions(queryToken, itemId).queryKey,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: homeDataQueryOptions(queryToken).queryKey,
-        }),
-      ])
-    },
-  })
+  useEffect(() => {
+    if (hasUserSelectedResource) {
+      return
+    }
+    setSelectedResourceIdState(selectedResourceId)
+  }, [hasUserSelectedResource, selectedResourceId])
 
   const reprobeMutation = useMutation({
     mutationFn: async () => {
@@ -101,19 +106,23 @@ export default function MediaDetail({
         throw new Error("当前未登录，无法重新探测媒体文件。")
       }
 
-      const primaryFileId = detailAssets.find(
-        (asset) => asset.file_ids.length > 0
+      const primaryFileId = detailResources.find(
+        (resource) => resource.file_ids.length > 0
       )?.file_ids[0]
       if (!primaryFileId) {
-        throw new Error("当前条目没有可重新探测的媒体资产。")
+        throw new Error("当前条目没有可重新探测的媒体资源。")
       }
 
       return createAuthedMiboApi(token).reprobeInventoryFile(primaryFileId)
     },
     onSuccess: async () => {
-      await Promise.all([
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: metadataItemDetailQueryOptions(queryToken, itemId).queryKey,
+			}),
         queryClient.invalidateQueries({
-          queryKey: catalogItemDetailQueryOptions(queryToken, itemId).queryKey,
+          queryKey: metadataItemResourcesQueryOptions(queryToken, itemId)
+            .queryKey,
         }),
         queryClient.invalidateQueries({
           queryKey: homeDataQueryOptions(queryToken).queryKey,
@@ -140,20 +149,20 @@ export default function MediaDetail({
         throw new Error("当前媒体缺少时长信息，暂时无法标记为看完。")
       }
 
-      return createAuthedMiboApi(token).updateProgress({
-        item_id: itemId,
-        asset_id: item.assets?.[0]?.id,
-        position_seconds: durationSeconds,
+		return createAuthedMiboApi(token).updateProgress({
+			metadata_item_id: item.metadata_item_id,
+			resource_id: selectedResourceIdState,
+			position_seconds: durationSeconds,
         duration_seconds: durationSeconds,
         completed: true,
       })
     },
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: catalogItemProgressQueryOptions(queryToken, itemId)
-            .queryKey,
-        }),
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: metadataItemProgressQueryOptions(queryToken, itemId)
+					.queryKey,
+			}),
         queryClient.invalidateQueries({
           queryKey: homeDataQueryOptions(queryToken).queryKey,
         }),
@@ -167,7 +176,10 @@ export default function MediaDetail({
       }
 
       const api = createAuthedMiboApi(token)
-      return favorite ? api.addFavorite(itemId) : api.removeFavorite(itemId)
+		const metadataItemId = itemQuery.data.metadata_item_id
+      return favorite
+        ? api.addFavorite(metadataItemId)
+        : api.removeFavorite(metadataItemId)
     },
     onSuccess: async () => {
       await Promise.all([
@@ -178,6 +190,63 @@ export default function MediaDetail({
           queryKey: homeDataQueryOptions(queryToken).queryKey,
         }),
       ])
+    },
+  })
+  const preferredResourceMutation = useMutation({
+    mutationFn: async (resourceId: number) => {
+      if (!token) {
+        throw new Error("当前未登录，无法切换播放版本。")
+      }
+      return createAuthedMiboApi(token).setPreferredResource({
+        metadata_item_id: itemId,
+        resource_id: resourceId,
+      })
+    },
+    onMutate: async (resourceId) => {
+      setHasUserSelectedResource(true)
+      setSelectedResourceIdState(resourceId)
+      const progressQueryKey = metadataItemProgressQueryOptions(
+        queryToken,
+        itemId
+      ).queryKey
+      await queryClient.cancelQueries({ queryKey: progressQueryKey })
+      const previous = queryClient.getQueryData(progressQueryKey)
+      queryClient.setQueryData(progressQueryKey, (current) => {
+        if (!current || typeof current !== "object") {
+          return {
+            user_id: user?.id ?? 0,
+            metadata_item_id: itemId,
+            resource_id: resourceId,
+            preferred_resource_id: resourceId,
+            position_seconds: 0,
+            watched: false,
+          }
+        }
+        return {
+          ...current,
+          resource_id: resourceId,
+          preferred_resource_id: resourceId,
+        }
+      })
+      return { previous, progressQueryKey }
+    },
+    onSuccess: async (state) => {
+      queryClient.setQueryData(
+        metadataItemProgressQueryOptions(queryToken, itemId).queryKey,
+        state
+      )
+      await queryClient.invalidateQueries({
+        queryKey: metadataItemProgressQueryOptions(queryToken, itemId).queryKey,
+      })
+    },
+    onError: (_error, _resourceId, context) => {
+      setHasUserSelectedResource(false)
+      setSelectedResourceIdState(
+        typeof selectedResourceId === "number" ? selectedResourceId : resourcesQuery.data?.[0]?.id
+      )
+      if (context?.previous) {
+        queryClient.setQueryData(context.progressQueryKey, context.previous)
+      }
     },
   })
   if (!hasHydrated || (token && itemQuery.isLoading)) {
@@ -245,13 +314,24 @@ export default function MediaDetail({
         )
       : 0
   const mutationErrorMessage =
-    rematchMutation.error?.message ||
     reprobeMutation.error?.message ||
     markWatchedMutation.error?.message ||
+    preferredResourceMutation.error?.message ||
     favoriteMutation.error?.message
   const isFavorite = Boolean(
-    favoritesQuery.data?.some((entry) => entry.item.id === itemId)
+    favoritesQuery.data?.some(
+      (entry) =>
+		entry.item.metadata_item_id === itemQuery.data.metadata_item_id
+	    )
   )
+  const itemQueryError = itemQuery.error as unknown
+  const seriesEpisodesErrorMessage =
+    itemQueryError &&
+    typeof itemQueryError === "object" &&
+    "message" in itemQueryError &&
+    typeof itemQueryError.message === "string"
+      ? itemQueryError.message
+      : null
 
   return (
     <div className="relative min-w-0 flex-1 overflow-x-hidden">
@@ -272,8 +352,8 @@ export default function MediaDetail({
         progress={progress}
         seriesSeasons={displayedSeasonRails}
         episodePage={episodePage}
-        isSeriesEpisodesLoading={seriesEpisodesQuery.isLoading}
-        seriesEpisodesErrorMessage={seriesEpisodesQuery.error?.message ?? null}
+        isSeriesEpisodesLoading={itemQuery.isLoading}
+        seriesEpisodesErrorMessage={seriesEpisodesErrorMessage}
         onGoBack={() => {
           if (window.history.length > 1) {
             window.history.back()
@@ -289,21 +369,17 @@ export default function MediaDetail({
             params: { id: String(playbackItemId) },
             search: {
               fromStart: Boolean(options?.fromStart),
-              assetId: options?.assetId,
+              resourceId: options?.resourceId,
             },
           })
         }}
-        onOpenAssetPlaybackEntry={(assetId) => {
-          void navigate({
-            to: "/play/$id",
-            params: { id: String(itemId) },
-            search: { fromStart: false, assetId },
-          })
+        resourceChoices={resourcesQuery.data ?? []}
+        resourceSummaries={detailResources}
+        selectedResourceId={selectedResourceIdState}
+        onSelectResource={(resourceId) => {
+          void preferredResourceMutation.mutateAsync(resourceId)
         }}
-        assetChoices={detailAssets}
-        onRematchItem={() => {
-          void rematchMutation.mutateAsync()
-        }}
+        isSelectingResource={preferredResourceMutation.isPending}
         onReprobePrimaryFile={() => {
           void reprobeMutation.mutateAsync()
         }}

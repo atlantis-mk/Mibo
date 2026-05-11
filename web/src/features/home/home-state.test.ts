@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import type { CatalogListItem, HealthIssue, Library } from "#/lib/mibo-api"
+import type { CatalogListItem, HealthIssue } from "#/lib/mibo-api"
 
 import { getHomeDashboardState, type HomeDashboardData } from "./home-state"
 
@@ -9,9 +9,8 @@ function data(overrides: Partial<HomeDashboardData> = {}): HomeDashboardData {
     items: [],
     continueWatching: [],
     continueWatchingCount: 0,
-    libraries: [],
-    libraryCount: 0,
-    latestByLibrary: [],
+    contentSections: [],
+    mediaOverview: { sections: [] },
     healthIssues: [],
     ...overrides,
   }
@@ -29,19 +28,6 @@ function item(overrides: Partial<CatalogListItem> = {}): CatalogListItem {
   }
 }
 
-function library(overrides: Partial<Library> = {}): Library {
-  return {
-    id: 1,
-    name: "Movies",
-    media_source_id: 1,
-    root_path: "/movies",
-    status: "active",
-    scanner_enabled: true,
-    probe_status: "ok",
-    ...overrides,
-  }
-}
-
 function blockingIssue(overrides: Partial<HealthIssue> = {}): HealthIssue {
   return {
     id: "storage-auth",
@@ -55,7 +41,7 @@ function blockingIssue(overrides: Partial<HealthIssue> = {}): HealthIssue {
       blocks_home_visibility: true,
       blocks_playback: false,
       blocks_metadata: false,
-      affected_catalog_items: 10,
+      affected_metadata_items: 10,
       affected_files: 20,
     },
     affected: {
@@ -88,10 +74,17 @@ describe("getHomeDashboardState", () => {
   })
 
   it("covers the normal populated state", () => {
-    const state = getHomeDashboardState(data({ items: [item()] }))
+    const state = getHomeDashboardState(
+      data({
+        contentSections: [{ key: "movies", title: "电影", items: [item()] }],
+        mediaOverview: {
+          sections: [{ key: "movies", title: "电影", count: 7, items: [item()] }],
+        },
+      })
+    )
 
     expect(state.hasDisplayableHomeContent).toBe(true)
-    expect(state.movieCount).toBe(1)
+    expect(state.movieCount).toBe(7)
     expect(state.showCount).toBe(0)
     expect(state.isPartiallyDegraded).toBe(false)
   })
@@ -99,12 +92,11 @@ describe("getHomeDashboardState", () => {
   it("covers the fully health-blocked state", () => {
     const state = getHomeDashboardState(
       data({
-        libraries: [library({ status: "error" })],
         healthIssues: [blockingIssue()],
       })
     )
 
-    expect(state.hasEmptySetupState).toBe(false)
+    expect(state.hasEmptySetupState).toBe(true)
     expect(state.hasDisplayableHomeContent).toBe(false)
     expect(state.isHealthBlocked).toBe(true)
     expect(state.homeBlockingIssue?.id).toBe("storage-auth")

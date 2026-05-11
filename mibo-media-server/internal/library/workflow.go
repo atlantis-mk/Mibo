@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"sort"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/catalog"
@@ -39,7 +41,8 @@ type inventoryFileProbeWorkflowPayload struct {
 }
 
 func (s *Service) QueueLibraryWorkflow(ctx context.Context, input QueueWorkflowInput) (database.WorkflowRun, bool, error) {
-	if s.workflow == nil {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
 		return database.WorkflowRun{}, false, fmt.Errorf("workflow service unavailable")
 	}
 	if input.LibraryID == 0 {
@@ -54,7 +57,7 @@ func (s *Service) QueueLibraryWorkflow(ctx context.Context, input QueueWorkflowI
 	if rootPath != "" {
 		runKey = fmt.Sprintf("%s:%s", runKey, rootPath)
 	}
-	run, reused, err := s.workflow.CreateOrReuseRun(ctx, workflow.CreateRunInput{
+	run, reused, err := workflowSvc.CreateOrReuseRun(ctx, workflow.CreateRunInput{
 		RunKey:    runKey,
 		LibraryID: input.LibraryID,
 		Reason:    reason,
@@ -73,7 +76,7 @@ func (s *Service) QueueLibraryWorkflow(ctx context.Context, input QueueWorkflowI
 		return run, true, nil
 	}
 	if strings.TrimSpace(rootPath) != "" {
-		_, err = s.workflow.CreateTask(ctx, run, workflow.CreateTaskInput{
+		_, err = workflowSvc.CreateTask(ctx, run, workflow.CreateTaskInput{
 			TaskKey:   fmt.Sprintf("run:%d:scan:%s", run.ID, rootPath),
 			TaskType:  workflow.TaskTypeScanLibraryPath,
 			Stage:     workflow.StageScan,
@@ -96,7 +99,7 @@ func (s *Service) QueueLibraryWorkflow(ctx context.Context, input QueueWorkflowI
 		if !pathRecord.Enabled || pathRecord.DeletedAt != nil {
 			continue
 		}
-		_, err = s.workflow.CreateTask(ctx, run, workflow.CreateTaskInput{
+		_, err = workflowSvc.CreateTask(ctx, run, workflow.CreateTaskInput{
 			TaskKey:   fmt.Sprintf("run:%d:scan:%s", run.ID, pathRecord.RootPath),
 			TaskType:  workflow.TaskTypeScanLibraryPath,
 			Stage:     workflow.StageScan,
@@ -117,15 +120,16 @@ func (s *Service) RegisterWorkflowHandlers(runner *workflow.Runner) {
 		return
 	}
 	runner.Register(workflow.TaskTypeScanLibraryPath, s.RunWorkflowScanLibraryPath)
-	runner.Register(workflow.TaskTypeMaterializeCatalog, s.RunWorkflowCatalogMaterialize)
+	runner.Register(workflow.TaskTypeResolveRecognition, s.RunWorkflowRecognitionResolve)
 	runner.Register(workflow.TaskTypeRefreshProjection, s.RunWorkflowCatalogProjectionRefresh)
 	runner.Register(workflow.TaskTypeProbeInventory, s.RunWorkflowInventoryProbeBatch)
 	runner.Register(workflow.TaskTypeProbeInventoryFile, s.RunWorkflowInventoryFileProbe)
-	runner.Register(workflow.TaskTypeMatchMetadata, s.RunWorkflowCatalogMatchBatch)
+	runner.Register(workflow.TaskTypeMatchMetadata, s.RunWorkflowMetadataMatchBatch)
 }
 
 func (s *Service) queueStandaloneWorkflowTask(ctx context.Context, libraryID uint, rootPath string, reason string, taskType string, stage string, taskKeySuffix string, payload any) (database.WorkflowRun, error) {
-	if s.workflow == nil {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
 		return database.WorkflowRun{}, fmt.Errorf("workflow service unavailable")
 	}
 	if libraryID == 0 {
@@ -136,7 +140,7 @@ func (s *Service) queueStandaloneWorkflowTask(ctx context.Context, libraryID uin
 	}
 	rootPath = strings.TrimSpace(rootPath)
 	runKey := fmt.Sprintf("library:%d:%s:%s:%s", libraryID, reason, taskType, rootPath)
-	run, reused, err := s.workflow.CreateOrReuseRun(ctx, workflow.CreateRunInput{RunKey: runKey, LibraryID: libraryID, Reason: reason, Priority: 5, ScopeKey: fmt.Sprintf("library:%d", libraryID), Payload: payload})
+	run, reused, err := workflowSvc.CreateOrReuseRun(ctx, workflow.CreateRunInput{RunKey: runKey, LibraryID: libraryID, Reason: reason, Priority: 5, ScopeKey: fmt.Sprintf("library:%d", libraryID), Payload: payload})
 	if err != nil || reused {
 		return run, err
 	}
@@ -144,7 +148,7 @@ func (s *Service) queueStandaloneWorkflowTask(ctx context.Context, libraryID uin
 	if stage == "" {
 		stage = definition.Stage
 	}
-	_, err = s.workflow.CreateTask(ctx, run, workflow.CreateTaskInput{TaskKey: fmt.Sprintf("run:%d:%s", run.ID, taskKeySuffix), TaskType: taskType, Stage: stage, Priority: 5, ScopeKey: run.ScopeKey, Payload: payload, Resources: definition.Resources})
+	_, err = workflowSvc.CreateTask(ctx, run, workflow.CreateTaskInput{TaskKey: fmt.Sprintf("run:%d:%s", run.ID, taskKeySuffix), TaskType: taskType, Stage: stage, Priority: 5, ScopeKey: run.ScopeKey, Payload: payload, Resources: definition.Resources})
 	return run, err
 }
 
@@ -171,7 +175,7 @@ func (s *Service) RunWorkflowScanLibraryPath(ctx context.Context, task database.
 	libraryForPath := config.Library
 	libraryForPath.MediaSourceID = pathRecord.MediaSourceID
 	libraryForPath.RootPath = pathRecord.RootPath
-	scanMode := scanMode{deferCatalogMaterialization: true, rootPath: targetRoot}
+	scanMode := scanMode{deferRecognitionResolution: true, rootPath: targetRoot}
 	if _, err := s.scanLibraryWithMode(ctx, provider, libraryForPath, targetRoot, &scanMode); err != nil {
 		_ = s.updateLibraryStatus(ctx, config.Library.ID, "error")
 		return err
@@ -183,16 +187,16 @@ func (s *Service) RunWorkflowScanLibraryPath(ctx context.Context, task database.
 	return s.updateLibraryStatus(ctx, config.Library.ID, "active")
 }
 
-func (s *Service) RunWorkflowCatalogMaterialize(ctx context.Context, task database.WorkflowTask) error {
-	var postPayload CatalogPostMaterializeBatchPayload
-	if err := json.Unmarshal([]byte(task.PayloadJSON), &postPayload); err == nil && len(postPayload.ItemIDs) > 0 {
-		return s.RunCatalogPostMaterializeBatch(ctx, postPayload)
+func (s *Service) RunWorkflowRecognitionResolve(ctx context.Context, task database.WorkflowTask) error {
+	var postPayload RecognitionPostResolvePayload
+	if err := json.Unmarshal([]byte(task.PayloadJSON), &postPayload); err == nil && len(postPayload.MetadataItemIDs) > 0 {
+		return s.RunRecognitionPostResolve(ctx, postPayload)
 	}
-	var payload CatalogMaterializeBatchPayload
+	var payload RecognitionResolveBatchPayload
 	if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-		return fmt.Errorf("decode materialize workflow payload: %w", err)
+		return fmt.Errorf("decode recognition resolve workflow payload: %w", err)
 	}
-	return s.RunCatalogMaterializeBatch(ctx, payload)
+	return s.runRecognitionResolveBatch(ctx, payload, task.RunID)
 }
 
 func (s *Service) RunWorkflowCatalogProjectionRefresh(ctx context.Context, task database.WorkflowTask) error {
@@ -225,29 +229,34 @@ func (s *Service) RunWorkflowInventoryFileProbe(ctx context.Context, task databa
 	return s.RunInventoryProbeBatch(ctx, InventoryProbeBatchPayload{LibraryID: task.LibraryID, FileIDs: []uint{payload.InventoryFileID}})
 }
 
-func (s *Service) RunWorkflowCatalogMatchBatch(ctx context.Context, task database.WorkflowTask) error {
-	var payload CatalogMatchBatchPayload
+func (s *Service) RunWorkflowMetadataMatchBatch(ctx context.Context, task database.WorkflowTask) error {
+	var payload MetadataMatchBatchPayload
 	if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
 		return fmt.Errorf("decode metadata match workflow payload: %w", err)
 	}
-	return s.RunCatalogMatchBatch(ctx, payload)
+	return s.RunMetadataMatchBatch(ctx, payload)
 }
 
 func (s *Service) catalogProjectionRefresh(ctx context.Context, libraryID uint, rootPath string) error {
 	if libraryID == 0 {
 		return fmt.Errorf("library id is required")
 	}
-	return catalog.NewService(s.db, s.ingest).RefreshLibraryProjection(ctx, libraryID, rootPath)
+	_ = rootPath
+	return catalog.NewService(s.db, s.ingestCapability()).RefreshLibraryProjectionScope(ctx, libraryID)
 }
 
 func (s *Service) queueWorkflowPostScanTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, mode scanMode, scanPolicy database.LibraryScanPolicy) error {
-	if s.workflow == nil || runID == 0 {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil || runID == 0 {
 		return s.queuePostScanEnrichment(ctx, libraryID, rootPath, mode, scanPolicy)
 	}
-	if err := s.queueWorkflowMaterializeTasks(ctx, runID, libraryID, rootPath, mode.catalogMaterializeFileIDs); err != nil {
+	if err := s.queueWorkflowRecognitionResolveTasks(ctx, runID, libraryID, rootPath, mode.recognitionResolveFileIDs); err != nil {
 		return err
 	}
-	if err := s.queueWorkflowMatchTasks(ctx, runID, libraryID, rootPath, mode.catalogMatchItemIDs); err != nil {
+	if len(mode.recognitionResolveFileIDs) > 0 {
+		return nil
+	}
+	if err := s.queueWorkflowMatchTasks(ctx, runID, libraryID, rootPath, mode.metadataMatchItemIDs); err != nil {
 		return err
 	}
 	if scanPolicy.InventoryProbeBatchEnabled {
@@ -258,29 +267,83 @@ func (s *Service) queueWorkflowPostScanTasks(ctx context.Context, runID uint, li
 			return err
 		}
 	}
-	if _, err := s.workflow.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
-		TaskKey:   fmt.Sprintf("run:%d:projection:%s", runID, rootPath),
-		TaskType:  workflow.TaskTypeRefreshProjection,
-		Stage:     workflow.StageProjection,
-		ScopeKey:  fmt.Sprintf("library:%d", libraryID),
-		Payload:   map[string]any{"library_id": libraryID, "root_path": rootPath},
-		Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeRefreshProjection].Resources,
-	}); err != nil {
+	if err := s.queueWorkflowProjectionTask(ctx, runID, libraryID, rootPath); err != nil {
 		return err
 	}
 	return nil
 }
 
+func (s *Service) queueWorkflowPostRecognitionResolveTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, fileIDs []uint, metadataItemIDs []uint, scanPolicy database.LibraryScanPolicy) error {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil || runID == 0 {
+		if _, err := s.QueueMetadataMatchBatch(ctx, libraryID, rootPath, metadataItemIDs); err != nil {
+			return err
+		}
+		if (EffectiveLibraryConfig{ScanPolicy: scanPolicy}).InventoryProbeBatchEnabled() {
+			if _, err := s.QueueInventoryProbeBatch(ctx, libraryID, rootPath, fileIDs); err != nil {
+				return err
+			}
+		}
+		_, err := s.QueueCatalogLibraryProjectionRefresh(ctx, libraryID, rootPath)
+		return err
+	}
+	if err := s.queueWorkflowMatchTasks(ctx, runID, libraryID, rootPath, metadataItemIDs); err != nil {
+		return err
+	}
+	if (EffectiveLibraryConfig{ScanPolicy: scanPolicy}).InventoryProbeBatchEnabled() {
+		if err := s.queueWorkflowProbeTasks(ctx, runID, libraryID, rootPath, fileIDs); err != nil {
+			return err
+		}
+	}
+	return s.queueWorkflowProjectionTask(ctx, runID, libraryID, rootPath)
+}
+
+func (s *Service) queueWorkflowProjectionTask(ctx context.Context, runID uint, libraryID uint, rootPath string) error {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
+		return fmt.Errorf("workflow service unavailable")
+	}
+	taskKey := fmt.Sprintf("run:%d:projection:%s", runID, rootPath)
+	exists, err := s.workflowTaskExists(ctx, taskKey)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = workflowSvc.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
+		TaskKey:   taskKey,
+		TaskType:  workflow.TaskTypeRefreshProjection,
+		Stage:     workflow.StageProjection,
+		ScopeKey:  fmt.Sprintf("library:%d", libraryID),
+		Payload:   map[string]any{"library_id": libraryID, "root_path": rootPath},
+		Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeRefreshProjection].Resources,
+	})
+	return err
+}
+
 func (s *Service) queueWorkflowProbeTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, fileIDs []uint) error {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
+		return fmt.Errorf("workflow service unavailable")
+	}
 	ids := normalizeUintIDs(fileIDs)
-	for start := 0; start < len(ids); start += catalogMaterializeScanBatchSize {
-		end := start + catalogMaterializeScanBatchSize
+	for start := 0; start < len(ids); start += recognitionResolveScanBatchSize {
+		end := start + recognitionResolveScanBatchSize
 		if end > len(ids) {
 			end = len(ids)
 		}
 		batch := append([]uint(nil), ids[start:end]...)
-		_, err := s.workflow.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
-			TaskKey:   fmt.Sprintf("run:%d:probe:%s:%d", runID, rootPath, start),
+		taskKey := fmt.Sprintf("run:%d:probe:%s:%d", runID, rootPath, start)
+		exists, err := s.workflowTaskExists(ctx, taskKey)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		_, err = workflowSvc.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
+			TaskKey:   taskKey,
 			TaskType:  workflow.TaskTypeProbeInventory,
 			Stage:     workflow.StageProbe,
 			ScopeKey:  fmt.Sprintf("library:%d", libraryID),
@@ -294,20 +357,35 @@ func (s *Service) queueWorkflowProbeTasks(ctx context.Context, runID uint, libra
 	return nil
 }
 
-func (s *Service) queueWorkflowMatchTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, itemIDs []uint) error {
-	ids := normalizeUintIDs(itemIDs)
-	for start := 0; start < len(ids); start += catalogMaterializeScanBatchSize {
-		end := start + catalogMaterializeScanBatchSize
+func (s *Service) queueWorkflowMatchTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, metadataItemIDs []uint) error {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
+		return fmt.Errorf("workflow service unavailable")
+	}
+	ids, err := s.filterMetadataMatchableItemIDs(ctx, normalizeUintIDs(metadataItemIDs))
+	if err != nil {
+		return err
+	}
+	for start := 0; start < len(ids); start += recognitionResolveScanBatchSize {
+		end := start + recognitionResolveScanBatchSize
 		if end > len(ids) {
 			end = len(ids)
 		}
 		batch := append([]uint(nil), ids[start:end]...)
-		_, err := s.workflow.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
-			TaskKey:   fmt.Sprintf("run:%d:match:%s:%d", runID, rootPath, start),
+		taskKey := fmt.Sprintf("run:%d:match:%s:%d", runID, rootPath, start)
+		exists, err := s.workflowTaskExists(ctx, taskKey)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		_, err = workflowSvc.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
+			TaskKey:   taskKey,
 			TaskType:  workflow.TaskTypeMatchMetadata,
 			Stage:     workflow.StageMetadataMatch,
 			ScopeKey:  fmt.Sprintf("library:%d", libraryID),
-			Payload:   CatalogMatchBatchPayload{LibraryID: libraryID, RootPath: rootPath, ItemIDs: batch},
+			Payload:   MetadataMatchBatchPayload{LibraryID: libraryID, RootPath: rootPath, MetadataItemIDs: batch},
 			Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeMatchMetadata].Resources,
 		})
 		if err != nil {
@@ -317,25 +395,146 @@ func (s *Service) queueWorkflowMatchTasks(ctx context.Context, runID uint, libra
 	return nil
 }
 
-func (s *Service) queueWorkflowMaterializeTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, fileIDs []uint) error {
-	ids := normalizeUintIDs(fileIDs)
-	for start := 0; start < len(ids); start += catalogMaterializeScanBatchSize {
-		end := start + catalogMaterializeScanBatchSize
-		if end > len(ids) {
-			end = len(ids)
+func (s *Service) queueWorkflowRecognitionResolveTasks(ctx context.Context, runID uint, libraryID uint, rootPath string, fileIDs []uint) error {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
+		return fmt.Errorf("workflow service unavailable")
+	}
+	groups, err := s.recognitionResolveGroups(ctx, fileIDs)
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		taskKey := fmt.Sprintf("run:%d:resolve-recognition:%s:%d", runID, group.RootPath, group.Start)
+		exists, err := s.workflowTaskExists(ctx, taskKey)
+		if err != nil {
+			return err
 		}
-		batch := append([]uint(nil), ids[start:end]...)
-		_, err := s.workflow.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
-			TaskKey:   fmt.Sprintf("run:%d:materialize:%s:%d", runID, rootPath, start),
-			TaskType:  workflow.TaskTypeMaterializeCatalog,
+		if exists {
+			continue
+		}
+		_, err = workflowSvc.CreateTask(ctx, database.WorkflowRun{ID: runID, LibraryID: libraryID, ScopeKey: fmt.Sprintf("library:%d", libraryID)}, workflow.CreateTaskInput{
+			TaskKey:   taskKey,
+			TaskType:  workflow.TaskTypeResolveRecognition,
 			Stage:     workflow.StageMaterialize,
 			ScopeKey:  fmt.Sprintf("library:%d", libraryID),
-			Payload:   CatalogMaterializeBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: batch},
-			Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeMaterializeCatalog].Resources,
+			Payload:   RecognitionResolveBatchPayload{LibraryID: libraryID, RootPath: group.RootPath, FileIDs: group.FileIDs},
+			Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeResolveRecognition].Resources,
 		})
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Service) workflowTaskExists(ctx context.Context, taskKey string) (bool, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&database.WorkflowTask{}).Where("task_key = ?", taskKey).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Service) queueStandaloneRecognitionResolveTasks(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint) error {
+	workflowSvc := s.workflowCapability()
+	if workflowSvc == nil {
+		return fmt.Errorf("workflow service unavailable")
+	}
+	if libraryID == 0 {
+		return fmt.Errorf("library id is required")
+	}
+	groups, err := s.recognitionResolveGroups(ctx, fileIDs)
+	if err != nil {
+		return err
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	rootPath = strings.TrimSpace(rootPath)
+	for _, group := range groups {
+		groupRoot := firstNonEmptyString(group.RootPath, rootPath)
+		runKey := fmt.Sprintf("library:%d:%s:%s:%s", libraryID, WorkflowReasonManualScan, workflow.TaskTypeResolveRecognition, groupRoot)
+		run, reused, err := workflowSvc.CreateOrReuseRun(ctx, workflow.CreateRunInput{RunKey: runKey, LibraryID: libraryID, Reason: WorkflowReasonManualScan, Priority: 5, ScopeKey: fmt.Sprintf("library:%d", libraryID), Payload: RecognitionResolveBatchPayload{LibraryID: libraryID, RootPath: groupRoot, FileIDs: group.FileIDs}})
+		if err != nil {
+			return err
+		}
+		if reused {
+			continue
+		}
+		_, err = workflowSvc.CreateTask(ctx, run, workflow.CreateTaskInput{
+			TaskKey:   fmt.Sprintf("run:%d:resolve-recognition:%s:%d", run.ID, groupRoot, group.Start),
+			TaskType:  workflow.TaskTypeResolveRecognition,
+			Stage:     workflow.StageMaterialize,
+			Priority:  5,
+			ScopeKey:  run.ScopeKey,
+			Payload:   RecognitionResolveBatchPayload{LibraryID: libraryID, RootPath: groupRoot, FileIDs: group.FileIDs},
+			Resources: workflow.DefaultTaskTypeDefinitions()[workflow.TaskTypeResolveRecognition].Resources,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type recognitionResolveGroup struct {
+	RootPath string
+	Start    int
+	FileIDs  []uint
+}
+
+func (s *Service) recognitionResolveGroups(ctx context.Context, fileIDs []uint) ([]recognitionResolveGroup, error) {
+	ids := normalizeUintIDs(fileIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var files []database.InventoryFile
+	for _, batch := range chunkUints(ids, sqliteVariableChunkSize) {
+		var partial []database.InventoryFile
+		if err := s.db.WithContext(ctx).Where("id IN ?", batch).Find(&partial).Error; err != nil {
+			return nil, err
+		}
+		files = append(files, partial...)
+	}
+	pathByID := make(map[uint]string, len(files))
+	for _, file := range files {
+		if file.ID == 0 {
+			continue
+		}
+		pathByID[file.ID] = recognitionResolveGroupRootPath(file.StoragePath)
+	}
+	grouped := make(map[string][]uint)
+	orderedRoots := make([]string, 0)
+	for _, id := range ids {
+		root := pathByID[id]
+		if _, ok := grouped[root]; !ok {
+			orderedRoots = append(orderedRoots, root)
+		}
+		grouped[root] = append(grouped[root], id)
+	}
+	groups := make([]recognitionResolveGroup, 0)
+	for _, root := range orderedRoots {
+		groupIDs := grouped[root]
+		groups = append(groups, recognitionResolveGroup{RootPath: root, Start: 0, FileIDs: append([]uint(nil), groupIDs...)})
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].RootPath != groups[j].RootPath {
+			return groups[i].RootPath < groups[j].RootPath
+		}
+		return groups[i].Start < groups[j].Start
+	})
+	return groups, nil
+}
+
+func recognitionResolveGroupRootPath(storagePath string) string {
+	trimmed := strings.TrimSpace(storagePath)
+	if trimmed == "" {
+		return ""
+	}
+	dir := strings.TrimSpace(path.Dir(trimmed))
+	if dir == "." {
+		return ""
+	}
+	return dir
 }

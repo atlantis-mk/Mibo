@@ -96,65 +96,10 @@ func intToString(value int) string {
 }
 
 func (s *Service) loadPersonRelatedCatalogItems(ctx context.Context, personID uint, limit int) ([]CatalogListItem, error) {
-	if personID == 0 {
-		return []CatalogListItem{}, nil
-	}
-
-	type relatedRow struct {
-		ItemID uint
-	}
-	rows := make([]relatedRow, 0)
-	query := s.db.WithContext(ctx).
-		Table("item_people").
-		Select("catalog_items.id AS item_id, MIN(item_people.sort_order) AS person_sort_order").
-		Joins("JOIN catalog_items ON catalog_items.id = item_people.item_id").
-		Where("item_people.person_id = ? AND catalog_items.deleted_at IS NULL", personID).
-		Group("catalog_items.id").
-		Order("CASE WHEN catalog_items.availability_status = 'available' THEN 0 ELSE 1 END asc").
-		Order("person_sort_order asc").
-		Order("COALESCE(catalog_items.release_date, catalog_items.first_air_date) desc").
-		Order("catalog_items.year desc").
-		Order("catalog_items.sort_title asc").
-		Order("catalog_items.title asc").
-		Order("catalog_items.id asc")
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-	if err := query.Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return []CatalogListItem{}, nil
-	}
-
-	itemIDs := make([]uint, 0, len(rows))
-	for _, row := range rows {
-		itemIDs = append(itemIDs, row.ItemID)
-	}
-
-	items := make([]database.CatalogItem, 0, len(itemIDs))
-	if err := s.db.WithContext(ctx).
-		Where("id IN ? AND deleted_at IS NULL", itemIDs).
-		Find(&items).Error; err != nil {
-		return nil, err
-	}
-	if len(items) == 0 {
-		return []CatalogListItem{}, nil
-	}
-
-	itemsByID := make(map[uint]database.CatalogItem, len(items))
-	for _, item := range items {
-		itemsByID[item.ID] = item
-	}
-
-	ordered := make([]database.CatalogItem, 0, len(rows))
-	for _, row := range rows {
-		item, ok := itemsByID[row.ItemID]
-		if ok {
-			ordered = append(ordered, item)
-		}
-	}
-	return s.buildCatalogListItems(ctx, ordered)
+	_ = ctx
+	_ = personID
+	_ = limit
+	return []CatalogListItem{}, nil
 }
 
 func IsPersonNotFound(err error) bool {

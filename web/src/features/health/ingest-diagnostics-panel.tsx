@@ -264,9 +264,9 @@ export function IngestDiagnosticsPanel({
                       </TableCell>
                       <TableCell className="max-w-sm min-w-64 whitespace-normal">
                         <div className="font-medium text-foreground">
-                          {stage.catalog_title ||
-                            stage.storage_path ||
-                            stage.unit_key}
+						{stage.metadata_item_title ||
+							stage.storage_path ||
+							stage.unit_key}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
                           {stage.library_name || `媒体库 #${stage.library_id}`}
@@ -294,14 +294,14 @@ export function IngestDiagnosticsPanel({
                                 : "标记已治理"}
                             </Button>
                           ) : null}
-                          {stage.catalog_item_id ? (
-                            <Button size="sm" variant="outline" asChild>
-                              <Link
-                                to="/settings/metadata/$id"
-                                params={{ id: String(stage.catalog_item_id) }}
-                              >
-                                治理元数据
-                              </Link>
+							{stage.metadata_item_id ? (
+								<Button size="sm" variant="outline" asChild>
+									<Link
+										to="/settings/metadata/$id"
+										params={{ id: String(stage.metadata_item_id) }}
+									>
+										治理元数据
+									</Link>
                             </Button>
                           ) : null}
                           <Button
@@ -379,8 +379,8 @@ function isResolvableReviewStage(stage: IngestDiagnosticStage) {
     stage.reason === "metadata_no_candidate" ||
     stage.reason === "metadata_needs_review"
   ) {
-    return Boolean(stage.catalog_item_id)
-  }
+		return Boolean(stage.metadata_item_id)
+	}
   return false
 }
 

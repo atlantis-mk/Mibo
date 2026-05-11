@@ -58,19 +58,11 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&LibraryMetadataStrategy{},
 		&LibraryPlaybackPolicy{},
 		&LibrarySubtitlePolicy{},
-		&CatalogItem{},
-		&CatalogExternalID{},
-		&CatalogIdentity{},
-		&MetadataSource{},
-		&MetadataFieldState{},
 		&MetadataOperation{},
-		&ItemImage{},
 		&Person{},
 		&ItemPerson{},
 		&Tag{},
 		&ItemTag{},
-		&MediaAsset{},
-		&AssetItem{},
 		&InventoryFile{},
 		&InventoryFileSignal{},
 		&StorageIndexEntry{},
@@ -79,17 +71,19 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&ContentShapeProfile{},
 		&ContentShapePlan{},
 		&ContentShapeAssignment{},
+		&RecognitionManifest{},
+		&RecognitionCandidate{},
+		&RecognitionEvidence{},
+		&RecognitionDecision{},
+		&RecognitionConflict{},
+		&RecognitionRule{},
 		&ScanExclusion{},
 		&FilenameExclusionRule{},
 		&FilenameExclusionRestore{},
 		&ScanExclusionRule{},
 		&ClassificationDecision{},
 		&ClassificationRule{},
-		&AssetFile{},
 		&MediaStream{},
-		&UserItemData{},
-		&ItemRollup{},
-		&CatalogSearchDocument{},
 		&MetadataItem{},
 		&MetadataExternalID{},
 		&MetadataItemSource{},
@@ -130,6 +124,10 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		if err := repairSQLiteConflictIndexes(db); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := removeRetiredDevelopmentColumns(db); err != nil {
+		return nil, err
 	}
 
 	if err := validateCatalogKernelUniqueness(db); err != nil {
@@ -193,15 +191,33 @@ func configureSQLite(db *gorm.DB) error {
 	return db.Exec("PRAGMA journal_mode = WAL").Error
 }
 
+func removeRetiredDevelopmentColumns(db *gorm.DB) error {
+	retiredColumns := []struct {
+		model  any
+		column string
+	}{
+		{model: &ClassificationDecision{}, column: "asset_id"},
+		{model: &ClassificationDecision{}, column: "item_id"},
+		{model: &IngestDirtyUnit{}, column: "catalog_item_id"},
+		{model: &IngestCondition{}, column: "catalog_item_id"},
+		{model: &IngestEvent{}, column: "catalog_item_id"},
+	}
+	for _, retired := range retiredColumns {
+		if !db.Migrator().HasColumn(retired.model, retired.column) {
+			continue
+		}
+		if err := db.Migrator().DropColumn(retired.model, retired.column); err != nil {
+			return fmt.Errorf("drop retired column %s: %w", retired.column, err)
+		}
+	}
+	return nil
+}
+
 func ensureCatalogKernelIndexes(db *gorm.DB) error {
 	requiredIndexes := []struct {
 		model any
 		name  string
 	}{
-		{&CatalogItem{}, "idx_catalog_items_library_type_availability_sort"},
-		{&CatalogItem{}, "idx_catalog_items_parent_order"},
-		{&CatalogItem{}, "idx_catalog_items_root_type_order"},
-		{&CatalogSearchDocument{}, "idx_catalog_search_documents_library_type_availability_title"},
 		{&MetadataItem{}, "idx_metadata_items_type_status_sort"},
 		{&MetadataItem{}, "idx_metadata_items_parent_order"},
 		{&MetadataItem{}, "idx_metadata_items_root_type_order"},
@@ -222,13 +238,6 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&LibrarySearchDocument{}, "idx_library_search_documents_library_type_availability_title"},
 		{&UserMetadataData{}, "idx_user_metadata_data_identity"},
 		{&UserResourceData{}, "idx_user_resource_data_identity"},
-		{&CatalogExternalID{}, "idx_catalog_external_identity"},
-		{&CatalogIdentity{}, "idx_catalog_identity_key"},
-		{&MetadataFieldState{}, "idx_metadata_field_state_item_field"},
-		{&AssetItem{}, "idx_asset_items_item_role"},
-		{&AssetItem{}, "idx_asset_items_asset_item_role_segment"},
-		{&AssetFile{}, "idx_asset_files_asset_part"},
-		{&AssetFile{}, "idx_asset_files_asset_file_role_part"},
 		{&InventoryFile{}, "idx_inventory_file_source_storage_path"},
 		{&InventoryFile{}, "idx_inventory_files_library_status_path"},
 		{&InventoryFileSignal{}, "idx_inventory_file_signal_identity"},
@@ -243,6 +252,16 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&ContentShapePlan{}, "idx_content_shape_plans_library_state"},
 		{&ContentShapeAssignment{}, "idx_content_shape_assignment_file"},
 		{&ContentShapeAssignment{}, "idx_content_shape_assignments_library_state"},
+		{&RecognitionManifest{}, "idx_recognition_manifest_key"},
+		{&RecognitionManifest{}, "idx_recognition_manifest_scope"},
+		{&RecognitionManifest{}, "idx_recognition_manifests_library_state"},
+		{&RecognitionCandidate{}, "idx_recognition_candidate_identity"},
+		{&RecognitionCandidate{}, "idx_recognition_candidates_type_state"},
+		{&RecognitionEvidence{}, "idx_recognition_evidence_manifest_candidate"},
+		{&RecognitionEvidence{}, "idx_recognition_evidence_kind"},
+		{&RecognitionDecision{}, "idx_recognition_decisions_manifest_status"},
+		{&RecognitionConflict{}, "idx_recognition_conflicts_manifest_status"},
+		{&RecognitionRule{}, "idx_recognition_rules_library_enabled"},
 		{&ScanExclusion{}, "idx_scan_exclusions_identity"},
 		{&ScanExclusion{}, "idx_scan_exclusions_path"},
 		{&FilenameExclusionRule{}, "idx_filename_exclusion_rules_normalized_filename"},
@@ -252,7 +271,6 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&ClassificationDecision{}, "idx_classification_decisions_library_status"},
 		{&ClassificationRule{}, "idx_classification_rules_library_enabled"},
 		{&MediaStream{}, "idx_media_stream_file_index"},
-		{&UserItemData{}, "idx_user_item_data_user_item_asset"},
 		{&SystemSetting{}, "idx_system_setting_category_key"},
 		{&LibraryPath{}, "idx_library_paths_library_source_path"},
 		{&MetadataProviderInstance{}, "idx_metadata_provider_instances_provider_type"},
@@ -502,41 +520,6 @@ func validateCatalogKernelUniqueness(db *gorm.DB) error {
 		selectExpr string
 	}{
 		{
-			label:      "catalog external identity",
-			table:      "catalog_external_ids",
-			columns:    []string{"provider", "provider_type", "external_id"},
-			groupBy:    "provider, provider_type, external_id",
-			selectExpr: "provider || '|' || provider_type || '|' || external_id",
-		},
-		{
-			label:      "catalog identity",
-			table:      "catalog_identities",
-			columns:    []string{"provider", "identity_type", "identity_key"},
-			groupBy:    "provider, identity_type, identity_key",
-			selectExpr: "provider || '|' || identity_type || '|' || identity_key",
-		},
-		{
-			label:      "metadata field state",
-			table:      "metadata_field_states",
-			columns:    []string{"item_id", "field_key"},
-			groupBy:    "item_id, field_key",
-			selectExpr: "CAST(item_id AS TEXT) || '|' || field_key",
-		},
-		{
-			label:      "asset item link",
-			table:      "asset_items",
-			columns:    []string{"asset_id", "item_id", "role", "segment_index"},
-			groupBy:    "asset_id, item_id, role, segment_index",
-			selectExpr: "CAST(asset_id AS TEXT) || '|' || CAST(item_id AS TEXT) || '|' || role || '|' || CAST(segment_index AS TEXT)",
-		},
-		{
-			label:      "asset file link",
-			table:      "asset_files",
-			columns:    []string{"asset_id", "file_id", "role", "part_index"},
-			groupBy:    "asset_id, file_id, role, part_index",
-			selectExpr: "CAST(asset_id AS TEXT) || '|' || CAST(file_id AS TEXT) || '|' || role || '|' || CAST(part_index AS TEXT)",
-		},
-		{
 			label:      "inventory file storage path",
 			table:      "inventory_files",
 			columns:    []string{"media_source_id", "storage_provider", "storage_path"},
@@ -550,13 +533,6 @@ func validateCatalogKernelUniqueness(db *gorm.DB) error {
 			columns:    []string{"file_id", "stream_index"},
 			groupBy:    "file_id, stream_index",
 			selectExpr: "CAST(file_id AS TEXT) || '|' || CAST(stream_index AS TEXT)",
-		},
-		{
-			label:      "user item data identity",
-			table:      "user_item_data",
-			columns:    []string{"user_id", "item_id", "asset_id"},
-			groupBy:    "user_id, item_id, asset_id",
-			selectExpr: "CAST(user_id AS TEXT) || '|' || CAST(item_id AS TEXT) || '|' || COALESCE(CAST(asset_id AS TEXT), 'null')",
 		},
 		{
 			label:      "system setting category key",

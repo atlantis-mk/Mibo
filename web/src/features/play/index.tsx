@@ -28,13 +28,12 @@ import {
 } from "#/components/ui/sidebar"
 import { Spinner } from "#/components/ui/spinner"
 import {
-  catalogSeriesSeasonsQueryOptions,
-  catalogItemDetailQueryOptions,
-  catalogItemProgressQueryOptions,
-  catalogPlaybackQueryOptions,
-  createAuthedMiboApi,
-  inventoryFilePlaybackQueryOptions,
-  miboQueryKeys,
+	catalogPlaybackQueryOptions,
+	createAuthedMiboApi,
+	inventoryFilePlaybackQueryOptions,
+	metadataItemDetailQueryOptions,
+	metadataItemProgressQueryOptions,
+	miboQueryKeys,
 } from "#/lib/mibo-query"
 import { useAuthStore } from "#/stores/auth-store"
 
@@ -89,7 +88,7 @@ type PlayQueueEpisode = {
 
 type PlayExperienceProps = {
   itemId: number
-  assetId?: number
+  resourceId?: number
   inventoryFileId?: number
   fromStart?: boolean
 }
@@ -104,7 +103,7 @@ export default function PlayPage(props: PlayExperienceProps) {
 
 function PlayExperience({
   itemId,
-  assetId,
+  resourceId,
   inventoryFileId,
   fromStart = false,
 }: PlayExperienceProps) {
@@ -147,29 +146,24 @@ function PlayExperience({
     "play" | "pause" | null
   >(null)
 
-  const itemQuery = useQuery({
-    ...catalogItemDetailQueryOptions(queryToken, itemId),
-    enabled:
-      hasHydrated && !!token && hasValidItemId && !hasInventoryFilePlayback,
-  })
-  const progressQuery = useQuery({
-    ...catalogItemProgressQueryOptions(queryToken, itemId),
-    enabled:
-      hasHydrated && !!token && hasValidItemId && !hasInventoryFilePlayback,
-  })
+	const itemQuery = useQuery({
+		...metadataItemDetailQueryOptions(queryToken, itemId),
+		enabled:
+			hasHydrated && !!token && hasValidItemId && !hasInventoryFilePlayback,
+	})
+	const progressQuery = useQuery({
+		...metadataItemProgressQueryOptions(queryToken, itemId),
+		enabled:
+			hasHydrated && !!token && hasValidItemId && !hasInventoryFilePlayback,
+	})
   const playbackQuery = useQuery({
-    ...catalogPlaybackQueryOptions(queryToken, itemId, assetId),
+    ...catalogPlaybackQueryOptions(queryToken, itemId, { resourceId }),
     enabled:
       hasHydrated && !!token && hasValidItemId && !hasInventoryFilePlayback,
   })
   const inventoryPlaybackQuery = useQuery({
     ...inventoryFilePlaybackQueryOptions(queryToken, inventoryFileId ?? 0),
     enabled: hasHydrated && !!token && hasInventoryFilePlayback,
-  })
-  const seasonsQuery = useQuery({
-    ...catalogSeriesSeasonsQueryOptions(queryToken, itemId),
-    enabled:
-      hasHydrated && !!token && hasValidItemId && !hasInventoryFilePlayback,
   })
   const item = itemQuery.data ?? null
   const progress = progressQuery.data ?? null
@@ -189,7 +183,7 @@ function PlayExperience({
       : 0
   const episodeItems = item?.same_season_episodes?.length
     ? item.same_season_episodes
-    : (seasonsQuery.data?.flatMap((season) => season.episodes ?? []) ?? [])
+    : (item?.seasons?.flatMap((season) => season.episodes ?? []) ?? [])
   const currentEpisodeIndex = episodeItems.findIndex(
     (episode) => episode.id === item?.id
   )
@@ -243,10 +237,11 @@ function PlayExperience({
 
       try {
         if (hasInventoryFilePlayback || !item) return
-        const progressItemId = playback.item_id ?? item.id
-        const progressAssetId =
-          typeof playback.asset_id === "number" && playback.asset_id > 0
-            ? playback.asset_id
+		const progressMetadataItemId = playback.metadata_item_id
+		if (!progressMetadataItemId) return
+		const progressResourceId =
+          typeof playback.resource_id === "number" && playback.resource_id > 0
+            ? playback.resource_id
             : undefined
         const shouldCaptureFrame =
           !completed &&
@@ -255,9 +250,9 @@ function PlayExperience({
         const progressFrameData = shouldCaptureFrame
           ? captureProgressFrame(player.video)
           : undefined
-        const nextProgress = await createAuthedMiboApi(token).updateProgress({
-          item_id: progressItemId,
-          ...(progressAssetId ? { asset_id: progressAssetId } : {}),
+		const nextProgress = await createAuthedMiboApi(token).updateProgress({
+			metadata_item_id: progressMetadataItemId,
+			...(progressResourceId ? { resource_id: progressResourceId } : {}),
           position_seconds:
             completed && durationSeconds ? durationSeconds : positionSeconds,
           duration_seconds: durationSeconds,
@@ -272,10 +267,10 @@ function PlayExperience({
         if (progressFrameData) {
           lastFrameSavedAtRef.current = now
         }
-        queryClient.setQueryData(
-          miboQueryKeys.catalogItemProgress(queryToken, progressItemId),
-          nextProgress
-        )
+		queryClient.setQueryData(
+			miboQueryKeys.catalogItemProgress(queryToken, progressMetadataItemId),
+			nextProgress
+		)
       } finally {
         saveInFlightRef.current = false
       }
@@ -287,7 +282,7 @@ function PlayExperience({
     lastSavedAtRef.current = 0
     lastFrameSavedAtRef.current = 0
     setIsVideoLoading(true)
-  }, [itemId, assetId, playback?.url])
+  }, [itemId, resourceId, playback?.url])
 
   useEffect(() => {
     lastSavedPositionRef.current = progress?.position_seconds ?? 0
@@ -541,7 +536,7 @@ function PlayExperience({
       params: { id: String(episode.id) },
       search: {
         fromStart: false,
-        assetId: undefined,
+        resourceId: undefined,
         inventoryFileId: undefined,
       },
       replace: true,

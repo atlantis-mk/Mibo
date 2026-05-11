@@ -1,13 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link, useLocation } from "@tanstack/react-router"
-import {
-  DatabaseIcon,
-  HeartIcon,
-  HomeIcon,
-  SearchIcon,
-  SettingsIcon,
-  SparklesIcon,
-} from "lucide-react"
+import { DatabaseIcon, HeartIcon, HomeIcon, SearchIcon, SettingsIcon, SparklesIcon } from "lucide-react"
 
 import { SearchForm } from "#/components/search-form"
 import {
@@ -22,7 +15,6 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "#/components/ui/sidebar"
-import { formatSourceContentClass } from "#/lib/library-presentation"
 import {
   healthSummaryQueryOptions,
   librariesQueryOptions,
@@ -114,39 +106,23 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>内容来源</SidebarGroupLabel>
+          <SidebarGroupLabel>媒体内容</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {libraries.length > 0 ? (
-                libraries.map((library) => (
-                  <SidebarMenuItem key={library.id}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={location.pathname === `/library/${library.id}`}
-                    >
-                      <Link
-                        to="/library/$id"
-                        params={{ id: String(library.id) }}
-                      >
-                        <DatabaseIcon className="size-4" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {library.name}
-                        </span>
-                        <span className="shrink-0 text-xs text-sidebar-foreground/60">
-                          {formatSourceContentClass(
-                            library.probe_summary?.dominant_class
-                          )}
-                        </span>
-                        {affectedLibraryIds.has(library.id) ? (
-                          <span className="shrink-0 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                            处理
-                          </span>
-                        ) : null}
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))
-              ) : (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location.pathname === "/library"}>
+                  <Link to="/library">
+                    <DatabaseIcon className="size-4" />
+                    内容库
+                    {Array.from(affectedLibraryIds).length > 0 ? (
+                      <span className="ml-auto shrink-0 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                        处理
+                      </span>
+                    ) : null}
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              {libraries.length === 0 ? (
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild>
                     <Link to="/settings/library">
@@ -155,7 +131,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-              )}
+              ) : null}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

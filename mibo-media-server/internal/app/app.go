@@ -67,8 +67,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	searchSvc := search.NewService(db, librarySvc)
 	metadataSvc := metadata.NewService(db, cfg.Metadata, settingsSvc, searchSvc, ingestSvc)
 	librarySvc.SetInventoryProbeExecutor(probeSvc.ProbeInventoryFile)
-	librarySvc.SetCatalogMatchExecutor(func(ctx context.Context, itemID uint) error {
-		_, err := metadataSvc.MatchCatalogItemOperation(ctx, itemID)
+	librarySvc.SetMetadataMatchExecutor(func(ctx context.Context, metadataItemID uint, libraryID uint) error {
+		_, err := metadataSvc.MatchMetadataItemOperation(ctx, metadataItemID, libraryID)
 		return err
 	})
 	healthSvc := health.NewService(db, registry, librarySvc, cfg.OpenList.BaseURL)
@@ -93,10 +93,27 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		return database.Job{ID: due.ID, Kind: schedule.JobKindForSchedule(due.Kind), Status: status, PayloadJSON: result.Summary, AvailableAt: now, CreatedAt: now, UpdatedAt: now}, nil
 	}))
 	progressSvc := progress.NewService(db, searchSvc)
-	workflowRunner := workflow.NewRunner(workflowSvc, workflow.RunnerConfig{Enabled: true, PollInterval: cfg.Worker.WorkflowPollInterval, LeaseDuration: cfg.Worker.WorkflowLeaseDuration})
+	workflowRunner := workflow.NewRunner(workflowSvc, workflow.RunnerConfig{Enabled: true, PollInterval: cfg.Worker.WorkflowPollInterval, LeaseDuration: cfg.Worker.WorkflowLeaseDuration, TaskTimeout: cfg.Worker.WorkflowTaskTimeout, MaxConcurrent: cfg.Worker.WorkflowMaxConcurrent})
 	librarySvc.RegisterWorkflowHandlers(workflowRunner)
 
-	handler := httpapi.New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, metadataSvc, settingsSvc, catalogSvc, ingestSvc, scheduleSvc, listenerSvc, healthSvc, workflowSvc)
+	handler := httpapi.New(httpapi.Dependencies{
+		Config:   cfg,
+		DB:       db,
+		Registry: registry,
+		Auth:     authSvc,
+		Catalog:  catalogSvc,
+		Library:  librarySvc,
+		Listener: listenerSvc,
+		Ingest:   ingestSvc,
+		Playback: playbackSvc,
+		Progress: progressSvc,
+		Search:   searchSvc,
+		Metadata: metadataSvc,
+		Schedule: scheduleSvc,
+		Settings: settingsSvc,
+		Health:   healthSvc,
+		Workflow: workflowSvc,
+	})
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,

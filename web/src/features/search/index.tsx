@@ -32,6 +32,7 @@ import {
 import { Input } from "#/components/ui/input"
 import { SidebarTrigger } from "#/components/ui/sidebar"
 import { createDefaultDiscoveryFilters } from "#/features/discovery/controls"
+import type { DiscoveryFilters } from "#/features/discovery/controls"
 import {
   formatMediaCardYearRange,
   formatMediaCardTitle,
@@ -46,8 +47,10 @@ const DEFAULT_RECOMMENDATION = "死侍与金刚狼"
 
 export default function SearchPage({
   initialQuery,
+  initialType = "all",
 }: {
   initialQuery?: string
+  initialType?: DiscoveryFilters["type"]
 }) {
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
@@ -55,10 +58,14 @@ export default function SearchPage({
   const clearSession = useAuthStore((state) => state.clearSession)
   const navigate = useNavigate()
   const [filters, setFilters] = useState(
-    createDefaultDiscoveryFilters({ q: initialQuery ?? "", sort: "title" })
+    createDefaultDiscoveryFilters({
+      q: initialQuery ?? "",
+      type: initialType,
+      sort: initialType === "all" ? "title" : "recent",
+    })
   )
   const urlQuery = initialQuery ?? ""
-  const queryFilters = { ...filters, q: urlQuery }
+  const queryFilters = { ...filters, q: urlQuery, type: initialType }
 
   useEffect(() => {
     setFilters((current) => {
@@ -68,13 +75,20 @@ export default function SearchPage({
   }, [urlQuery])
 
   useEffect(() => {
+    setFilters((current) => {
+      if (current.type === initialType) return current
+      return { ...current, type: initialType }
+    })
+  }, [initialType])
+
+  useEffect(() => {
     const nextQuery = filters.q.trim()
     if (nextQuery === urlQuery.trim()) return
 
     const timeoutId = window.setTimeout(() => {
       void navigate({
         to: "/search",
-        search: { q: nextQuery || undefined },
+        search: { q: nextQuery || undefined, type: filters.type },
         replace: true,
       })
     }, 350)
@@ -91,7 +105,7 @@ export default function SearchPage({
       const history = await api.listSearchHistory()
       const query = queryFilters.q.trim()
 
-      if (!query) {
+      if (!query && queryFilters.type === "all") {
         return {
           items: [],
           history,
@@ -218,7 +232,7 @@ export default function SearchPage({
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">搜索</div>
               <div className="truncate text-xs text-muted-foreground">
-                推荐 · {data.items.length} 条结果
+              推荐 · {data.items.length} 条结果
               </div>
             </div>
           </>
@@ -257,7 +271,7 @@ export default function SearchPage({
           />
         </form>
 
-        {!trimmedQuery ? (
+        {!trimmedQuery && initialType === "all" ? (
           <section className="mt-6 text-center sm:mt-7">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               推荐
@@ -272,11 +286,15 @@ export default function SearchPage({
           </section>
         ) : null}
 
-        {trimmedQuery ? (
+        {trimmedQuery || initialType !== "all" ? (
           <div className="mx-auto mt-7 w-full max-w-[calc(100vw-2rem)] sm:mt-8 sm:max-w-none">
             <div className="flex items-center justify-center gap-4 text-sm font-semibold sm:text-lg">
               <Button type="button" variant="secondary">
-                热门结果
+                {initialType === "movie"
+                  ? "电影"
+                  : initialType === "show"
+                    ? "剧集"
+                    : "热门结果"}
               </Button>
               <Button type="button" variant="ghost">
                 影片
@@ -300,7 +318,9 @@ export default function SearchPage({
               </div>
             ) : (
               <div className="mx-auto mt-8 max-w-xl rounded-[1.5rem] border border-border/40 bg-card/70 px-6 py-8 text-center text-sm text-muted-foreground">
-                没有找到匹配“{trimmedQuery}”的内容。
+                {trimmedQuery
+                  ? `没有找到匹配“${trimmedQuery}”的内容。`
+                  : "还没有这个类型的内容。"}
               </div>
             )}
           </div>

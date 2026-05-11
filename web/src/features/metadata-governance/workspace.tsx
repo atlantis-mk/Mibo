@@ -24,9 +24,9 @@ import { useQuery } from '@tanstack/react-query'
 import { formatMatchStatus, formatMediaType } from './formatters'
 
 export function MetadataGovernanceWorkspace({ token }: { token: string }) {
-  const latestByLibraryQuery = useQuery({
+  const homeSectionsQuery = useQuery({
     queryKey: miboQueryKeys.metadataWorkspace(token),
-    queryFn: () => createAuthedMiboApi(token).latestByLibrary(),
+    queryFn: () => createAuthedMiboApi(token).homeSections(),
   })
 
   return (
@@ -61,27 +61,27 @@ export function MetadataGovernanceWorkspace({ token }: { token: string }) {
           <CardHeader className="px-5 py-5">
             <CardTitle>最近可治理条目</CardTitle>
             <CardDescription>
-              按媒体库聚合最近内容，作为管理员进入治理页的全局入口。
+              按内容形态聚合最近内容，作为管理员进入治理页的全局入口。
             </CardDescription>
           </CardHeader>
           <Separator className="bg-border" />
           <CardContent className="space-y-5 px-5 py-5">
-            {latestByLibraryQuery.isLoading ? (
+            {homeSectionsQuery.isLoading ? (
               <WorkspaceLoadingState />
-            ) : latestByLibraryQuery.error ? (
+            ) : homeSectionsQuery.error ? (
               <Alert>
                 <AlertTitle>加载失败</AlertTitle>
                 <AlertDescription>
-                  {latestByLibraryQuery.error.message}
+                  {homeSectionsQuery.error.message}
                 </AlertDescription>
               </Alert>
-            ) : latestByLibraryQuery.data?.length ? (
-              latestByLibraryQuery.data.map((section) => (
-                <div key={section.library_id} className="space-y-3">
+            ) : homeSectionsQuery.data?.length ? (
+              homeSectionsQuery.data.map((section) => (
+                <div key={section.key} className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="text-sm font-medium text-foreground">
-                        {section.library_name}
+                        {section.title}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {section.items.length} 个最近条目

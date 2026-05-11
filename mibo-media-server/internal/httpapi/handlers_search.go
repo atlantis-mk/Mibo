@@ -46,7 +46,7 @@ func (r *Router) handleDiscoverMedia(w http.ResponseWriter, req *http.Request) {
 		writeError(req.Context(), w, http.StatusInternalServerError, err)
 		return
 	}
-	normalizeCatalogListItemsArtworkURLs(req, result.Items)
+	normalizeCatalogItemListArtworkURLs(req, result.Items)
 	writeJSON(req.Context(), w, http.StatusOK, result)
 }
 

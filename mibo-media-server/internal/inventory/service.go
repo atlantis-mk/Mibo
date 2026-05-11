@@ -57,18 +57,6 @@ func NewService(db *gorm.DB) *Service {
 	return &Service{db: db}
 }
 
-type CreateAssetInput struct {
-	LibraryID            uint
-	AssetType            string
-	DisplayName          string
-	Edition              string
-	QualityLabel         string
-	DurationSeconds      *float64
-	Status               string
-	ProbeStatus          string
-	TechnicalSummaryJSON string
-}
-
 type UpsertFileInput struct {
 	LibraryID         uint
 	MediaSourceID     uint
@@ -104,24 +92,6 @@ type UpsertInventoryFileInput struct {
 type BulkUpsertFilesResult struct {
 	FilesByStoragePath map[string]database.InventoryFile
 	FilesBySourcePath  map[string]database.InventoryFile
-}
-
-type LinkAssetItemInput struct {
-	AssetID      uint
-	ItemID       uint
-	Role         string
-	SegmentIndex int
-	StartSeconds *float64
-	EndSeconds   *float64
-	Confidence   *float64
-	Source       string
-}
-
-type LinkAssetFileInput struct {
-	AssetID   uint
-	FileID    uint
-	Role      string
-	PartIndex int
 }
 
 type UpsertResourceInput struct {
@@ -164,24 +134,6 @@ type LinkResourceMetadataInput struct {
 	EvidenceJSON   string
 	Source         string
 	ReviewState    string
-}
-
-func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (database.MediaAsset, error) {
-	if input.LibraryID == 0 {
-		return database.MediaAsset{}, errors.New("library id is required")
-	}
-	asset := database.MediaAsset{
-		LibraryID:            input.LibraryID,
-		AssetType:            defaultString(input.AssetType, AssetTypeMain),
-		DisplayName:          strings.TrimSpace(input.DisplayName),
-		Edition:              strings.TrimSpace(input.Edition),
-		QualityLabel:         strings.TrimSpace(input.QualityLabel),
-		DurationSeconds:      input.DurationSeconds,
-		Status:               defaultString(input.Status, AssetStatusAvailable),
-		ProbeStatus:          defaultString(input.ProbeStatus, "pending"),
-		TechnicalSummaryJSON: input.TechnicalSummaryJSON,
-	}
-	return asset, s.db.WithContext(ctx).Create(&asset).Error
 }
 
 func (s *Service) UpsertFile(ctx context.Context, input UpsertFileInput) (database.InventoryFile, error) {
@@ -506,101 +458,6 @@ func (s *Service) UnlinkResourceFromMetadata(ctx context.Context, resourceID uin
 	return s.db.WithContext(ctx).
 		Where("resource_id = ? AND metadata_item_id = ? AND role = ? AND segment_index = ?", resourceID, metadataItemID, database.NormalizeResourceLinkRole(role), segmentIndex).
 		Delete(&database.ResourceMetadataLink{}).Error
-}
-
-func (s *Service) LinkAssetToItem(ctx context.Context, input LinkAssetItemInput) (database.AssetItem, error) {
-	if input.AssetID == 0 || input.ItemID == 0 {
-		return database.AssetItem{}, errors.New("asset id and item id are required")
-	}
-	link := database.AssetItem{
-		AssetID:      input.AssetID,
-		ItemID:       input.ItemID,
-		Role:         defaultString(input.Role, AssetItemRolePrimary),
-		SegmentIndex: input.SegmentIndex,
-		StartSeconds: input.StartSeconds,
-		EndSeconds:   input.EndSeconds,
-		Confidence:   input.Confidence,
-		Source:       strings.TrimSpace(input.Source),
-	}
-	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "asset_id"}, {Name: "item_id"}, {Name: "role"}, {Name: "segment_index"}},
-		DoUpdates: clause.AssignmentColumns([]string{"start_seconds", "end_seconds", "confidence", "source", "updated_at"}),
-	}).Create(&link).Error
-	return link, err
-}
-
-func (s *Service) BulkLinkAssetToItems(ctx context.Context, inputs []LinkAssetItemInput) error {
-	if len(inputs) == 0 {
-		return nil
-	}
-	links := make([]database.AssetItem, 0, len(inputs))
-	for _, input := range inputs {
-		if input.AssetID == 0 || input.ItemID == 0 {
-			return errors.New("asset id and item id are required")
-		}
-		links = append(links, database.AssetItem{
-			AssetID:      input.AssetID,
-			ItemID:       input.ItemID,
-			Role:         defaultString(input.Role, AssetItemRolePrimary),
-			SegmentIndex: input.SegmentIndex,
-			StartSeconds: input.StartSeconds,
-			EndSeconds:   input.EndSeconds,
-			Confidence:   input.Confidence,
-			Source:       strings.TrimSpace(input.Source),
-		})
-	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "asset_id"}, {Name: "item_id"}, {Name: "role"}, {Name: "segment_index"}},
-		DoUpdates: clause.AssignmentColumns([]string{"start_seconds", "end_seconds", "confidence", "source", "updated_at"}),
-	}).CreateInBatches(&links, bulkLinkWriteBatchSize).Error
-}
-
-func (s *Service) LinkAssetToFile(ctx context.Context, input LinkAssetFileInput) (database.AssetFile, error) {
-	if input.AssetID == 0 || input.FileID == 0 {
-		return database.AssetFile{}, errors.New("asset id and file id are required")
-	}
-	link := database.AssetFile{
-		AssetID:   input.AssetID,
-		FileID:    input.FileID,
-		Role:      defaultString(input.Role, FileRoleSource),
-		PartIndex: input.PartIndex,
-	}
-	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "asset_id"}, {Name: "file_id"}, {Name: "role"}, {Name: "part_index"}},
-		DoUpdates: clause.AssignmentColumns([]string{"updated_at"}),
-	}).Create(&link).Error
-	return link, err
-}
-
-func (s *Service) BulkLinkAssetToFiles(ctx context.Context, inputs []LinkAssetFileInput) error {
-	if len(inputs) == 0 {
-		return nil
-	}
-	links := make([]database.AssetFile, 0, len(inputs))
-	for _, input := range inputs {
-		if input.AssetID == 0 || input.FileID == 0 {
-			return errors.New("asset id and file id are required")
-		}
-		links = append(links, database.AssetFile{
-			AssetID:   input.AssetID,
-			FileID:    input.FileID,
-			Role:      defaultString(input.Role, FileRoleSource),
-			PartIndex: input.PartIndex,
-		})
-	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "asset_id"}, {Name: "file_id"}, {Name: "role"}, {Name: "part_index"}},
-		DoUpdates: clause.AssignmentColumns([]string{"updated_at"}),
-	}).CreateInBatches(&links, bulkLinkWriteBatchSize).Error
-}
-
-func (s *Service) UnlinkAssetFromItem(ctx context.Context, assetID uint, itemID uint) error {
-	if assetID == 0 || itemID == 0 {
-		return errors.New("asset id and item id are required")
-	}
-	return s.db.WithContext(ctx).
-		Where("asset_id = ? AND item_id = ?", assetID, itemID).
-		Delete(&database.AssetItem{}).Error
 }
 
 func defaultString(value string, fallback string) string {

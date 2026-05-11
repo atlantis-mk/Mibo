@@ -11,8 +11,7 @@ import (
 
 type CatalogUserProgressState struct {
 	UserID           uint       `json:"user_id"`
-	ItemID           uint       `json:"item_id"`
-	AssetID          *uint      `json:"asset_id,omitempty"`
+	MetadataItemID   uint       `json:"metadata_item_id"`
 	PositionSeconds  int        `json:"position_seconds"`
 	DurationSeconds  *int       `json:"duration_seconds,omitempty"`
 	PlayedPercentage *float64   `json:"played_percentage,omitempty"`
@@ -35,20 +34,18 @@ func (s *Service) ListContinueWatching(ctx context.Context, userID uint, limit i
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-
-	var rows []database.UserItemData
+	var rows []database.UserMetadataData
 	if err := s.db.WithContext(ctx).
-		Joins("JOIN catalog_items ON catalog_items.id = user_item_data.item_id").
-		Where("user_item_data.user_id = ? AND user_item_data.item_id > 0", userID).
-		Where("catalog_items.deleted_at IS NULL AND catalog_items.availability_status = ?", AvailabilityAvailable).
+		Joins("JOIN metadata_items ON metadata_items.id = user_metadata_data.metadata_item_id").
+		Where("user_metadata_data.user_id = ? AND user_metadata_data.metadata_item_id > 0", userID).
+		Where("metadata_items.deleted_at IS NULL").
 		Where("last_played_at IS NOT NULL AND completed_at IS NULL AND position_seconds > 0").
-		Order("user_item_data.last_played_at desc").
+		Order("user_metadata_data.last_played_at desc").
 		Limit(limit).
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-
-	return s.buildUserItemEntries(ctx, rows, true)
+	return s.buildUserMetadataEntries(ctx, rows)
 }
 
 func (s *Service) ListRecentlyPlayed(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
@@ -56,59 +53,48 @@ func (s *Service) ListRecentlyPlayed(ctx context.Context, userID uint, limit int
 		limit = 20
 	}
 
-	var rows []database.UserItemData
+	var rows []database.UserMetadataData
 	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id > 0", userID).
+		Where("user_id = ? AND metadata_item_id > 0", userID).
 		Where("last_played_at IS NOT NULL").
 		Order("last_played_at desc").
 		Limit(limit).
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-
-	return s.buildUserItemEntries(ctx, rows, false)
+	return s.buildUserMetadataEntries(ctx, rows)
 }
 
 func (s *Service) ListFavorites(ctx context.Context, userID uint, limit int) ([]CatalogUserItemEntry, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 200
 	}
-
-	var rows []database.UserItemData
+	var metadataRows []database.UserMetadataData
 	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id > 0 AND favorite = ?", userID, true).
+		Where("user_id = ? AND favorite = ?", userID, true).
 		Order("updated_at desc").
 		Limit(limit).
-		Find(&rows).Error; err != nil {
+		Find(&metadataRows).Error; err != nil {
 		return nil, err
 	}
-
-	return s.buildUserItemEntries(ctx, rows, false)
+	return s.buildUserMetadataEntries(ctx, metadataRows)
 }
 
-func (s *Service) SetFavorite(ctx context.Context, userID, itemID uint, favorite bool) (CatalogUserItemEntry, error) {
-	if itemID == 0 {
-		return CatalogUserItemEntry{}, errors.New("item_id is required")
+func (s *Service) SetFavorite(ctx context.Context, userID, metadataItemID uint, favorite bool) (CatalogUserItemEntry, error) {
+	if metadataItemID == 0 {
+		return CatalogUserItemEntry{}, errors.New("metadata item id is required")
 	}
-
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND deleted_at IS NULL", itemID).
-		First(&item).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", metadataItemID).First(&database.MetadataItem{}).Error; err != nil {
 		return CatalogUserItemEntry{}, err
 	}
-
-	var row database.UserItemData
-	err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id = ? AND asset_id IS NULL", userID, itemID).
-		First(&row).Error
+	var row database.UserMetadataData
+	err := s.db.WithContext(ctx).Where("user_id = ? AND metadata_item_id = ?", userID, metadataItemID).First(&row).Error
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return CatalogUserItemEntry{}, err
 		}
-		row = database.UserItemData{UserID: userID, ItemID: itemID}
+		row = database.UserMetadataData{UserID: userID, MetadataItemID: metadataItemID}
 	}
-
 	row.Favorite = favorite
 	if row.ID == 0 {
 		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
@@ -118,7 +104,7 @@ func (s *Service) SetFavorite(ctx context.Context, userID, itemID uint, favorite
 		return CatalogUserItemEntry{}, err
 	}
 
-	entries, err := s.buildUserItemEntries(ctx, []database.UserItemData{row}, false)
+	entries, err := s.buildUserMetadataEntries(ctx, []database.UserMetadataData{row})
 	if err != nil {
 		return CatalogUserItemEntry{}, err
 	}
@@ -128,110 +114,49 @@ func (s *Service) SetFavorite(ctx context.Context, userID, itemID uint, favorite
 	return entries[0], nil
 }
 
-func (s *Service) buildUserItemEntries(ctx context.Context, rows []database.UserItemData, includeDisplayItems bool) ([]CatalogUserItemEntry, error) {
+func (s *Service) buildUserMetadataEntries(ctx context.Context, rows []database.UserMetadataData) ([]CatalogUserItemEntry, error) {
 	if len(rows) == 0 {
 		return []CatalogUserItemEntry{}, nil
 	}
-
-	itemIDs := make([]uint, 0, len(rows))
+	metadataIDs := make([]uint, 0, len(rows))
 	for _, row := range rows {
-		itemIDs = append(itemIDs, row.ItemID)
+		metadataIDs = append(metadataIDs, row.MetadataItemID)
 	}
-
-	var items []database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("id IN ? AND deleted_at IS NULL", itemIDs).
-		Find(&items).Error; err != nil {
+	var projections []database.LibraryMetadataProjection
+	if err := s.db.WithContext(ctx).Where("metadata_item_id IN ? AND hidden = ?", metadataIDs, false).Order("library_id asc").Find(&projections).Error; err != nil {
 		return nil, err
 	}
-	itemByID := make(map[uint]database.CatalogItem, len(items))
-	orderedItems := make([]database.CatalogItem, 0, len(rows))
-	for _, item := range items {
-		itemByID[item.ID] = item
-	}
-	for _, row := range rows {
-		if item, ok := itemByID[row.ItemID]; ok {
-			orderedItems = append(orderedItems, item)
+	projectionByMetadataID := make(map[uint]database.LibraryMetadataProjection, len(projections))
+	for _, projection := range projections {
+		if _, exists := projectionByMetadataID[projection.MetadataItemID]; !exists {
+			projectionByMetadataID[projection.MetadataItemID] = projection
 		}
 	}
-
-	listItems, err := s.buildCatalogListItems(ctx, orderedItems)
+	orderedProjections := make([]database.LibraryMetadataProjection, 0, len(rows))
+	for _, row := range rows {
+		if projection, ok := projectionByMetadataID[row.MetadataItemID]; ok {
+			orderedProjections = append(orderedProjections, projection)
+		}
+	}
+	listItems, err := s.buildProjectionListItems(ctx, orderedProjections)
 	if err != nil {
 		return nil, err
 	}
-	listItemByID := make(map[uint]CatalogListItem, len(listItems))
+	itemByID := make(map[uint]CatalogListItem, len(listItems))
 	for _, item := range listItems {
-		listItemByID[item.ID] = item
+		itemByID[item.MetadataItemID] = item
 	}
-	displayItemByID := map[uint]CatalogListItem{}
-	if includeDisplayItems {
-		displayIDs := make([]uint, 0, len(rows))
-		seenDisplayIDs := make(map[uint]struct{}, len(rows))
-		for _, item := range orderedItems {
-			if item.Type != ItemTypeEpisode || item.RootID == nil || *item.RootID == item.ID || *item.RootID == 0 {
-				continue
-			}
-			if _, ok := seenDisplayIDs[*item.RootID]; ok {
-				continue
-			}
-			seenDisplayIDs[*item.RootID] = struct{}{}
-			displayIDs = append(displayIDs, *item.RootID)
-		}
-		if len(displayIDs) > 0 {
-			var displayItems []database.CatalogItem
-			if err := s.db.WithContext(ctx).
-				Where("id IN ? AND type = ? AND deleted_at IS NULL", displayIDs, ItemTypeSeries).
-				Find(&displayItems).Error; err != nil {
-				return nil, err
-			}
-			builtDisplayItems, err := s.buildCatalogListItems(ctx, displayItems)
-			if err != nil {
-				return nil, err
-			}
-			for _, item := range builtDisplayItems {
-				displayItemByID[item.ID] = item
-			}
-		}
-	}
-
 	entries := make([]CatalogUserItemEntry, 0, len(rows))
 	for _, row := range rows {
-		item, ok := listItemByID[row.ItemID]
+		item, ok := itemByID[row.MetadataItemID]
 		if !ok {
 			continue
 		}
-		entry := CatalogUserItemEntry{
-			CatalogUserProgressState: catalogUserProgressState(row, item.RuntimeSeconds),
-			Item:                     item,
-		}
-		if includeDisplayItems {
-			playItem := item
-			entry.PlayItem = &playItem
-			if sourceItem, ok := itemByID[row.ItemID]; ok && sourceItem.Type == ItemTypeEpisode && sourceItem.RootID != nil {
-				if displayItem, ok := displayItemByID[*sourceItem.RootID]; ok {
-					entry.DisplayItem = &displayItem
-				}
-			}
-		}
-		entries = append(entries, entry)
+		entries = append(entries, CatalogUserItemEntry{CatalogUserProgressState: catalogUserMetadataProgressState(row), Item: item})
 	}
-
 	return entries, nil
 }
 
-func catalogUserProgressState(row database.UserItemData, duration *int) CatalogUserProgressState {
-	return CatalogUserProgressState{
-		UserID:           row.UserID,
-		ItemID:           row.ItemID,
-		AssetID:          row.AssetID,
-		PositionSeconds:  row.PositionSeconds,
-		DurationSeconds:  duration,
-		PlayedPercentage: row.PlayedPercentage,
-		ProgressFrameURL: row.ProgressFrameURL,
-		PlayCount:        row.PlayCount,
-		Watched:          row.CompletedAt != nil,
-		Favorite:         row.Favorite,
-		CompletedAt:      row.CompletedAt,
-		LastPlayedAt:     row.LastPlayedAt,
-	}
+func catalogUserMetadataProgressState(row database.UserMetadataData) CatalogUserProgressState {
+	return CatalogUserProgressState{UserID: row.UserID, MetadataItemID: row.MetadataItemID, PositionSeconds: row.PositionSeconds, PlayedPercentage: row.PlayedPercentage, ProgressFrameURL: row.ProgressFrameURL, PlayCount: row.PlayCount, Watched: row.CompletedAt != nil, Favorite: row.Favorite, CompletedAt: row.CompletedAt, LastPlayedAt: row.LastPlayedAt}
 }

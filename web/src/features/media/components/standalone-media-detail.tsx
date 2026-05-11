@@ -25,9 +25,13 @@ import {
   DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu"
 import { SidebarTrigger } from "#/components/ui/sidebar"
-import type { CatalogAssetDetail, ProgressState } from "#/lib/mibo-api"
 import type {
-  CatalogDetailPresentation,
+  MediaResourceDetail,
+  MetadataResourceDetail,
+  ProgressState,
+} from "#/lib/mibo-api"
+import type {
+  MediaDetailPresentation,
   CatalogSeasonRail,
 } from "#/lib/media-presentation"
 import {
@@ -46,18 +50,18 @@ import {
   SpecsSection,
 } from "./standalone-media-detail-sections"
 import {
-  formatAssetLabel,
+  formatResourceLabel,
   formatAvailabilityStatus,
   formatMediaType,
   formatProbeStatus,
   getDisplayDatabaseLinks,
   getDisplaySourcePath,
-  getPrimaryCatalogAsset,
+  getPrimaryCatalogResource,
 } from "./standalone-media-detail-utils"
 import { cn } from "#/lib/utils"
 
 type StandaloneMediaDetailProps = {
-  item: CatalogDetailPresentation
+  item: MediaDetailPresentation
   itemProgressPercent: number
   progress: ProgressState | null
   seriesSeasons: CatalogSeasonRail[]
@@ -68,11 +72,13 @@ type StandaloneMediaDetailProps = {
   onOpenPlaybackEntry: (options?: {
     itemId?: number
     fromStart?: boolean
-    assetId?: number
+    resourceId?: number
   }) => void
-  onOpenAssetPlaybackEntry?: (assetId: number) => void
-  assetChoices?: CatalogAssetDetail[]
-  onRematchItem: () => void
+  resourceChoices?: MetadataResourceDetail[]
+  resourceSummaries?: MediaResourceDetail[]
+  selectedResourceId?: number
+  onSelectResource?: (resourceId: number) => void
+  isSelectingResource: boolean
   onReprobePrimaryFile: () => void
   isReprobePending: boolean
   onManageMetadata: () => void
@@ -91,9 +97,11 @@ export function StandaloneMediaDetail({
   seriesEpisodesErrorMessage,
   onGoBack,
   onOpenPlaybackEntry,
-  onOpenAssetPlaybackEntry,
-  assetChoices = [],
-  onRematchItem,
+  resourceChoices = [],
+  resourceSummaries = [],
+  selectedResourceId,
+  onSelectResource,
+  isSelectingResource,
   onReprobePrimaryFile,
   isReprobePending,
   onManageMetadata,
@@ -116,7 +124,8 @@ export function StandaloneMediaDetail({
     setOverviewExpanded(false)
   }, [item.id])
 
-  const primaryAsset = getPrimaryCatalogAsset(item)
+  const primaryResource = getPrimaryCatalogResource(item)
+  const primaryResourceFileIds = primaryResource?.file_ids ?? []
   const isEpisode = item.type === "episode"
   const databaseLinks = getDisplayDatabaseLinks(item)
   const genreLabel = (
@@ -190,16 +199,24 @@ export function StandaloneMediaDetail({
       {
         title: "技术信息",
         value: [
-          formatAssetLabel(primaryAsset),
-          primaryAsset
-            ? `文件 ${primaryAsset.file_ids.length} 个 · ${formatProbeStatus(primaryAsset.probe_status)}`
+          formatResourceLabel(primaryResource),
+          primaryResource
+            ? `文件 ${primaryResourceFileIds.length} 个 · ${formatProbeStatus(primaryResource.probe_status)}`
             : null,
         ]
           .filter(Boolean)
           .join("\n"),
       },
     ],
-    [databaseLinks, dateLabel, genreLabel, item, primaryAsset, ratingLabel]
+    [
+      databaseLinks,
+      dateLabel,
+      genreLabel,
+      item,
+      primaryResource,
+      primaryResourceFileIds.length,
+      ratingLabel,
+    ]
   )
 
   return (
@@ -357,12 +374,14 @@ export function StandaloneMediaDetail({
               overviewExpanded={overviewExpanded}
               onOverviewExpandedChange={setOverviewExpanded}
               onOpenPlaybackEntry={onOpenPlaybackEntry}
-              onOpenAssetPlaybackEntry={onOpenAssetPlaybackEntry}
-              assetChoices={assetChoices}
+              resourceChoices={resourceChoices}
+              resourceSummaries={resourceSummaries}
+              selectedResourceId={selectedResourceId}
+              onSelectResource={onSelectResource}
+              isSelectingResource={isSelectingResource}
               onManageMetadata={onManageMetadata}
-              onRematchItem={onRematchItem}
               onReprobePrimaryFile={
-                primaryAsset && primaryAsset.file_ids.length > 0
+                primaryResource && primaryResourceFileIds.length > 0
                   ? onReprobePrimaryFile
                   : undefined
               }
@@ -385,7 +404,11 @@ export function StandaloneMediaDetail({
 
           <PeopleSection item={item} />
 
-          <SpecsSection detailGroups={detailGroups} item={item} />
+          <SpecsSection
+            detailGroups={detailGroups}
+            item={item}
+            resourceChoices={resourceChoices}
+          />
         </div>
       </div>
     </div>

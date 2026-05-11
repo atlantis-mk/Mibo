@@ -361,7 +361,7 @@ function IssueCard({
           <ImpactPill label="影响媒体库" value={affectedNames || "未关联"} />
           <ImpactPill
             label="目录项目"
-            value={`${issue.impact.affected_catalog_items} 个`}
+            value={`${issue.impact.affected_metadata_items} 个`}
           />
           <ImpactPill
             label="库存文件"

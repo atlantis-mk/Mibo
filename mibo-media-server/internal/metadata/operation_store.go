@@ -2,13 +2,14 @@ package metadata
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
-	"github.com/atlan/mibo-media-server/internal/ingest"
 )
 
 type MetadataOperationEvidenceInput struct {
@@ -30,12 +31,14 @@ func (s *Service) recordMetadataOperation(ctx context.Context, input MetadataOpe
 	}
 	record := database.MetadataOperation{
 		Operation:             input.Result.Operation,
-		OriginItemID:          input.Result.OriginItemID,
-		TargetItemID:          input.Result.TargetItemID,
+		DeduplicationKey:      metadataOperationDeduplicationKey(input.Result),
+		OriginMetadataItemID:  input.Result.OriginMetadataItemID,
+		TargetMetadataItemID:  input.Result.TargetMetadataItemID,
 		LibraryID:             input.LibraryID,
 		Status:                input.Result.Status,
 		GovernanceStatus:      input.Result.GovernanceStatus,
 		PlanJSON:              marshalOperationJSON(input.Result.Plan),
+		TriggerContextJSON:    marshalOperationJSON(metadataOperationTriggerContext(input.Result.Plan)),
 		AttemptsJSON:          marshalOperationJSON(input.Result.ProviderAttempts),
 		SelectedCandidateJSON: marshalOperationJSON(input.SelectedCandidate),
 		MetadataSourceIDsJSON: marshalOperationJSON(input.Result.MetadataSourceIDs),
@@ -48,60 +51,27 @@ func (s *Service) recordMetadataOperation(ctx context.Context, input MetadataOpe
 	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
 		return database.MetadataOperation{}, err
 	}
-	s.markIngestMetadataOutcome(ctx, input.Result, record)
 	return record, nil
 }
 
-func (s *Service) markIngestMetadataOutcome(ctx context.Context, result MetadataOperationResult, record database.MetadataOperation) {
-	if s.ingest == nil || result.TargetItemID == 0 || result.Plan.LibraryID == 0 || !operationAffectsMetadataMatch(result.Operation) {
-		return
+func metadataOperationDeduplicationKey(result MetadataOperationResult) string {
+	metadataItemID := result.TargetMetadataItemID
+	if metadataItemID == 0 {
+		metadataItemID = result.OriginMetadataItemID
 	}
-	status, reason, message := ingestMetadataStatus(result)
-	itemIDs := appendUniqueUint([]uint{result.TargetItemID}, result.AffectedScope.ItemIDs...)
-	for _, itemID := range itemIDs {
-		if itemID == 0 {
-			continue
-		}
-		if _, err := s.ingest.MarkCatalogItemDirty(ctx, itemID, reason); err != nil {
-			log.Printf("metadata: mark catalog item %d ingest dirty: %v", itemID, err)
-		}
-		if _, err := s.ingest.MarkProjectionItemDirty(ctx, itemID, reason); err != nil {
-			log.Printf("metadata: mark catalog item %d projection dirty: %v", itemID, err)
-		}
-		operationID := record.ID
-		if _, err := s.ingest.AppendEvent(ctx, database.IngestEvent{UnitKey: "catalog_item:" + strconv.FormatUint(uint64(itemID), 10), LibraryID: result.Plan.LibraryID, CatalogItemID: &itemID, MetadataOperationID: &operationID, ConditionType: ingest.ConditionMetadataMatched, EventType: ingest.EventConditionChanged, Status: status, Reason: reason, Message: message}); err != nil {
-			log.Printf("metadata: append ingest metadata event: %v", err)
-		}
+	if metadataItemID == 0 {
+		return ""
 	}
+	parts := []string{result.Operation, strconv.FormatUint(uint64(metadataItemID), 10), strings.TrimSpace(result.Plan.PreferredMetadataLanguage), strconv.FormatUint(uint64(derefUintForOperation(result.Plan.MetadataProfileID)), 10), strings.TrimSpace(result.Plan.MetadataProfileName)}
+	for _, provider := range result.Plan.DetailProviders {
+		parts = append(parts, "detail:"+strconv.FormatUint(uint64(provider.ID), 10)+":"+strings.TrimSpace(provider.Name)+":"+strings.TrimSpace(provider.ProviderType))
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(digest[:])
 }
 
-func operationAffectsMetadataMatch(operation string) bool {
-	switch operation {
-	case OperationTypeMatch, OperationTypeRefetch, OperationTypeManualApply, OperationTypeLocalApply:
-		return true
-	default:
-		return false
-	}
-}
-
-func ingestMetadataStatus(result MetadataOperationResult) (string, string, string) {
-	switch result.Status {
-	case OperationStatusApplied:
-		if result.GovernanceStatus == "needs_review" {
-			return ingest.ConditionStatusReviewRequired, "metadata_needs_review", "Metadata match requires review"
-		}
-		return ingest.ConditionStatusTrue, "metadata_applied", "Metadata match applied"
-	case OperationStatusNoCandidate:
-		return ingest.ConditionStatusFalse, "no_candidate", "No acceptable metadata candidate was found"
-	case OperationStatusNeedsReview:
-		return ingest.ConditionStatusReviewRequired, "metadata_needs_review", "Metadata match requires review"
-	case OperationStatusSkipped:
-		return ingest.ConditionStatusSkipped, "metadata_skipped", "Metadata matching was skipped"
-	case OperationStatusFailed:
-		return ingest.ConditionStatusFailed, "metadata_failed", "Metadata matching failed"
-	default:
-		return ingest.ConditionStatusUnknown, "metadata_unknown", "Metadata matching state is unknown"
-	}
+func metadataOperationTriggerContext(plan MetadataExecutionPlanSummary) map[string]any {
+	return map[string]any{"library_id": plan.LibraryID, "metadata_profile_id": plan.MetadataProfileID, "metadata_profile_name": plan.MetadataProfileName, "preferred_metadata_language": plan.PreferredMetadataLanguage, "preferred_image_language": plan.PreferredImageLanguage}
 }
 
 func marshalOperationJSON(value any) string {

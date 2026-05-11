@@ -9,10 +9,12 @@ const (
 )
 
 type PlaybackRequest struct {
-	ItemID        uint
-	AssetID       uint
-	UserID        *uint
-	ClientProfile ClientProfile
+	ItemID         uint
+	MetadataItemID uint
+	ResourceID     uint
+	LibraryID      uint
+	UserID         *uint
+	ClientProfile  ClientProfile
 }
 
 type PlaybackDecision struct {

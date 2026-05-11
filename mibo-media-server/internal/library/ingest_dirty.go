@@ -9,46 +9,41 @@ import (
 )
 
 func (s *Service) markInventoryFileDirty(ctx context.Context, fileID uint, reason string) {
-	if s.ingest == nil || fileID == 0 {
+	ingestSvc := s.ingestCapability()
+	if ingestSvc == nil || fileID == 0 {
 		return
 	}
-	if _, err := s.ingest.MarkInventoryFileDirty(ctx, fileID, reason); err != nil {
+	if _, err := ingestSvc.MarkInventoryFileDirty(ctx, fileID, reason); err != nil {
 		log.Printf("library: mark inventory file %d ingest dirty: %v", fileID, err)
 	}
 }
 
 func (s *Service) markLibraryScopeDirty(ctx context.Context, libraryID uint, rootPath string, reason string) {
-	if s.ingest == nil || libraryID == 0 {
+	ingestSvc := s.ingestCapability()
+	if ingestSvc == nil || libraryID == 0 {
 		return
 	}
-	if _, err := s.ingest.MarkLibraryScopeDirty(ctx, libraryID, rootPath, reason); err != nil {
+	if _, err := ingestSvc.MarkLibraryScopeDirty(ctx, libraryID, rootPath, reason); err != nil {
 		log.Printf("library: mark library %d ingest dirty: %v", libraryID, err)
 	}
 }
 
-func (s *Service) markProjectionItemDirty(ctx context.Context, itemID uint, reason string) {
-	if s.ingest == nil || itemID == 0 {
-		return
-	}
-	if _, err := s.ingest.MarkProjectionItemDirty(ctx, itemID, reason); err != nil {
-		log.Printf("library: mark item %d projection dirty: %v", itemID, err)
-	}
-}
-
 func (s *Service) markProjectionLibraryDirty(ctx context.Context, libraryID uint, rootPath string, reason string) {
-	if s.ingest == nil || libraryID == 0 {
+	ingestSvc := s.ingestCapability()
+	if ingestSvc == nil || libraryID == 0 {
 		return
 	}
-	if _, err := s.ingest.MarkProjectionLibraryDirty(ctx, libraryID, rootPath, reason); err != nil {
+	if _, err := ingestSvc.MarkProjectionLibraryDirty(ctx, libraryID, rootPath, reason); err != nil {
 		log.Printf("library: mark library %d projection dirty: %v", libraryID, err)
 	}
 }
 
 func (s *Service) appendIngestEvent(ctx context.Context, event database.IngestEvent) {
-	if s.ingest == nil {
+	ingestSvc := s.ingestCapability()
+	if ingestSvc == nil {
 		return
 	}
-	if _, err := s.ingest.AppendEvent(ctx, event); err != nil {
+	if _, err := ingestSvc.AppendEvent(ctx, event); err != nil {
 		log.Printf("library: append ingest event %q: %v", event.EventType, err)
 	}
 }

@@ -9,9 +9,104 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/providers"
+	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/workflow"
 	"gorm.io/gorm"
 )
+
+func TestCreateLibraryRecordDoesNotWaitForSourceProbe(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("unwrap database: %v", err)
+	}
+	defer sqlDB.Close()
+
+	source := database.MediaSource{Name: "Local", Provider: "local", StorageRef: "local", RootPath: "/media"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	provider := newBlockingProbeProvider()
+	svc := NewService(config.Config{}, db, providers.NewRegistry(config.Config{}), nil)
+	result := make(chan struct {
+		library database.Library
+		err     error
+	}, 1)
+	go func() {
+		library, err := svc.createLibraryRecord(context.Background(), source, provider, "/media", "Movies")
+		result <- struct {
+			library database.Library
+			err     error
+		}{library: library, err: err}
+	}()
+
+	select {
+	case created := <-result:
+		if created.err != nil {
+			t.Fatalf("create library record: %v", created.err)
+		}
+		if created.library.ProbeStatus != SourceProbeStatusPending {
+			t.Fatalf("probe status = %q, want pending", created.library.ProbeStatus)
+		}
+		var stored database.Library
+		if err := db.First(&stored, created.library.ID).Error; err != nil {
+			t.Fatalf("load library: %v", err)
+		}
+		if stored.ProbeStatus != SourceProbeStatusPending {
+			t.Fatalf("stored probe status = %q, want pending", stored.ProbeStatus)
+		}
+	case <-time.After(200 * time.Millisecond):
+		provider.release()
+		t.Fatal("createLibraryRecord waited for source probe")
+	}
+
+	<-provider.started
+	provider.release()
+}
+
+func TestQueueTargetedRefreshSkipsWhileActiveScanWorkflowExists(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	source := database.MediaSource{Name: "Local", Provider: "local", StorageRef: "local", RootPath: "/media"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	library := database.Library{Name: "Movies", Type: "movies", MediaSourceID: source.ID, RootPath: "/media", Status: "syncing"}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&database.LibraryPath{LibraryID: library.ID, MediaSourceID: source.ID, RootPath: "/media", Enabled: true}).Error; err != nil {
+		t.Fatalf("create library path: %v", err)
+	}
+	activeRun := database.WorkflowRun{RunKey: fmt.Sprintf("library:%d:%s", library.ID, WorkflowReasonCreateLibrary), LibraryID: library.ID, Reason: WorkflowReasonCreateLibrary, Status: workflow.RunStatusRunning, ScopeKey: fmt.Sprintf("library:%d", library.ID)}
+	if err := db.Create(&activeRun).Error; err != nil {
+		t.Fatalf("create active workflow run: %v", err)
+	}
+	svc := NewService(config.Config{}, db, providers.NewRegistry(config.Config{}), nil)
+
+	job, err := svc.QueueTargetedRefresh(ctx, library.ID, "/media", WorkflowReasonTargetedRefresh)
+	if err != nil {
+		t.Fatalf("queue targeted refresh: %v", err)
+	}
+	if job.ID != 0 {
+		t.Fatalf("expected no targeted refresh workflow job, got %#v", job)
+	}
+	var count int64
+	if err := db.Model(&database.WorkflowRun{}).Where("library_id = ? AND reason = ?", library.ID, WorkflowReasonTargetedRefresh).Count(&count).Error; err != nil {
+		t.Fatalf("count targeted refresh workflows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no targeted refresh workflows, got %d", count)
+	}
+}
 
 func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -37,14 +132,6 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 		t.Fatalf("create other library: %v", err)
 	}
 
-	item := database.CatalogItem{LibraryID: library.ID, Type: "movie", Title: "Gone", SortKey: "gone", AvailabilityStatus: "available", GovernanceStatus: "matched"}
-	otherItem := database.CatalogItem{LibraryID: otherLibrary.ID, Type: "movie", Title: "Stay", SortKey: "stay", AvailabilityStatus: "available", GovernanceStatus: "matched"}
-	if err := db.Create(&item).Error; err != nil {
-		t.Fatalf("create item: %v", err)
-	}
-	if err := db.Create(&otherItem).Error; err != nil {
-		t.Fatalf("create other item: %v", err)
-	}
 	inventoryFile := database.InventoryFile{LibraryID: library.ID, StorageProvider: "local", StoragePath: "/media/delete/movie.mkv", Status: "available"}
 	otherInventoryFile := database.InventoryFile{LibraryID: otherLibrary.ID, StorageProvider: "local", StoragePath: "/media/keep/movie.mkv", Status: "available"}
 	if err := db.Create(&inventoryFile).Error; err != nil {
@@ -53,50 +140,36 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	if err := db.Create(&otherInventoryFile).Error; err != nil {
 		t.Fatalf("create other inventory file: %v", err)
 	}
-	asset := database.MediaAsset{LibraryID: library.ID, AssetType: "main", Status: "available", ProbeStatus: "completed"}
-	otherAsset := database.MediaAsset{LibraryID: otherLibrary.ID, AssetType: "main", Status: "available", ProbeStatus: "completed"}
-	if err := db.Create(&asset).Error; err != nil {
-		t.Fatalf("create asset: %v", err)
+	metadataItem := database.MetadataItem{ItemType: "movie", ContentForm: "standard", Title: "Deleted Movie", SortKey: "deleted movie", GovernanceStatus: "accepted"}
+	if err := db.Create(&metadataItem).Error; err != nil {
+		t.Fatalf("create metadata item: %v", err)
 	}
-	if err := db.Create(&otherAsset).Error; err != nil {
-		t.Fatalf("create other asset: %v", err)
+	deletedResource := database.Resource{StableResourceKey: "resource:delete", DisplayName: "Deleted Movie", Status: "available"}
+	sharedResource := database.Resource{StableResourceKey: "resource:shared", DisplayName: "Shared Movie", Status: "available"}
+	if err := db.Create(&deletedResource).Error; err != nil {
+		t.Fatalf("create deleted resource: %v", err)
 	}
-	person := database.Person{Name: "Deleted Person", SortName: "deleted person"}
-	otherPerson := database.Person{Name: "Kept Person", SortName: "kept person"}
-	tag := database.Tag{Kind: "genre", Name: "Deleted"}
-	otherTag := database.Tag{Kind: "genre", Name: "Kept"}
-	if err := db.Create(&person).Error; err != nil {
-		t.Fatalf("create person: %v", err)
-	}
-	if err := db.Create(&otherPerson).Error; err != nil {
-		t.Fatalf("create other person: %v", err)
-	}
-	if err := db.Create(&tag).Error; err != nil {
-		t.Fatalf("create tag: %v", err)
-	}
-	if err := db.Create(&otherTag).Error; err != nil {
-		t.Fatalf("create other tag: %v", err)
+	if err := db.Create(&sharedResource).Error; err != nil {
+		t.Fatalf("create shared resource: %v", err)
 	}
 	seed := []any{
-		&database.AssetFile{AssetID: asset.ID, FileID: inventoryFile.ID, Role: "source"},
-		&database.AssetFile{AssetID: otherAsset.ID, FileID: otherInventoryFile.ID, Role: "source"},
-		&database.AssetItem{AssetID: asset.ID, ItemID: item.ID, Role: "primary"},
-		&database.AssetItem{AssetID: otherAsset.ID, ItemID: otherItem.ID, Role: "primary"},
 		&database.MediaStream{FileID: inventoryFile.ID, StreamIndex: 0, StreamType: "video"},
 		&database.MediaStream{FileID: otherInventoryFile.ID, StreamIndex: 0, StreamType: "video"},
 		&database.MediaStream{FileID: 999999, StreamIndex: 0, StreamType: "video"},
-		&database.CatalogExternalID{ItemID: item.ID, Provider: "tmdb", ProviderType: "movie", ExternalID: "deleted"},
-		&database.CatalogIdentity{ItemID: item.ID, Provider: "scanner", IdentityType: "movie", IdentityKey: "deleted"},
-		&database.MetadataSource{ItemID: item.ID, SourceType: "remote", SourceName: "tmdb", FetchedAt: time.Now()},
-		&database.MetadataFieldState{ItemID: item.ID, FieldKey: "title", ValueJSON: `"Gone"`},
-		&database.MetadataOperation{Operation: "match", OriginItemID: item.ID, TargetItemID: item.ID, LibraryID: library.ID, Status: "applied", StartedAt: time.Now()},
-		&database.ItemImage{ItemID: item.ID, ImageType: "poster", URL: "https://example.test/poster.jpg"},
-		&database.ItemPerson{ItemID: item.ID, PersonID: person.ID, Role: "cast"},
-		&database.ItemPerson{ItemID: otherItem.ID, PersonID: otherPerson.ID, Role: "cast"},
-		&database.ItemTag{ItemID: item.ID, TagID: tag.ID},
-		&database.ItemTag{ItemID: otherItem.ID, TagID: otherTag.ID},
-		&database.ItemRollup{ItemID: item.ID, UpdatedAt: time.Now()},
-		&database.CatalogSearchDocument{ItemID: item.ID, LibraryID: library.ID, ItemType: "movie", Title: "Gone", AvailabilityStatus: "available"},
+		&database.ResourceFile{ResourceID: deletedResource.ID, InventoryFileID: inventoryFile.ID, Role: "primary"},
+		&database.ResourceLibraryLink{ResourceID: deletedResource.ID, LibraryID: library.ID, Status: "available", FirstSeenAt: time.Now(), LastSeenAt: time.Now()},
+		&database.ResourceMetadataLink{ResourceID: deletedResource.ID, MetadataItemID: metadataItem.ID, Role: "primary"},
+		&database.ResourceFile{ResourceID: sharedResource.ID, InventoryFileID: inventoryFile.ID, Role: "primary"},
+		&database.ResourceFile{ResourceID: sharedResource.ID, InventoryFileID: otherInventoryFile.ID, Role: "primary"},
+		&database.ResourceLibraryLink{ResourceID: sharedResource.ID, LibraryID: library.ID, Status: "available", FirstSeenAt: time.Now(), LastSeenAt: time.Now()},
+		&database.ResourceLibraryLink{ResourceID: sharedResource.ID, LibraryID: otherLibrary.ID, Status: "available", FirstSeenAt: time.Now(), LastSeenAt: time.Now()},
+		&database.ResourceMetadataLink{ResourceID: sharedResource.ID, MetadataItemID: metadataItem.ID, Role: "primary"},
+		&database.LibraryMetadataProjection{LibraryID: library.ID, MetadataItemID: metadataItem.ID, ItemType: metadataItem.ItemType, Title: metadataItem.Title, AvailabilityStatus: database.ProjectionAvailabilityAvailable, LastProjectedAt: time.Now()},
+		&database.LibrarySearchDocument{LibraryID: library.ID, MetadataItemID: metadataItem.ID, ItemType: metadataItem.ItemType, Title: metadataItem.Title, AvailabilityStatus: database.ProjectionAvailabilityAvailable, UpdatedAt: time.Now()},
+		&database.UserMetadataData{UserID: 1, MetadataItemID: metadataItem.ID, PreferredResourceID: &deletedResource.ID},
+		&database.UserResourceData{UserID: 1, ResourceID: deletedResource.ID, MetadataItemID: metadataItem.ID},
+		&database.UserResourceData{UserID: 1, ResourceID: sharedResource.ID, MetadataItemID: metadataItem.ID},
+		&database.MetadataOperation{Operation: "match", OriginMetadataItemID: 1, TargetMetadataItemID: 1, LibraryID: library.ID, Status: "applied", StartedAt: time.Now()},
 		&database.IngestDirtyUnit{DirtyKey: "inventory_file:delete", ScopeKind: "inventory_file", LibraryID: library.ID, InventoryFileID: &inventoryFile.ID, Reason: "test", Status: "dirty", AvailableAt: time.Now()},
 		&database.IngestCondition{UnitKey: "inventory_file:delete", LibraryID: library.ID, InventoryFileID: &inventoryFile.ID, ConditionType: "probed", Status: "failed", Reason: "test", Severity: "error"},
 		&database.IngestEvent{UnitKey: "inventory_file:delete", LibraryID: library.ID, InventoryFileID: &inventoryFile.ID, EventType: "condition_changed", Status: "failed", Reason: "test"},
@@ -111,9 +184,6 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 		if err := db.Create(record).Error; err != nil {
 			t.Fatalf("seed %T: %v", record, err)
 		}
-	}
-	if err := db.Create(&database.UserItemData{UserID: 1, ItemID: item.ID, AssetID: &asset.ID}).Error; err != nil {
-		t.Fatalf("create user item data: %v", err)
 	}
 	schedule := database.Schedule{Name: "scan", Kind: "scan", ScopeKind: "library", LibraryID: &library.ID, FrequencyKind: "daily", TimeOfDay: "03:00", Enabled: true}
 	if err := db.Create(&schedule).Error; err != nil {
@@ -170,54 +240,29 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	if err := db.Create(&database.WorkflowResourceUsage{ResourceKey: "library_scan", TaskID: workflowTask.ID, RunID: workflowRun.ID, LibraryID: library.ID, Units: 1, LeaseUntil: time.Now().Add(time.Minute)}).Error; err != nil {
 		t.Fatalf("create workflow resource usage: %v", err)
 	}
-	if err := db.Exec(`CREATE TABLE media_items (id integer PRIMARY KEY AUTOINCREMENT, library_id integer NOT NULL, type text NOT NULL, title text NOT NULL, source_path text NOT NULL, status text NOT NULL, created_at datetime, updated_at datetime)`).Error; err != nil {
-		t.Fatalf("create legacy media_items table: %v", err)
-	}
-	if err := db.Exec(`CREATE TABLE media_files (id integer PRIMARY KEY AUTOINCREMENT, library_id integer NOT NULL, media_item_id integer, storage_path text NOT NULL, created_at datetime, updated_at datetime)`).Error; err != nil {
-		t.Fatalf("create legacy media_files table: %v", err)
-	}
-	if err := db.Exec(`CREATE TABLE playback_progresses (id integer PRIMARY KEY AUTOINCREMENT, user_id integer NOT NULL, media_item_id integer NOT NULL, media_file_id integer, created_at datetime, updated_at datetime)`).Error; err != nil {
-		t.Fatalf("create legacy playback_progresses table: %v", err)
-	}
-	if err := db.Exec(`INSERT INTO media_items (id, library_id, type, title, source_path, status, created_at, updated_at) VALUES (101, ?, 'movie', 'Legacy Gone', '/media/delete/movie.mkv', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, library.ID).Error; err != nil {
-		t.Fatalf("create legacy item: %v", err)
-	}
-	if err := db.Exec(`INSERT INTO media_files (id, library_id, media_item_id, storage_path, created_at, updated_at) VALUES (201, ?, 101, '/media/delete/movie.mkv', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, library.ID).Error; err != nil {
-		t.Fatalf("create legacy file: %v", err)
-	}
-	if err := db.Exec(`INSERT INTO playback_progresses (user_id, media_item_id, media_file_id, created_at, updated_at) VALUES (1, 101, 201, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("create legacy progress: %v", err)
-	}
-
 	svc := NewService(config.Config{}, db, nil, nil)
 	if err := svc.DeleteLibrary(context.Background(), library.ID); err != nil {
 		t.Fatalf("delete library: %v", err)
 	}
 
 	assertRawTableCount(t, db, "libraries", "id = ?", 0, library.ID)
-	assertRawTableCount(t, db, "catalog_items", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "inventory_files", "library_id = ?", 0, library.ID)
-	assertRawTableCount(t, db, "media_assets", "library_id = ?", 0, library.ID)
-	assertRawTableCount(t, db, "asset_items", "item_id = ? OR asset_id = ?", 0, item.ID, asset.ID)
-	assertRawTableCount(t, db, "asset_files", "file_id = ? OR asset_id = ?", 0, inventoryFile.ID, asset.ID)
 	assertRawTableCount(t, db, "media_streams", "file_id = ?", 0, inventoryFile.ID)
 	assertRawTableCount(t, db, "media_streams", "file_id = 999999", 0)
-	assertRawTableCount(t, db, "catalog_external_ids", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "catalog_identities", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "metadata_sources", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "metadata_field_states", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "metadata_operations", "library_id = ? OR origin_item_id = ? OR target_item_id = ?", 0, library.ID, item.ID, item.ID)
-	assertRawTableCount(t, db, "item_images", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "item_people", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "item_tags", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "item_rollups", "item_id = ?", 0, item.ID)
-	assertRawTableCount(t, db, "catalog_search_documents", "item_id = ? OR library_id = ?", 0, item.ID, library.ID)
+	assertRawTableCount(t, db, "resource_files", "inventory_file_id = ?", 0, inventoryFile.ID)
+	assertRawTableCount(t, db, "resource_library_links", "library_id = ?", 0, library.ID)
+	assertRawTableCount(t, db, "resource_metadata_links", "resource_id = ?", 0, deletedResource.ID)
+	assertRawTableCount(t, db, "resources", "id = ?", 0, deletedResource.ID)
+	assertRawTableCount(t, db, "library_metadata_projections", "library_id = ?", 0, library.ID)
+	assertRawTableCount(t, db, "library_search_documents", "library_id = ?", 0, library.ID)
+	assertRawTableCount(t, db, "user_resource_data", "resource_id = ?", 0, deletedResource.ID)
+	assertRawTableCount(t, db, "user_metadata_data", "preferred_resource_id = ?", 0, deletedResource.ID)
+	assertRawTableCount(t, db, "metadata_operations", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "ingest_dirty_units", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "ingest_conditions", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "ingest_events", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "library_metadata_strategies", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "scan_exclusions", "library_id = ?", 0, library.ID)
-	assertRawTableCount(t, db, "user_item_data", "item_id = ? OR asset_id = ?", 0, item.ID, asset.ID)
 	assertRawTableCount(t, db, "schedules", "library_id = ?", 0, library.ID)
 	assertRawTableCount(t, db, "schedule_runs", "schedule_id = ?", 0, schedule.ID)
 	assertRawTableCount(t, db, "jobs", "id IN (?, ?)", 0, job.ID, probeJob.ID)
@@ -228,24 +273,19 @@ func TestDeleteLibraryRemovesCatalogInventoryAndJobRecords(t *testing.T) {
 	assertRawTableCount(t, db, "workflow_task_dependencies", "task_id = ? OR depends_on_task_id = ?", 0, dependentWorkflowTask.ID, workflowTask.ID)
 	assertRawTableCount(t, db, "workflow_task_leases", "task_id = ?", 0, workflowTask.ID)
 	assertRawTableCount(t, db, "workflow_resource_usages", "task_id = ? OR library_id = ?", 0, workflowTask.ID, library.ID)
-	assertRawTableCount(t, db, "media_items", "library_id = ?", 0, library.ID)
-	assertRawTableCount(t, db, "media_files", "library_id = ?", 0, library.ID)
-	assertRawTableCount(t, db, "playback_progresses", "media_item_id = 101 OR media_file_id = 201", 0)
-	assertRawTableCount(t, db, "people", "id = ?", 0, person.ID)
-	assertRawTableCount(t, db, "tags", "id = ?", 0, tag.ID)
-
 	assertRawTableCount(t, db, "libraries", "id = ?", 1, otherLibrary.ID)
-	assertRawTableCount(t, db, "catalog_items", "id = ?", 1, otherItem.ID)
 	assertRawTableCount(t, db, "inventory_files", "id = ?", 1, otherInventoryFile.ID)
-	assertRawTableCount(t, db, "media_assets", "id = ?", 1, otherAsset.ID)
+	assertRawTableCount(t, db, "resource_files", "inventory_file_id = ?", 1, otherInventoryFile.ID)
+	assertRawTableCount(t, db, "resource_library_links", "library_id = ?", 1, otherLibrary.ID)
+	assertRawTableCount(t, db, "resource_metadata_links", "resource_id = ?", 1, sharedResource.ID)
+	assertRawTableCount(t, db, "resources", "id = ?", 1, sharedResource.ID)
+	assertRawTableCount(t, db, "user_resource_data", "resource_id = ?", 1, sharedResource.ID)
 	assertRawTableCount(t, db, "ingest_dirty_units", "library_id = ?", 1, otherLibrary.ID)
 	assertRawTableCount(t, db, "ingest_conditions", "library_id = ?", 1, otherLibrary.ID)
 	assertRawTableCount(t, db, "ingest_events", "library_id = ?", 1, otherLibrary.ID)
 	assertRawTableCount(t, db, "jobs", "id = ?", 1, otherJob.ID)
 	assertRawTableCount(t, db, "workflow_runs", "id = ?", 1, otherWorkflowRun.ID)
 	assertRawTableCount(t, db, "workflow_tasks", "id = ?", 1, otherWorkflowTask.ID)
-	assertRawTableCount(t, db, "people", "id = ?", 1, otherPerson.ID)
-	assertRawTableCount(t, db, "tags", "id = ?", 1, otherTag.ID)
 }
 
 func assertRawTableCount(t *testing.T, db *gorm.DB, table, where string, expected int64, args ...any) {
@@ -256,5 +296,58 @@ func assertRawTableCount(t *testing.T, db *gorm.DB, table, where string, expecte
 	}
 	if count != expected {
 		t.Fatalf("%s count = %d, want %d", table, count, expected)
+	}
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
+}
+
+type blockingProbeProvider struct {
+	started     chan struct{}
+	releaseOnce chan struct{}
+}
+
+func newBlockingProbeProvider() *blockingProbeProvider {
+	return &blockingProbeProvider{started: make(chan struct{}), releaseOnce: make(chan struct{})}
+}
+
+func (p *blockingProbeProvider) Name() string { return "fake" }
+
+func (p *blockingProbeProvider) List(ctx context.Context, req storage.ListRequest) ([]storage.Object, error) {
+	select {
+	case <-p.started:
+	default:
+		close(p.started)
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.releaseOnce:
+	}
+	return []storage.Object{{Path: req.Path + "/movie.mkv"}}, nil
+}
+
+func (p *blockingProbeProvider) Get(context.Context, storage.GetRequest) (storage.Object, error) {
+	return storage.Object{}, storage.ErrNotImplemented
+}
+
+func (p *blockingProbeProvider) Link(context.Context, storage.LinkRequest) (storage.LinkResult, error) {
+	return storage.LinkResult{}, storage.ErrNotImplemented
+}
+
+func (p *blockingProbeProvider) ResolveStorage(context.Context, storage.ResolveStorageRequest) (storage.ResolvedStorage, error) {
+	return storage.ResolvedStorage{}, nil
+}
+
+func (p *blockingProbeProvider) Capabilities(context.Context) (storage.Capabilities, error) {
+	return storage.Capabilities{CanList: true}, nil
+}
+
+func (p *blockingProbeProvider) release() {
+	select {
+	case <-p.releaseOnce:
+	default:
+		close(p.releaseOnce)
 	}
 }

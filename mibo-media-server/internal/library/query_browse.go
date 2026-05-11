@@ -14,10 +14,10 @@ func (s *Service) GetLibrary(ctx context.Context, libraryID uint) (LibraryDetail
 	if err := s.db.WithContext(ctx).First(&detail.Library, libraryID).Error; err != nil {
 		return LibraryDetail{}, err
 	}
-	if err := s.db.WithContext(ctx).Model(&database.CatalogItem{}).
-		Where("library_id = ? AND deleted_at IS NULL", libraryID).
+	if err := s.db.WithContext(ctx).Model(&database.LibraryMetadataProjection{}).
+		Where("library_id = ? AND hidden = ?", libraryID, false).
 		Where("parent_id IS NULL").
-		Count(&detail.CatalogItemsCount).Error; err != nil {
+		Count(&detail.MetadataItemsCount).Error; err != nil {
 		return LibraryDetail{}, err
 	}
 	if err := s.db.WithContext(ctx).Model(&database.InventoryFile{}).Where("library_id = ? AND deleted_at IS NULL", libraryID).Count(&detail.InventoryFilesCount).Error; err != nil {

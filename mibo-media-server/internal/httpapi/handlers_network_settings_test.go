@@ -127,7 +127,18 @@ func newNetworkSettingsTestServer(t *testing.T) (http.Handler, string, *gorm.DB)
 	catalogSvc := catalog.NewService(db)
 	playbackSvc := playback.NewService(db, registry)
 	authHeader := loginTestUser(t, authSvc, "network-user", "password123")
-	handler := New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc)
+	handler := New(Dependencies{
+		Config:   cfg,
+		DB:       db,
+		Registry: registry,
+		Auth:     authSvc,
+		Catalog:  catalogSvc,
+		Library:  librarySvc,
+		Playback: playbackSvc,
+		Progress: progressSvc,
+		Search:   searchSvc,
+		Settings: settingsSvc,
+	})
 	return handler, authHeader, db
 }
 

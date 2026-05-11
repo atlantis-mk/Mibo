@@ -103,6 +103,8 @@ type WorkerConfig struct {
 	ProbeWorkers          int
 	WorkflowPollInterval  time.Duration
 	WorkflowLeaseDuration time.Duration
+	WorkflowTaskTimeout   time.Duration
+	WorkflowMaxConcurrent int
 }
 
 func Load() (Config, error) {
@@ -173,6 +175,8 @@ func Load() (Config, error) {
 			ProbeWorkers:          getBoundedIntEnv("MIBO_PROBE_WORKERS", 2, 1, 8),
 			WorkflowPollInterval:  getDurationEnv("MIBO_WORKFLOW_POLL_INTERVAL", 2*time.Second),
 			WorkflowLeaseDuration: getDurationEnv("MIBO_WORKFLOW_LEASE_DURATION", time.Minute),
+			WorkflowTaskTimeout:   getDurationEnv("MIBO_WORKFLOW_TASK_TIMEOUT", 10*time.Minute),
+			WorkflowMaxConcurrent: getBoundedIntEnv("MIBO_WORKFLOW_MAX_CONCURRENT", 4, 1, 32),
 		},
 	}
 

@@ -79,7 +79,7 @@ export type ConsoleAccessAddress = {
 export type ConsoleMediaSummary = {
   libraries: number
   media_sources: number
-  catalog_items: number
+  metadata_items: number
   inventory_files: number
   movies: number
   series: number
@@ -113,8 +113,8 @@ export type IngestDiagnosticStage = {
   library_name?: string
   inventory_file_id?: number
   storage_path?: string
-  catalog_item_id?: number
-  catalog_title?: string
+	metadata_item_id?: number
+	metadata_item_title?: string
   condition_type: string
   status: string
   reason?: string
@@ -252,7 +252,7 @@ export type Library = {
 }
 
 export type LibraryDetail = Library & {
-  catalog_items_count: number
+  metadata_items_count: number
   inventory_files_count: number
 }
 
@@ -517,22 +517,6 @@ export type Track = {
   channels?: number
 }
 
-export type MetadataSearchCandidate = {
-  provider: string
-  media_type: string
-  external_id: string
-  title: string
-  original_title: string
-  overview: string
-  poster_url: string
-  backdrop_url: string
-  release_date: string
-  year?: number
-  confidence: number
-  matched_query?: string
-  reason_summary?: string
-}
-
 export type CatalogSelectedImage = {
   image_type: string
   url: string
@@ -582,11 +566,11 @@ export type CatalogChildSummary = {
   latest_added_at?: string
 }
 
-export type CatalogAssetLink = {
-  item_id: number
-  role: string
-  segment_index: number
-  start_seconds?: number
+export type MediaResourceLink = {
+	metadata_item_id: number
+	role: string
+	segment_index: number
+	start_seconds?: number
   end_seconds?: number
   confidence?: number
   source?: string
@@ -610,7 +594,7 @@ export type CatalogEpisodeParentContext = {
   incomplete_hierarchy: boolean
 }
 
-export type CatalogAssetFileSummary = {
+export type MediaResourceFileSummary = {
   file_id: number
   role: string
   part_index: number
@@ -680,7 +664,11 @@ export type CatalogTagDetail = {
 
 export type CatalogListItem = {
   id: number
+  metadata_item_id?: number
   library_id: number
+  resource_count?: number
+  available_count?: number
+  missing_count?: number
   source_kind?: "catalog" | "inventory_file"
   inventory_file_id?: number
   maturity_state?:
@@ -739,10 +727,11 @@ export type CatalogOrganizingCondition = {
   severity?: string
 }
 
-export type CatalogAssetDetail = {
+export type MediaResourceDetail = {
   id: number
-  library_id: number
-  asset_type: string
+	resource_id?: number
+	library_id: number
+	resource_type: string
   display_name?: string
   edition?: string
   quality_label?: string
@@ -750,9 +739,60 @@ export type CatalogAssetDetail = {
   status: string
   probe_status: string
   file_ids: number[]
-  files?: CatalogAssetFileSummary[]
+  files?: MediaResourceFileSummary[]
   streams?: CatalogMediaStreamSummary[]
-  links: CatalogAssetLink[]
+  links: MediaResourceLink[]
+}
+
+export type MetadataResourceDetail = {
+  id: number
+  library_id?: number
+  resource_type: string
+  resource_shape: string
+  display_name?: string
+  edition?: string
+  quality_label?: string
+  duration_seconds?: number
+  status: string
+  probe_status: string
+  role: string
+  segment_index?: number
+  review_state?: string
+}
+
+export type ResourceMetadataLinkInput = {
+  target_metadata_item_id?: number
+  source_metadata_item_id?: number
+  library_id?: number
+  mode?: "copy" | "move"
+  role?: string
+  segment_index?: number
+  start_seconds?: number
+  end_seconds?: number
+}
+
+export type ResourceMetadataLinkUpdateInput = {
+  library_id?: number
+  role?: string
+  segment_index?: number
+  new_role?: string
+  review_state?: string
+}
+
+export type MetadataMergeInput = {
+  target_metadata_item_id: number
+  library_id?: number
+}
+
+export type MetadataSplitInput = {
+  target_metadata_item_id: number
+  resource_ids: number[]
+  library_id?: number
+}
+
+export type ProjectionVisibilityInput = {
+  library_id: number
+  hidden: boolean
 }
 
 export type CatalogEpisodeShelfItem = {
@@ -766,6 +806,7 @@ export type CatalogEpisodeShelfItem = {
   episode_number?: number
   episode_number_end?: number
   runtime_seconds?: number
+  inventory_file_id?: number
   availability_status: string
   governance_status: string
   release_date?: string
@@ -788,6 +829,7 @@ export type CatalogEpisodeDetail = {
   index_number_end?: number
   absolute_number?: number
   runtime_seconds?: number
+  inventory_file_id?: number
   availability_status: string
   governance_status: string
   release_date?: string
@@ -796,7 +838,7 @@ export type CatalogEpisodeDetail = {
   external_identities?: CatalogExternalIdentity[]
   source_evidence?: CatalogSourceEvidence[]
   field_states?: CatalogFieldState[]
-  assets?: CatalogAssetDetail[]
+	resources?: MediaResourceDetail[]
 }
 
 export type CatalogSeasonDetail = {
@@ -819,16 +861,20 @@ export type CatalogSeasonDetail = {
 }
 
 export type CatalogSeriesPlaybackTarget = {
-  episode_item_id: number
-  asset_id?: number
-  title: string
-  label?: string
-  selection_reason: string
+	episode_metadata_item_id: number
+	resource_id?: number
+	title: string
+	label?: string
+	selection_reason: string
 }
 
 export type CatalogItemDetail = {
   id: number
+  metadata_item_id?: number
   library_id: number
+  resource_count?: number
+  available_count?: number
+  missing_count?: number
   type: string
   title: string
   original_title?: string
@@ -859,8 +905,8 @@ export type CatalogItemDetail = {
   episode_context?: CatalogEpisodeParentContext
   series_playback_target?: CatalogSeriesPlaybackTarget
   same_season_episodes?: CatalogEpisodeShelfItem[]
-  assets?: CatalogAssetDetail[]
-  related_items?: CatalogListItem[]
+	resources?: MediaResourceDetail[]
+	related_items?: CatalogListItem[]
 }
 
 export type CatalogMetadataPlanProviderSummary = {
@@ -903,7 +949,7 @@ export type CatalogMetadataProviderAttempt = {
 }
 
 export type CatalogMetadataAppliedField = {
-  item_id: number
+  metadata_item_id: number
   field_key: string
   source_id?: number
   apply_mode: string
@@ -911,7 +957,7 @@ export type CatalogMetadataAppliedField = {
 }
 
 export type CatalogMetadataSkippedField = {
-  item_id: number
+  metadata_item_id: number
   field_key: string
   reason: string
 }
@@ -922,15 +968,15 @@ export type CatalogMetadataOperationWarning = {
 }
 
 export type CatalogMetadataAffectedScope = {
-  item_ids?: number[]
+  metadata_item_ids?: number[]
   library_id: number
-  root_id?: number
+  metadata_root_id?: number
 }
 
 export type CatalogMetadataOperation = {
   operation: string
-  origin_item_id: number
-  target_item_id: number
+  origin_metadata_item_id?: number
+  target_metadata_item_id?: number
   target_type: string
   status: string
   governance_status?: string
@@ -1002,10 +1048,10 @@ export type CatalogClassificationRuleSummary = {
 }
 
 export type CatalogGovernanceWorkspace = {
-  item_id: number
-  library_id: number
-  type: string
-  title: string
+	metadata_item_id: number
+	library_id: number
+	type: string
+	title: string
   availability_status: string
   governance_status: string
   selected_images?: CatalogSelectedImage[]
@@ -1013,56 +1059,18 @@ export type CatalogGovernanceWorkspace = {
   external_identities?: CatalogExternalIdentity[]
   source_evidence?: CatalogSourceEvidence[]
   field_states?: CatalogFieldState[]
-  assets?: CatalogAssetDetail[]
-  classification_decisions?: CatalogClassificationDecision[]
+	resources?: MediaResourceDetail[]
+	classification_decisions?: CatalogClassificationDecision[]
   classification_rules?: CatalogClassificationRuleSummary[]
   recommended_children?: CatalogListItem[]
   metadata_operation?: CatalogMetadataOperation
 }
 
-export type ManualSeriesEpisodeMappingInput = {
-  source_item_id?: number
-  asset_id?: number
-  file_id?: number
-  storage_path?: string
-  season_number?: number
-  episode_number?: number
-  episode_title?: string
-  episode_path?: string
-  episode_number_end?: number
-}
-
-export type ManualSeriesRestructureInput = {
-  root_path: string
-  series_title?: string
-  season_number?: number
-  migrate_metadata?: boolean
-  episode_mappings?: ManualSeriesEpisodeMappingInput[]
-}
-
-export type ManualSeriesEpisodeLink = {
-  source_item_id?: number
-  asset_id: number
-  file_id?: number
-  storage_path: string
-  episode_item_id?: number
-  season_number: number
-  episode_number: number
-  episode_title: string
-}
-
-export type ManualSeriesRestructureResult = {
-  series?: CatalogListItem
-  seasons?: CatalogSeasonDetail[]
-  episodes?: CatalogEpisodeDetail[]
-  mappings: ManualSeriesEpisodeLink[]
-  warnings?: string[]
-}
-
 export type ProgressState = {
   user_id: number
-  item_id?: number
-  asset_id?: number
+  metadata_item_id?: number
+  resource_id?: number
+  preferred_resource_id?: number
   position_seconds: number
   duration_seconds?: number
   played_percentage?: number
@@ -1081,10 +1089,21 @@ export type CatalogUserItemEntry = ProgressState & {
   play_item?: CatalogListItem
 }
 
-export type CatalogLatestByLibrarySection = {
-  library_id: number
-  library_name: string
+export type HomeContentSection = {
+  key: string
+  title: string
   items: CatalogListItem[]
+}
+
+export type HomeMediaSectionSummary = {
+  key: string
+  title: string
+  count: number
+  items: CatalogListItem[]
+}
+
+export type HomeMediaOverview = {
+  sections: HomeMediaSectionSummary[]
 }
 
 export type HealthSeverity = "info" | "warning" | "error" | "blocking"
@@ -1119,7 +1138,7 @@ export type HealthImpact = {
   blocks_home_visibility: boolean
   blocks_playback: boolean
   blocks_metadata: boolean
-  affected_catalog_items: number
+  affected_metadata_items: number
   affected_files: number
 }
 
@@ -1394,8 +1413,8 @@ export type PlaybackDecision = {
 }
 
 export type PlaybackSource = {
-  item_id?: number
-  asset_id?: number
+  metadata_item_id?: number
+  resource_id?: number
   file_id?: number
   title: string
   type: string
@@ -1404,6 +1423,9 @@ export type PlaybackSource = {
   direct: boolean
   size_bytes: number
   runtime_seconds?: number
+  segment_index?: number
+  start_seconds?: number
+  end_seconds?: number
   quality_label?: string
   edition?: string
   video_codec: string
@@ -2131,17 +2153,17 @@ export function createMiboApi(options: ApiOptions) {
         }
       )
     },
-    previewCatalogItemScanExclusion(itemId: number) {
+    previewInventoryFileScanExclusion(fileId: number) {
       return request<FilenameExclusionPreview>(
-        `/api/v1/items/${itemId}/scan-exclusion-preview`
+        `/api/v1/inventory-files/${fileId}/scan-exclusion-preview`
       )
     },
-    createCatalogItemFilenameExclusionRule(
-      itemId: number,
+    createInventoryFileFilenameExclusionRule(
+      fileId: number,
       reason = "advertisement"
     ) {
       return request<FilenameExclusionRule>(
-        `/api/v1/items/${itemId}/filename-exclusion-rule`,
+        `/api/v1/inventory-files/${fileId}/filename-exclusion-rule`,
         {
           method: "POST",
           body: JSON.stringify({ reason }),
@@ -2239,8 +2261,25 @@ export function createMiboApi(options: ApiOptions) {
         `/api/v1/search/history?limit=${limit}`
       )
     },
-    getCatalogItem(itemId: number) {
-      return request<CatalogItemDetail>(`/api/v1/items/${itemId}`)
+    getMetadataItem(itemId: number, options?: { libraryId?: number }) {
+      const query = new URLSearchParams()
+      if (typeof options?.libraryId === "number") {
+        query.set("library_id", String(options.libraryId))
+      }
+      const queryString = query.toString()
+      return request<CatalogItemDetail>(
+        `/api/v1/items/${itemId}${queryString ? `?${queryString}` : ""}`
+      )
+    },
+    listMetadataItemResources(itemId: number, options?: { libraryId?: number }) {
+      const query = new URLSearchParams()
+      if (typeof options?.libraryId === "number") {
+        query.set("library_id", String(options.libraryId))
+      }
+      const queryString = query.toString()
+      return request<MetadataResourceDetail[]>(
+        `/api/v1/items/${itemId}/resources${queryString ? `?${queryString}` : ""}`
+      )
     },
     getInventoryFilePlayback(
       fileId: number,
@@ -2256,9 +2295,6 @@ export function createMiboApi(options: ApiOptions) {
     },
     getCatalogPerson(personId: number) {
       return request<CatalogPersonPageDetail>(`/api/v1/people/${personId}`)
-    },
-    listCatalogSeriesSeasons(itemId: number) {
-      return request<CatalogSeasonDetail[]>(`/api/v1/series/${itemId}/seasons`)
     },
     getCatalogGovernanceWorkspace(itemId: number) {
       return request<CatalogGovernanceWorkspace>(
@@ -2298,22 +2334,79 @@ export function createMiboApi(options: ApiOptions) {
         }
       )
     },
-    linkCatalogGovernanceAsset(
-      workspaceItemId: number,
-      assetId: number,
-      input: {
-        target_item_id: number
-        source_item_id?: number
-        mode?: "copy" | "move"
-        segment_index?: number
-        start_seconds?: number
-        end_seconds?: number
-      }
+    linkGovernanceResource(
+      metadataItemId: number,
+      resourceId: number,
+      input: ResourceMetadataLinkInput
     ) {
-      return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links`,
+      return request<CatalogMetadataOperation>(
+        `/api/v1/items/${metadataItemId}/governance/resources/${resourceId}/links`,
         {
           method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    updateGovernanceResourceLink(
+      metadataItemId: number,
+      resourceId: number,
+      targetMetadataItemId: number,
+      input: ResourceMetadataLinkUpdateInput
+    ) {
+      return request<CatalogMetadataOperation>(
+        `/api/v1/items/${metadataItemId}/governance/resources/${resourceId}/links/${targetMetadataItemId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    unlinkGovernanceResource(
+      metadataItemId: number,
+      resourceId: number,
+      targetMetadataItemId: number,
+      options?: { libraryId?: number; role?: string; segmentIndex?: number }
+    ) {
+      const query = new URLSearchParams()
+      if (typeof options?.libraryId === "number") {
+        query.set("library_id", String(options.libraryId))
+      }
+      if (options?.role) query.set("role", options.role)
+      if (typeof options?.segmentIndex === "number") {
+        query.set("segment_index", String(options.segmentIndex))
+      }
+      const queryString = query.toString()
+      return request<CatalogMetadataOperation>(
+        `/api/v1/items/${metadataItemId}/governance/resources/${resourceId}/links/${targetMetadataItemId}${queryString ? `?${queryString}` : ""}`,
+        { method: "DELETE" }
+      )
+    },
+    mergeGovernanceMetadata(metadataItemId: number, input: MetadataMergeInput) {
+      return request<CatalogMetadataOperation>(
+        `/api/v1/items/${metadataItemId}/governance/metadata-merge`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    splitGovernanceMetadata(metadataItemId: number, input: MetadataSplitInput) {
+      return request<CatalogMetadataOperation>(
+        `/api/v1/items/${metadataItemId}/governance/metadata-split`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        }
+      )
+    },
+    setGovernanceProjectionVisibility(
+      metadataItemId: number,
+      input: ProjectionVisibilityInput
+    ) {
+      return request<CatalogMetadataOperation>(
+        `/api/v1/items/${metadataItemId}/governance/projection-visibility`,
+        {
+          method: "PUT",
           body: JSON.stringify(input),
         }
       )
@@ -2334,111 +2427,14 @@ export function createMiboApi(options: ApiOptions) {
         }
       )
     },
-    previewManualSeriesRestructure(
-      libraryId: number,
-      input: ManualSeriesRestructureInput
-    ) {
-      return request<ManualSeriesRestructureResult>(
-        `/api/v1/libraries/${libraryId}/manual-series-restructure/preview`,
+    markInventoryFileScanExclusion(fileId: number, reason = "advertisement") {
+      return request<ScanExclusion>(
+        `/api/v1/inventory-files/${fileId}/scan-exclusion`,
         {
           method: "POST",
-          body: JSON.stringify(input),
+          body: JSON.stringify({ reason }),
         }
       )
-    },
-    applyManualSeriesRestructure(
-      libraryId: number,
-      input: ManualSeriesRestructureInput
-    ) {
-      return request<ManualSeriesRestructureResult>(
-        `/api/v1/libraries/${libraryId}/manual-series-restructure/apply`,
-        {
-          method: "POST",
-          body: JSON.stringify(input),
-        }
-      )
-    },
-    applyCatalogGovernanceClassificationCorrection(
-      itemId: number,
-      input: {
-        action: "movie_versions" | "independent_movies"
-        root_path?: string
-        title?: string
-      }
-    ) {
-      return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${itemId}/governance/classification-corrections`,
-        {
-          method: "POST",
-          body: JSON.stringify(input),
-        }
-      )
-    },
-    unlinkCatalogGovernanceAsset(
-      workspaceItemId: number,
-      assetId: number,
-      targetItemId: number
-    ) {
-      return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${workspaceItemId}/governance/assets/${assetId}/links/${targetItemId}`,
-        {
-          method: "DELETE",
-        }
-      )
-    },
-    searchCatalogItemMetadata(
-      itemId: number,
-      input: {
-        title?: string
-        year?: number
-        imdb_id?: string
-        tmdb_id?: string
-        tvdb_id?: string
-      }
-    ) {
-      return request<MetadataSearchCandidate[]>(
-        `/api/v1/items/${itemId}/metadata/search`,
-        {
-          method: "POST",
-          body: JSON.stringify(input),
-        }
-      )
-    },
-    applyCatalogItemMetadataCandidate(
-      itemId: number,
-      input: {
-        external_id: string
-      }
-    ) {
-      return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${itemId}/metadata/apply`,
-        {
-          method: "POST",
-          body: JSON.stringify(input),
-        }
-      )
-    },
-    refetchCatalogItemMetadata(itemId: number) {
-      return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${itemId}/metadata/refetch`,
-        {
-          method: "POST",
-        }
-      )
-    },
-    matchCatalogItem(itemId: number) {
-      return request<CatalogGovernanceWorkspace>(
-        `/api/v1/items/${itemId}/match`,
-        {
-          method: "POST",
-        }
-      )
-    },
-    markCatalogItemScanExclusion(itemId: number, reason = "advertisement") {
-      return request<ScanExclusion>(`/api/v1/items/${itemId}/scan-exclusion`, {
-        method: "POST",
-        body: JSON.stringify({ reason }),
-      })
     },
     reprobeInventoryFile(fileId: number) {
       return request<AcceptedResult>(
@@ -2518,7 +2514,8 @@ export function createMiboApi(options: ApiOptions) {
     getCatalogPlayback(
       itemId: number,
       playbackOptions: {
-        assetId?: number
+        resourceId?: number
+        libraryId?: number
         clientProfile: ClientProfile
       }
     ) {
@@ -2526,26 +2523,48 @@ export function createMiboApi(options: ApiOptions) {
         client_profile: playbackOptions.clientProfile,
       })
 
-      if (typeof playbackOptions.assetId === "number") {
-        query.set("asset_id", String(playbackOptions.assetId))
+      if (typeof playbackOptions.resourceId === "number") {
+        query.set("resource_id", String(playbackOptions.resourceId))
+      }
+      if (typeof playbackOptions.libraryId === "number") {
+        query.set("library_id", String(playbackOptions.libraryId))
       }
 
       return request<PlaybackSource>(
         `/api/v1/items/${itemId}/playback?${query.toString()}`
       )
     },
-    getCatalogItemProgress(itemId: number) {
-      return request<ProgressState>(`/api/v1/items/${itemId}/progress`)
+    getMetadataPlayback(
+      metadataItemId: number,
+      playbackOptions: {
+        resourceId?: number
+        libraryId?: number
+        clientProfile: ClientProfile
+      }
+    ) {
+      return this.getCatalogPlayback(metadataItemId, playbackOptions)
     },
+	getMetadataItemProgress(itemId: number) {
+		return request<ProgressState>(`/api/v1/items/${itemId}/progress`)
+	},
     updateProgress(input: {
-      item_id?: number
-      asset_id?: number
-      position_seconds: number
+		metadata_item_id?: number
+		resource_id?: number
+		position_seconds: number
       duration_seconds?: number
       completed?: boolean
       progress_frame_data?: string
     }) {
       return request<ProgressState>("/api/v1/me/progress", {
+        method: "POST",
+        body: JSON.stringify(input),
+      })
+    },
+    setPreferredResource(input: {
+      metadata_item_id: number
+      resource_id: number
+    }) {
+      return request<ProgressState>("/api/v1/me/preferred-resource", {
         method: "POST",
         body: JSON.stringify(input),
       })
@@ -2566,9 +2585,12 @@ export function createMiboApi(options: ApiOptions) {
         method: "DELETE",
       })
     },
-    latestByLibrary() {
-      return request<CatalogLatestByLibrarySection[]>(
-        "/api/v1/home/latest-by-library"
+    homeSections(limit = 12) {
+      return request<HomeContentSection[]>(`/api/v1/home/sections?limit=${limit}`)
+    },
+    homeMediaOverview(previewLimit = 4) {
+      return request<HomeMediaOverview>(
+        `/api/v1/home/media-overview?preview_limit=${previewLimit}`
       )
     },
     recentlyAdded(limit = 5) {

@@ -17,7 +17,7 @@ function issue(overrides: Partial<HealthIssue>): HealthIssue {
       blocks_home_visibility: true,
       blocks_playback: false,
       blocks_metadata: false,
-      affected_catalog_items: 2,
+      affected_metadata_items: 2,
       affected_files: 3,
     },
     affected: {

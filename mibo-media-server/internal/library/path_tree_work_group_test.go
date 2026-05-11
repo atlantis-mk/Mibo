@@ -20,6 +20,8 @@ func TestNormalizedMovieWorkKeySuppressesReleaseHints(t *testing.T) {
 		{name: "codec audio quality", path: "/movies/Alien.1979.1080p.BluRay.DTS-HD.MA.5.1.x264-Example.mkv", want: "alien:1979"},
 		{name: "28 days later minihd", path: "/电影/合集5-1/惊变28天[繁英字幕].28.Days.Later.2002.BluRay.1080p.x265.10bit-MiniHD/28.Days.Later.2002.BluRay.1080p.x265.10bit-MiniHD.mkv", want: "28 days later:2002"},
 		{name: "28 days later xiaomi", path: "/电影/合集5-1/惊变28天[中文字幕].28.Days.Later.2002.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-Xiaomi/28.Days.Later.2002.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-Xiaomi.mkv", want: "28 days later:2002"},
+		{name: "ammonite hdma", path: "/电影/合集5-1/菊石[中英字幕].Ammonite.2020.BluRay.1080p.DTS-HDMA5.1.x265.10bit-Xiaomi/Ammonite.2020.BluRay.1080p.DTS-HDMA5.1.x265.10bit-Xiaomi.mkv", want: "ammonite:2020"},
+		{name: "con air two audio", path: "/movies/ConAir.1997.BluRay.1080p.x265.2Audio-MiniHD.mkv", want: "conair:1997"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

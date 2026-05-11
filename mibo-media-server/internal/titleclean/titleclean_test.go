@@ -25,6 +25,13 @@ func TestNormalize(t *testing.T) {
 		{name: "numeric title version and ddp71", raw: "M3GAN.2.0.2025.BluRay.1080p.x265.10bit.DDP7.1.-SSDSSE.mkv", title: "M3GAN 2.0", year: 2025},
 		{name: "split h264 codec", raw: "Back to the Past 2025 1080p WEB-DL H 264 AAC-HHWEB.mkv", title: "Back to the Past", year: 2025},
 		{name: "short release tag after year", raw: "Avatar.Fire.And.Ash.2025.MA.x264.WEB-DL.1080p-Jaskier.mkv", title: "Avatar Fire And Ash", year: 2025},
+		{name: "dts hd ma audio tail", raw: "Airplane.1980.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-ALT.mkv", title: "Airplane", year: 1980},
+		{name: "hdma audio tail", raw: "Ammonite.2020.BluRay.1080p.DTS-HDMA5.1.x265.10bit-Xiaomi.mkv", title: "Ammonite", year: 2020},
+		{name: "ma7 audio tail", raw: "Christopher.Robin.2018.BluRay.1080p.MA7.1.x265.10bit-GROUP.mkv", title: "Christopher Robin", year: 2018},
+		{name: "two audio minihd tail", raw: "ConAir.1997.BluRay.1080p.x265.2Audio-MiniHD.mkv", title: "ConAir", year: 1997},
+		{name: "single word mixed case title", raw: "ConAir.1997.mkv", title: "ConAir", year: 1997},
+		{name: "truehd audio tail", raw: "Help.2000.BluRay.1080p.TrueHD5.1.2Audio.x265.10bit-Xiaomi.mkv", title: "Help", year: 2000},
+		{name: "dd plus audio tail", raw: "Kakegurui.2.Desperate.Russian.Roulette.2021.1080p.BluRay.DD+5.1.x264-CHD.mkv", title: "Kakegurui 2 Desperate Russian Roulette", year: 2021},
 		{name: "empty fallback", raw: "2024.2160p.WEB-DL.x265", title: "2024.2160p.WEB-DL.x265", year: 2024},
 	}
 
@@ -89,5 +96,28 @@ func TestNormalizeExtractsHashtagTags(t *testing.T) {
 		if !seen {
 			t.Fatalf("expected hashtag removal evidence for %q in %#v", token, result.RemovedTokens)
 		}
+	}
+}
+
+func TestMovieWorkTitleStripsResidualAudioTail(t *testing.T) {
+	t.Parallel()
+
+	got := MovieWorkTitle("28.Days.Later.2002.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-Xiaomi")
+	if got != "28 Days Later" {
+		t.Fatalf("expected movie work title %q, got %q", "28 Days Later", got)
+	}
+
+	normalized := NormalizeMovieWorkTitle("28.Days.Later.2002.BluRay.1080p.DTS-HD.MA5.1.x265.10bit-Xiaomi")
+	if normalized != "28 days later" {
+		t.Fatalf("expected normalized movie work title %q, got %q", "28 days later", normalized)
+	}
+}
+
+func TestMovieWorkTitleStripsHdmaAudioTail(t *testing.T) {
+	t.Parallel()
+
+	got := MovieWorkTitle("Ammonite.2020.BluRay.1080p.DTS-HDMA5.1.x265.10bit-Xiaomi")
+	if got != "Ammonite" {
+		t.Fatalf("expected movie work title %q, got %q", "Ammonite", got)
 	}
 }

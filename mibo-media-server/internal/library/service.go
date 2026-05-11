@@ -13,7 +13,7 @@ import (
 
 type inventoryProbeExecutor func(context.Context, uint) error
 
-type catalogMatchExecutor func(context.Context, uint) error
+type metadataMatchExecutor func(context.Context, uint, uint) error
 
 type Service struct {
 	cfg                    config.Config
@@ -22,7 +22,7 @@ type Service struct {
 	workflow               *workflow.Service
 	ingest                 *ingest.Service
 	inventoryProbeExecutor inventoryProbeExecutor
-	catalogMatchExecutor   catalogMatchExecutor
+	metadataMatchExecutor  metadataMatchExecutor
 }
 
 type CreateMediaSourceInput struct {
@@ -75,34 +75,22 @@ const (
 	JobKindTargetedRefresh                 = "targeted_refresh"
 	JobKindMatchCatalogItem                = "match_catalog_item"
 	JobKindProbeInventoryFile              = "probe_inventory_file"
-	JobKindCatalogMatchBatch               = "catalog_match_batch"
-	JobKindCatalogMaterializeBatch         = "catalog_materialize_batch"
-	JobKindCatalogPostMaterializeBatch     = "catalog_post_materialize_batch"
+	JobKindMetadataMatchBatch              = "metadata_match_batch"
+	JobKindRecognitionResolveBatch         = "recognition_resolve_batch"
+	JobKindRecognitionPostResolveBatch     = "recognition_post_resolve_batch"
 	JobKindInventoryProbeBatch             = "inventory_probe_batch"
 	JobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
 	JobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
 )
 
 func NewService(cfg config.Config, db *gorm.DB, registry *providers.Registry, _ any, args ...any) *Service {
-	service := &Service{cfg: cfg, db: db, storage: registry}
-	for _, arg := range args {
-		if ingestSvc, ok := arg.(*ingest.Service); ok {
-			service.ingest = ingestSvc
-		}
-		if workflowSvc, ok := arg.(*workflow.Service); ok {
-			service.workflow = workflowSvc
-		}
-	}
-	if service.workflow == nil && db != nil {
-		service.workflow = workflow.NewService(db)
-	}
-	return service
+	return newLibraryService(cfg, db, newServiceDependencies(db, registry, args...))
 }
 
 func (s *Service) SetInventoryProbeExecutor(executor func(context.Context, uint) error) {
 	s.inventoryProbeExecutor = executor
 }
 
-func (s *Service) SetCatalogMatchExecutor(executor func(context.Context, uint) error) {
-	s.catalogMatchExecutor = executor
+func (s *Service) SetMetadataMatchExecutor(executor func(context.Context, uint, uint) error) {
+	s.metadataMatchExecutor = executor
 }

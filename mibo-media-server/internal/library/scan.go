@@ -99,28 +99,17 @@ type catalogScanArtifact struct {
 	SizeBytes              int64
 	ModifiedAt             *time.Time
 	Container              string
-	PreferredAssetType     string
-	PreferredAssetRole     string
+	PreferredLinkRole      string
 	NormalizationVersion   string
 	RemovedTokens          []titleclean.RemovedToken
 	FilenameSignals        filenameSignalModel
 	SubtitleSidecars       []catalogScanSidecar
 	MetadataSidecars       []catalogScanMetadataSidecar
-	ImageCandidates        []catalogScanImageCandidate
 	ExternalIDs            []catalogScanExternalID
 	Decisions              []scanDecision
 	ContentShapeProfile    map[string]any
 	ContentShapePlan       map[string]any
 	ContentShapeAssignment map[string]any
-}
-
-type catalogScanImageCandidate struct {
-	ImageType   string
-	URL         string
-	Path        string
-	Source      string
-	Priority    int
-	Provisional bool
 }
 
 type catalogScanExternalID struct {
@@ -159,27 +148,27 @@ type catalogScanMetadataHints struct {
 type SyncResult struct {
 	DirectoriesScanned           int            `json:"directories_scanned"`
 	FilesSeen                    int            `json:"files_seen"`
-	CatalogItemsSeen             int            `json:"catalog_items_seen"`
+	MetadataItemsSeen            int            `json:"metadata_items_seen"`
 	InventoryFilesSeen           int            `json:"inventory_files_seen"`
 	ExcludedFilesSkipped         int            `json:"excluded_files_skipped"`
 	ExcludedFilesSkippedByReason map[string]int `json:"excluded_files_skipped_by_reason,omitempty"`
 }
 
 type scanMode struct {
-	partial                     bool
-	rootPath                    string
-	deferCatalogMaterialization bool
-	catalogMatchItemIDs         []uint
-	catalogMaterializeFileIDs   []uint
-	inventoryProbeFileIDs       []uint
-	classificationFileIDs       []uint
-	discoveredFiles             map[string]database.InventoryFile
-	directorySnapshots          map[string]scanDirectorySnapshot
-	decisionSnapshots           map[string]scanDirectorySnapshot
-	pathTreeAssignmentsByPath   map[string]pathTreeWorkGroupAssignment
-	pendingSiblingMovieFiles    map[string][]pendingSiblingMovieFile
-	materializedDirectories     map[string]struct{}
-	skippedDirectories          map[string]error
+	partial                    bool
+	rootPath                   string
+	deferRecognitionResolution bool
+	metadataMatchItemIDs       []uint
+	recognitionResolveFileIDs  []uint
+	inventoryProbeFileIDs      []uint
+	classificationFileIDs      []uint
+	discoveredFiles            map[string]database.InventoryFile
+	directorySnapshots         map[string]scanDirectorySnapshot
+	decisionSnapshots          map[string]scanDirectorySnapshot
+	pathTreeAssignmentsByPath  map[string]pathTreeWorkGroupAssignment
+	pendingSiblingMovieFiles   map[string][]pendingSiblingMovieFile
+	resolvedDirectories        map[string]struct{}
+	skippedDirectories         map[string]error
 }
 
 type pendingSiblingMovieFile struct {
@@ -219,11 +208,11 @@ func (m *scanMode) allowsMissingCleanup() bool {
 	return !m.partial
 }
 
-func (m *scanMode) recordCatalogMaterializeCandidate(fileID uint) {
+func (m *scanMode) recordRecognitionResolveCandidate(fileID uint) {
 	if m == nil || fileID == 0 {
 		return
 	}
-	m.catalogMaterializeFileIDs = append(m.catalogMaterializeFileIDs, fileID)
+	m.recognitionResolveFileIDs = append(m.recognitionResolveFileIDs, fileID)
 }
 
 func (m *scanMode) recordDirectorySnapshot(snapshot scanDirectorySnapshot) {
@@ -268,7 +257,7 @@ func (m *scanMode) recordDecisionSnapshot(snapshot scanDirectorySnapshot) {
 	m.decisionSnapshots[key] = snapshot
 }
 
-func (m *scanMode) markDirectoryMaterialized(path string) {
+func (m *scanMode) markDirectoryResolved(path string) {
 	if m == nil {
 		return
 	}
@@ -276,36 +265,25 @@ func (m *scanMode) markDirectoryMaterialized(path string) {
 	if key == "" {
 		return
 	}
-	if m.materializedDirectories == nil {
-		m.materializedDirectories = make(map[string]struct{})
+	if m.resolvedDirectories == nil {
+		m.resolvedDirectories = make(map[string]struct{})
 	}
-	m.materializedDirectories[key] = struct{}{}
+	m.resolvedDirectories[key] = struct{}{}
 }
 
-func (m *scanMode) directoryMaterialized(path string) bool {
-	if m == nil || m.materializedDirectories == nil {
+func (m *scanMode) directoryResolved(path string) bool {
+	if m == nil || m.resolvedDirectories == nil {
 		return false
 	}
-	_, ok := m.materializedDirectories[strings.TrimSpace(path)]
+	_, ok := m.resolvedDirectories[strings.TrimSpace(path)]
 	return ok
 }
 
-func (m *scanMode) recordCatalogMatchCandidate(itemID uint) {
+func (m *scanMode) recordMetadataMatchCandidate(itemID uint) {
 	if m == nil || itemID == 0 {
 		return
 	}
-	m.catalogMatchItemIDs = append(m.catalogMatchItemIDs, itemID)
-}
-
-func (m *scanMode) recordCatalogMatchCandidateForItem(item database.CatalogItem) {
-	if m == nil || item.ID == 0 {
-		return
-	}
-	if (item.Type == "season" || item.Type == "episode") && item.RootID != nil && *item.RootID != 0 {
-		m.recordCatalogMatchCandidate(*item.RootID)
-		return
-	}
-	m.recordCatalogMatchCandidate(item.ID)
+	m.metadataMatchItemIDs = append(m.metadataMatchItemIDs, itemID)
 }
 
 func (m *scanMode) recordInventoryProbeCandidate(fileID uint) {

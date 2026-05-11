@@ -59,12 +59,12 @@ type Issue struct {
 }
 
 type Impact struct {
-	BlocksScan           bool  `json:"blocks_scan"`
-	BlocksHomeVisibility bool  `json:"blocks_home_visibility"`
-	BlocksPlayback       bool  `json:"blocks_playback"`
-	BlocksMetadata       bool  `json:"blocks_metadata"`
-	AffectedCatalogItems int64 `json:"affected_catalog_items"`
-	AffectedFiles        int64 `json:"affected_files"`
+	BlocksScan            bool  `json:"blocks_scan"`
+	BlocksHomeVisibility  bool  `json:"blocks_home_visibility"`
+	BlocksPlayback        bool  `json:"blocks_playback"`
+	BlocksMetadata        bool  `json:"blocks_metadata"`
+	AffectedMetadataItems int64 `json:"affected_metadata_items"`
+	AffectedFiles         int64 `json:"affected_files"`
 }
 
 type Affected struct {

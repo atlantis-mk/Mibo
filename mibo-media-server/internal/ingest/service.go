@@ -25,9 +25,8 @@ const (
 	DirtyStatusFailed    = "failed"
 
 	ScopeKindInventoryFile     = "inventory_file"
-	ScopeKindCatalogItem       = "catalog_item"
+	ScopeKindMetadataItem      = "metadata_item"
 	ScopeKindLibrary           = "library"
-	ScopeKindProjectionItem    = "projection_item"
 	ScopeKindProjectionLibrary = "projection_library"
 
 	ConditionVisible           = "visible"
@@ -57,8 +56,7 @@ const (
 
 	DefaultEventRetention = 30 * 24 * time.Hour
 
-	jobKindCatalogMatchBatch               = "catalog_match_batch"
-	jobKindCatalogMaterializeBatch         = "catalog_materialize_batch"
+	jobKindRecognitionResolveBatch         = "recognition_resolve_batch"
 	jobKindInventoryProbeBatch             = "inventory_probe_batch"
 	jobKindCatalogRefreshItemProjection    = "catalog_refresh_item_projection"
 	jobKindCatalogRefreshLibraryProjection = "catalog_refresh_library_projection"
@@ -81,7 +79,7 @@ type conditionInput struct {
 	UnitKey             string
 	LibraryID           uint
 	InventoryFileID     *uint
-	CatalogItemID       *uint
+	MetadataItemID      *uint
 	ConditionType       string
 	Status              string
 	Reason              string
@@ -96,10 +94,17 @@ type conditionInput struct {
 	StaleAfter          *time.Time
 }
 
-type CatalogMatchBatchPayload struct {
-	LibraryID uint   `json:"library_id"`
-	RootPath  string `json:"root_path,omitempty"`
-	ItemIDs   []uint `json:"item_ids"`
+type metadataTarget struct {
+	ID               uint
+	LibraryID        uint
+	ItemType         string
+	GovernanceStatus string
+}
+
+type MetadataMatchBatchPayload struct {
+	LibraryID       uint   `json:"library_id"`
+	RootPath        string `json:"root_path,omitempty"`
+	MetadataItemIDs []uint `json:"metadata_item_ids"`
 }
 
 type InventoryProbeBatchPayload struct {
@@ -108,14 +113,10 @@ type InventoryProbeBatchPayload struct {
 	FileIDs   []uint `json:"file_ids"`
 }
 
-type CatalogMaterializeBatchPayload struct {
+type RecognitionResolveBatchPayload struct {
 	LibraryID uint   `json:"library_id"`
 	RootPath  string `json:"root_path,omitempty"`
 	FileIDs   []uint `json:"file_ids"`
-}
-
-type itemProjectionRefreshPayload struct {
-	ItemID uint `json:"item_id"`
 }
 
 type libraryProjectionRefreshPayload struct {
@@ -148,16 +149,11 @@ func (s *Service) MarkInventoryFileDirty(ctx context.Context, inventoryFileID ui
 	return s.upsertDirty(ctx, database.IngestDirtyUnit{DirtyKey: inventoryFileUnitKey(file.ID), ScopeKind: ScopeKindInventoryFile, LibraryID: file.LibraryID, InventoryFileID: &fileID, RootPath: strings.TrimSpace(file.StoragePath), Reason: normalizeReason(reason), Status: DirtyStatusDirty, AvailableAt: s.now()})
 }
 
-func (s *Service) MarkCatalogItemDirty(ctx context.Context, itemID uint, reason string) (database.IngestDirtyUnit, error) {
-	if itemID == 0 {
-		return database.IngestDirtyUnit{}, errors.New("catalog item id is required")
-	}
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).Where("id = ?", itemID).First(&item).Error; err != nil {
-		return database.IngestDirtyUnit{}, err
-	}
-	currentItemID := item.ID
-	return s.upsertDirty(ctx, database.IngestDirtyUnit{DirtyKey: catalogItemUnitKey(item.ID), ScopeKind: ScopeKindCatalogItem, LibraryID: item.LibraryID, CatalogItemID: &currentItemID, RootPath: strings.TrimSpace(item.Path), Reason: normalizeReason(reason), Status: DirtyStatusDirty, AvailableAt: s.now()})
+func (s *Service) MarkMetadataItemDirty(ctx context.Context, itemID uint, reason string) (database.IngestDirtyUnit, error) {
+	_ = ctx
+	_ = itemID
+	_ = reason
+	return database.IngestDirtyUnit{}, nil
 }
 
 func (s *Service) MarkLibraryScopeDirty(ctx context.Context, libraryID uint, rootPath string, reason string) (database.IngestDirtyUnit, error) {
@@ -166,18 +162,6 @@ func (s *Service) MarkLibraryScopeDirty(ctx context.Context, libraryID uint, roo
 	}
 	rootPath = strings.TrimSpace(rootPath)
 	return s.upsertDirty(ctx, database.IngestDirtyUnit{DirtyKey: fmt.Sprintf("library:%d:%s", libraryID, rootPath), ScopeKind: ScopeKindLibrary, LibraryID: libraryID, RootPath: rootPath, Reason: normalizeReason(reason), Status: DirtyStatusDirty, AvailableAt: s.now()})
-}
-
-func (s *Service) MarkProjectionItemDirty(ctx context.Context, itemID uint, reason string) (database.IngestDirtyUnit, error) {
-	if itemID == 0 {
-		return database.IngestDirtyUnit{}, errors.New("catalog item id is required")
-	}
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).Where("id = ?", itemID).First(&item).Error; err != nil {
-		return database.IngestDirtyUnit{}, err
-	}
-	currentItemID := item.ID
-	return s.upsertDirty(ctx, database.IngestDirtyUnit{DirtyKey: fmt.Sprintf("projection_item:%d", item.ID), ScopeKind: ScopeKindProjectionItem, LibraryID: item.LibraryID, CatalogItemID: &currentItemID, RootPath: strings.TrimSpace(item.Path), Reason: normalizeReason(reason), Status: DirtyStatusDirty, AvailableAt: s.now()})
 }
 
 func (s *Service) MarkProjectionLibraryDirty(ctx context.Context, libraryID uint, rootPath string, reason string) (database.IngestDirtyUnit, error) {
@@ -333,12 +317,12 @@ func (s *Service) markRetryDueConditionsDirty(ctx context.Context, limit int) er
 			if _, err := s.MarkInventoryFileDirty(ctx, *condition.InventoryFileID, reason); err != nil {
 				return err
 			}
-		} else if condition.CatalogItemID != nil {
+		} else if condition.MetadataItemID != nil {
 			if condition.ConditionType == ConditionProjectionCurrent {
-				if _, err := s.MarkProjectionItemDirty(ctx, *condition.CatalogItemID, reason); err != nil {
+				if _, err := s.MarkProjectionLibraryDirty(ctx, condition.LibraryID, "", reason); err != nil {
 					return err
 				}
-			} else if _, err := s.MarkCatalogItemDirty(ctx, *condition.CatalogItemID, reason); err != nil {
+			} else if _, err := s.MarkMetadataItemDirty(ctx, *condition.MetadataItemID, reason); err != nil {
 				return err
 			}
 		} else if _, err := s.MarkLibraryScopeDirty(ctx, condition.LibraryID, "", reason); err != nil {
@@ -373,7 +357,7 @@ func (s *Service) upsertDirty(ctx context.Context, unit database.IngestDirtyUnit
 			"scope_kind":        unit.ScopeKind,
 			"library_id":        unit.LibraryID,
 			"inventory_file_id": unit.InventoryFileID,
-			"catalog_item_id":   unit.CatalogItemID,
+			"metadata_item_id":  unit.MetadataItemID,
 			"root_path":         strings.TrimSpace(unit.RootPath),
 			"reason":            unit.Reason,
 			"status":            DirtyStatusDirty,
@@ -419,7 +403,7 @@ func (s *Service) bulkUpsertDirty(ctx context.Context, units []database.IngestDi
 			"scope_kind":        gorm.Expr("excluded.scope_kind"),
 			"library_id":        gorm.Expr("excluded.library_id"),
 			"inventory_file_id": gorm.Expr("excluded.inventory_file_id"),
-			"catalog_item_id":   gorm.Expr("excluded.catalog_item_id"),
+			"metadata_item_id":  gorm.Expr("excluded.metadata_item_id"),
 			"root_path":         gorm.Expr("excluded.root_path"),
 			"reason":            gorm.Expr("excluded.reason"),
 			"status":            DirtyStatusDirty,
@@ -476,20 +460,12 @@ func (s *Service) reconcileDirtyUnit(ctx context.Context, unit database.IngestDi
 			return errors.New("dirty inventory unit missing inventory_file_id")
 		}
 		return s.reconcileInventoryFile(ctx, *unit.InventoryFileID, unit.Reason)
-	case ScopeKindCatalogItem:
-		if unit.CatalogItemID == nil || *unit.CatalogItemID == 0 {
-			return errors.New("dirty catalog unit missing catalog_item_id")
-		}
-		return s.reconcileCatalogItem(ctx, *unit.CatalogItemID, unit.Reason)
-	case ScopeKindProjectionItem:
-		if unit.CatalogItemID == nil || *unit.CatalogItemID == 0 {
-			return errors.New("dirty projection unit missing catalog_item_id")
-		}
-		return s.reconcileProjectionItem(ctx, *unit.CatalogItemID)
+	case ScopeKindMetadataItem:
+		return nil
 	case ScopeKindLibrary:
 		return s.expandLibraryScope(ctx, unit)
 	case ScopeKindProjectionLibrary:
-		return s.reconcileProjectionLibrary(ctx, unit.LibraryID, unit.RootPath)
+		return s.reconcileProjectionLibrary(ctx, unit.LibraryID, unit.RootPath, unit.Reason)
 	default:
 		return fmt.Errorf("unsupported ingest dirty scope kind %q", unit.ScopeKind)
 	}
@@ -497,33 +473,33 @@ func (s *Service) reconcileDirtyUnit(ctx context.Context, unit database.IngestDi
 
 func (s *Service) reconcileInventoryFile(ctx context.Context, fileID uint, reason string) error {
 	var file database.InventoryFile
-	var itemIDs []uint
-	var targets []database.CatalogItem
+	var metadataItemIDs []uint
+	var targets []metadataTarget
 	var conditions []conditionInput
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("id = ?", fileID).First(&file).Error; err != nil {
 			return err
 		}
 		unitKey := inventoryFileUnitKey(file.ID)
-		linkedItems, err := linkedCatalogItemIDs(tx, file.ID)
+		linkedMetadataItems, err := linkedMetadataItemIDs(tx, file.ID)
 		if err != nil {
 			return err
 		}
-		assetIDs, err := linkedAssetIDs(tx, file.ID)
+		metadataTargets, err := metadataTargetsForItems(tx, file.LibraryID, linkedMetadataItems)
 		if err != nil {
 			return err
 		}
-		metadataTargets, err := metadataTargetsForItems(tx, linkedItems)
+		resourceIDs, err := linkedResourceIDs(tx, file.ID)
 		if err != nil {
 			return err
 		}
-		derivedConditions := s.inventoryFileConditions(tx, file, unitKey, linkedItems, assetIDs, metadataTargets)
+		derivedConditions := s.inventoryFileConditions(tx, file, unitKey, linkedMetadataItems, resourceIDs, metadataTargets)
 		for _, condition := range derivedConditions {
 			if err := s.setCondition(ctx, tx, condition); err != nil {
 				return err
 			}
 		}
-		itemIDs = linkedItems
+		metadataItemIDs = linkedMetadataItems
 		targets = metadataTargets
 		conditions = derivedConditions
 		return nil
@@ -531,67 +507,15 @@ func (s *Service) reconcileInventoryFile(ctx context.Context, fileID uint, reaso
 	if err != nil {
 		return err
 	}
-	return s.dispatchInventoryFileWork(ctx, file, itemIDs, targets, conditions, reason)
+	return s.dispatchInventoryFileWork(ctx, file, metadataItemIDs, targets, conditions, reason)
 }
 
-func (s *Service) reconcileCatalogItem(ctx context.Context, itemID uint, reason string) error {
-	var item database.CatalogItem
-	var targets []database.CatalogItem
-	var conditions []conditionInput
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("id = ?", itemID).First(&item).Error; err != nil {
-			return err
-		}
-		unitKey := catalogItemUnitKey(item.ID)
-		metadataTargets, err := metadataTargetsForItems(tx, []uint{item.ID})
-		if err != nil {
-			return err
-		}
-		derivedConditions := s.catalogItemConditions(tx, item, unitKey, metadataTargets)
-		for _, condition := range derivedConditions {
-			if err := s.setCondition(ctx, tx, condition); err != nil {
-				return err
-			}
-		}
-		targets = metadataTargets
-		conditions = derivedConditions
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	return s.dispatchCatalogItemWork(ctx, item, targets, conditions, reason)
-}
-
-func (s *Service) reconcileProjectionItem(ctx context.Context, itemID uint) error {
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", itemID).First(&item).Error; err != nil {
-		return err
-	}
-	if err := s.reconcileCatalogItem(ctx, item.ID, "projection_refresh"); err != nil {
-		return err
-	}
-	job, err := s.queueItemProjectionRefresh(ctx, item.ID)
-	if err != nil {
-		return err
-	}
-	return s.markProjectionRefreshQueued(ctx, item, job)
-}
-
-func (s *Service) markProjectionRefreshQueued(ctx context.Context, item database.CatalogItem, job database.Job) error {
-	if job.ID == 0 {
-		return nil
-	}
-	itemID := item.ID
-	condition := conditionInput{UnitKey: catalogItemUnitKey(item.ID), LibraryID: item.LibraryID, CatalogItemID: &itemID, ConditionType: ConditionProjectionCurrent, Status: ConditionStatusPending, Reason: "projection_refresh_queued", Message: "Catalog projection refresh is queued", Severity: SeverityInfo, JobID: &job.ID}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return s.setCondition(ctx, tx, condition)
-	})
-}
-
-func (s *Service) reconcileProjectionLibrary(ctx context.Context, libraryID uint, rootPath string) error {
+func (s *Service) reconcileProjectionLibrary(ctx context.Context, libraryID uint, rootPath string, reason string) error {
 	if libraryID == 0 {
 		return errors.New("library id is required")
+	}
+	if shouldDeferDispatchForActiveScan(reason) && s.hasActiveLibraryScanWorkflow(ctx, libraryID) {
+		return nil
 	}
 	return s.queueLibraryProjectionRefresh(ctx, libraryID, rootPath)
 }
@@ -614,56 +538,79 @@ func (s *Service) expandLibraryScope(ctx context.Context, unit database.IngestDi
 	return nil
 }
 
-func (s *Service) dispatchInventoryFileWork(ctx context.Context, file database.InventoryFile, itemIDs []uint, targets []database.CatalogItem, conditions []conditionInput, reason string) error {
+func (s *Service) dispatchInventoryFileWork(ctx context.Context, file database.InventoryFile, metadataItemIDs []uint, targets []metadataTarget, conditions []conditionInput, reason string) error {
 	if s.workflow == nil || file.ID == 0 || file.DeletedAt != nil || strings.TrimSpace(file.Status) == "missing" || strings.TrimSpace(file.ContentClass) != "video" {
 		return nil
 	}
-	if shouldDispatchCondition(reason, conditions, ConditionMaterialized) && len(itemIDs) == 0 {
-		job, err := s.queueCatalogMaterializeBatch(ctx, file.LibraryID, file.StoragePath, []uint{file.ID})
+	if shouldDeferDispatchForActiveScan(reason) && s.hasActiveLibraryScanWorkflow(ctx, file.LibraryID) {
+		return nil
+	}
+	if shouldDispatchCondition(reason, conditions, ConditionMaterialized) && len(metadataItemIDs) == 0 {
+		if shouldSkipInventoryFileMaterializeDispatch(reason) {
+			return nil
+		}
+		job, err := s.queueRecognitionResolveBatch(ctx, file.LibraryID, file.StoragePath, []uint{file.ID})
 		return s.attachDispatchJob(ctx, conditions, ConditionMaterialized, job, err)
 	}
-	if shouldDispatchCondition(reason, conditions, ConditionProbed) && len(itemIDs) > 0 {
+	if shouldDispatchCondition(reason, conditions, ConditionProbed) && len(metadataItemIDs) > 0 && s.inventoryProbeBatchEnabled(ctx, file.LibraryID) {
 		job, err := s.queueInventoryProbeBatch(ctx, file.LibraryID, file.StoragePath, []uint{file.ID})
 		return s.attachDispatchJob(ctx, conditions, ConditionProbed, job, err)
 	}
 	if shouldDispatchCondition(reason, conditions, ConditionMetadataMatched) {
-		job, err := s.queueCatalogMatchBatch(ctx, file.LibraryID, file.StoragePath, targetIDs(targets))
+		job, err := s.queueMetadataMatchBatch(ctx, file.LibraryID, file.StoragePath, targetIDs(targets))
 		return s.attachDispatchJob(ctx, conditions, ConditionMetadataMatched, job, err)
-	}
-	if shouldDispatchCondition(reason, conditions, ConditionProjectionCurrent) {
-		for _, target := range targets {
-			job, err := s.queueItemProjectionRefresh(ctx, target.ID)
-			if err := s.attachDispatchJob(ctx, conditions, ConditionProjectionCurrent, job, err); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }
 
-func (s *Service) dispatchCatalogItemWork(ctx context.Context, item database.CatalogItem, targets []database.CatalogItem, conditions []conditionInput, reason string) error {
-	if s.workflow == nil || item.ID == 0 || item.DeletedAt != nil {
-		return nil
+func shouldSkipInventoryFileMaterializeDispatch(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	switch reason {
+	case "scanner_discovery", "scanner_refresh", "recognition_materialization_completed", "library_scan_queued", "library_scan_started", "workflow_scan_started", "targeted_refresh_queued", "targeted_refresh_started":
+		return true
+	default:
+		return false
 	}
-	if shouldDispatchCondition(reason, conditions, ConditionMetadataMatched) {
-		job, err := s.queueCatalogMatchBatch(ctx, item.LibraryID, item.Path, targetIDs(targets))
-		return s.attachDispatchJob(ctx, conditions, ConditionMetadataMatched, job, err)
-	}
-	if shouldDispatchCondition(reason, conditions, ConditionProjectionCurrent) {
-		for _, target := range targets {
-			job, err := s.queueItemProjectionRefresh(ctx, target.ID)
-			if err := s.attachDispatchJob(ctx, conditions, ConditionProjectionCurrent, job, err); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
-func (s *Service) queueCatalogMaterializeBatch(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint) (database.Job, error) {
+func shouldDeferDispatchForActiveScan(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	return !strings.HasPrefix(reason, "admin_retry_") && !strings.HasPrefix(reason, "retry_due_")
+}
+
+func (s *Service) hasActiveLibraryScanWorkflow(ctx context.Context, libraryID uint) bool {
+	if s.db == nil || libraryID == 0 {
+		return false
+	}
+	var count int64
+	err := s.db.WithContext(ctx).Model(&database.WorkflowRun{}).
+		Where("library_id = ? AND status IN ? AND reason IN ?", libraryID, []string{workflow.RunStatusQueued, workflow.RunStatusRunning}, activeScanWorkflowReasons()).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+func activeScanWorkflowReasons() []string {
+	return []string{"library_created", "manual_scan", "targeted_refresh", "scheduled_scan", "storage_refresh"}
+}
+
+func (s *Service) inventoryProbeBatchEnabled(ctx context.Context, libraryID uint) bool {
+	if libraryID == 0 {
+		return false
+	}
+	var policy database.LibraryScanPolicy
+	if err := s.db.WithContext(ctx).
+		Select("inventory_probe_batch_enabled").
+		Where("library_id = ?", libraryID).
+		First(&policy).Error; err != nil {
+		return true
+	}
+	return policy.InventoryProbeBatchEnabled
+}
+
+func (s *Service) queueRecognitionResolveBatch(ctx context.Context, libraryID uint, rootPath string, fileIDs []uint) (database.Job, error) {
 	ids := normalizeUintIDs(fileIDs)
 	if s.workflow != nil && len(ids) > 0 {
-		run, err := s.queueWorkflowTask(ctx, libraryID, rootPath, workflow.TaskTypeMaterializeCatalog, workflow.StageMaterialize, CatalogMaterializeBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: ids})
+		run, err := s.queueWorkflowTask(ctx, libraryID, rootPath, workflow.TaskTypeResolveRecognition, workflow.StageMaterialize, RecognitionResolveBatchPayload{LibraryID: libraryID, RootPath: rootPath, FileIDs: ids})
 		return workflowCompatibilityJob(run), err
 	}
 	if len(ids) == 0 {
@@ -684,28 +631,13 @@ func (s *Service) queueInventoryProbeBatch(ctx context.Context, libraryID uint, 
 	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
-func (s *Service) queueCatalogMatchBatch(ctx context.Context, libraryID uint, rootPath string, itemIDs []uint) (database.Job, error) {
+func (s *Service) queueMetadataMatchBatch(ctx context.Context, libraryID uint, rootPath string, itemIDs []uint) (database.Job, error) {
 	ids := normalizeUintIDs(itemIDs)
 	if s.workflow != nil && len(ids) > 0 {
-		run, err := s.queueWorkflowTask(ctx, libraryID, rootPath, workflow.TaskTypeMatchMetadata, workflow.StageMetadataMatch, CatalogMatchBatchPayload{LibraryID: libraryID, RootPath: rootPath, ItemIDs: ids})
+		run, err := s.queueWorkflowTask(ctx, libraryID, rootPath, workflow.TaskTypeMatchMetadata, workflow.StageMetadataMatch, MetadataMatchBatchPayload{LibraryID: libraryID, RootPath: rootPath, MetadataItemIDs: ids})
 		return workflowCompatibilityJob(run), err
 	}
 	if len(ids) == 0 {
-		return database.Job{}, nil
-	}
-	return database.Job{}, fmt.Errorf("workflow service unavailable")
-}
-
-func (s *Service) queueItemProjectionRefresh(ctx context.Context, itemID uint) (database.Job, error) {
-	if s.workflow != nil && itemID != 0 {
-		var item database.CatalogItem
-		if err := s.db.WithContext(ctx).First(&item, itemID).Error; err != nil {
-			return database.Job{}, err
-		}
-		run, err := s.queueWorkflowTask(ctx, item.LibraryID, item.Path, workflow.TaskTypeRefreshProjection, workflow.StageProjection, itemProjectionRefreshPayload{ItemID: itemID})
-		return workflowCompatibilityJob(run), err
-	}
-	if itemID == 0 {
 		return database.Job{}, nil
 	}
 	return database.Job{}, fmt.Errorf("workflow service unavailable")
@@ -807,7 +739,7 @@ func shouldDispatchCondition(reason string, conditions []conditionInput, conditi
 	return false
 }
 
-func targetIDs(targets []database.CatalogItem) []uint {
+func targetIDs(targets []metadataTarget) []uint {
 	ids := make([]uint, 0, len(targets))
 	for _, target := range targets {
 		ids = append(ids, target.ID)
@@ -835,7 +767,7 @@ func normalizeUintIDs(ids []uint) []uint {
 	return result
 }
 
-func (s *Service) inventoryFileConditions(tx *gorm.DB, file database.InventoryFile, unitKey string, itemIDs []uint, assetIDs []uint, targets []database.CatalogItem) []conditionInput {
+func (s *Service) inventoryFileConditions(tx *gorm.DB, file database.InventoryFile, unitKey string, metadataItemIDs []uint, resourceIDs []uint, targets []metadataTarget) []conditionInput {
 	fileID := file.ID
 	base := conditionInput{UnitKey: unitKey, LibraryID: file.LibraryID, InventoryFileID: &fileID}
 	conditions := make([]conditionInput, 0, 6)
@@ -872,7 +804,7 @@ func (s *Service) inventoryFileConditions(tx *gorm.DB, file database.InventoryFi
 		return conditions
 	}
 	conditions = append(conditions, base.with(ConditionVisible, ConditionStatusTrue, "available", "Discovered media is visible", SeverityInfo))
-	if len(itemIDs) == 0 {
+	if len(metadataItemIDs) == 0 {
 		conditions = append(conditions,
 			base.with(ConditionMaterialized, ConditionStatusPending, "awaiting_materialization", "Media is waiting for catalog materialization", SeverityInfo),
 			base.with(ConditionProbed, ConditionStatusPending, "awaiting_materialization", "Media probe will run after materialization", SeverityInfo),
@@ -881,8 +813,8 @@ func (s *Service) inventoryFileConditions(tx *gorm.DB, file database.InventoryFi
 		)
 	} else {
 		conditions = append(conditions,
-			base.with(ConditionMaterialized, ConditionStatusTrue, "linked", "Media is linked to catalog", SeverityInfo),
-			s.probeCondition(tx, base, assetIDs),
+			base.with(ConditionMaterialized, ConditionStatusTrue, "linked", "Media is linked to metadata", SeverityInfo),
+			s.probeCondition(tx, base, resourceIDs),
 			s.metadataCondition(tx, base, targets),
 			s.projectionCondition(tx, base, targets),
 		)
@@ -891,32 +823,19 @@ func (s *Service) inventoryFileConditions(tx *gorm.DB, file database.InventoryFi
 	return conditions
 }
 
-func (s *Service) catalogItemConditions(tx *gorm.DB, item database.CatalogItem, unitKey string, targets []database.CatalogItem) []conditionInput {
-	itemID := item.ID
-	base := conditionInput{UnitKey: unitKey, LibraryID: item.LibraryID, CatalogItemID: &itemID}
-	conditions := []conditionInput{
-		base.with(ConditionVisible, visibleStatus(item.AvailabilityStatus), visibleReason(item.AvailabilityStatus), visibleMessage(item.AvailabilityStatus), visibleSeverity(item.AvailabilityStatus)),
-		base.with(ConditionMaterialized, ConditionStatusTrue, "catalog_item_exists", "Catalog item exists", SeverityInfo),
-		s.metadataCondition(tx, base, targets),
-		s.projectionCondition(tx, base, targets),
+func (s *Service) probeCondition(tx *gorm.DB, base conditionInput, resourceIDs []uint) conditionInput {
+	if len(resourceIDs) == 0 {
+		return base.with(ConditionProbed, ConditionStatusPending, "awaiting_resource", "Media probe is waiting for a resource", SeverityInfo)
 	}
-	conditions = append(conditions, s.reviewCondition(tx, base, 0, targets))
-	return conditions
-}
-
-func (s *Service) probeCondition(tx *gorm.DB, base conditionInput, assetIDs []uint) conditionInput {
-	if len(assetIDs) == 0 {
-		return base.with(ConditionProbed, ConditionStatusPending, "awaiting_asset", "Media probe is waiting for an asset", SeverityInfo)
-	}
-	var assets []database.MediaAsset
-	if err := tx.Where("id IN ? AND deleted_at IS NULL", assetIDs).Find(&assets).Error; err != nil || len(assets) == 0 {
-		return base.with(ConditionProbed, ConditionStatusUnknown, "asset_lookup_failed", "Probe status cannot be determined", SeverityWarning)
+	var resources []database.Resource
+	if err := tx.Where("id IN ? AND deleted_at IS NULL", resourceIDs).Find(&resources).Error; err != nil || len(resources) == 0 {
+		return base.with(ConditionProbed, ConditionStatusUnknown, "resource_lookup_failed", "Probe status cannot be determined", SeverityWarning)
 	}
 	ready := 0
 	unavailable := 0
 	failed := 0
-	for _, asset := range assets {
-		switch strings.TrimSpace(asset.ProbeStatus) {
+	for _, resource := range resources {
+		switch strings.TrimSpace(resource.ProbeStatus) {
 		case "ready":
 			ready++
 		case "unavailable":
@@ -928,16 +847,16 @@ func (s *Service) probeCondition(tx *gorm.DB, base conditionInput, assetIDs []ui
 	switch {
 	case failed > 0:
 		return base.with(ConditionProbed, ConditionStatusFailed, "probe_failed", "Media probe failed", SeverityError)
-	case ready == len(assets):
+	case ready == len(resources):
 		return base.with(ConditionProbed, ConditionStatusTrue, "ready", "Media probe completed", SeverityInfo)
-	case ready+unavailable == len(assets):
+	case ready+unavailable == len(resources):
 		return base.with(ConditionProbed, ConditionStatusSkipped, "unavailable", "Media probe is unavailable for this source", SeverityWarning)
 	default:
 		return base.with(ConditionProbed, ConditionStatusPending, "probe_pending", "Media probe is pending", SeverityInfo)
 	}
 }
 
-func (s *Service) metadataCondition(tx *gorm.DB, base conditionInput, targets []database.CatalogItem) conditionInput {
+func (s *Service) metadataCondition(tx *gorm.DB, base conditionInput, targets []metadataTarget) conditionInput {
 	if len(targets) == 0 {
 		return base.with(ConditionMetadataMatched, ConditionStatusPending, "awaiting_materialization", "Metadata matching is waiting for catalog materialization", SeverityInfo)
 	}
@@ -976,29 +895,19 @@ func (s *Service) metadataCondition(tx *gorm.DB, base conditionInput, targets []
 	}
 }
 
-func (s *Service) projectionCondition(tx *gorm.DB, base conditionInput, targets []database.CatalogItem) conditionInput {
+func (s *Service) projectionCondition(tx *gorm.DB, base conditionInput, targets []metadataTarget) conditionInput {
+	_ = tx
 	if len(targets) == 0 {
 		return base.with(ConditionProjectionCurrent, ConditionStatusSkipped, "inventory_visible", "Catalog projection is not required yet", SeverityInfo)
 	}
-	ids := make([]uint, 0, len(targets))
-	for _, target := range targets {
-		ids = append(ids, target.ID)
-	}
-	var count int64
-	if err := tx.Model(&database.CatalogSearchDocument{}).Where("item_id IN ?", ids).Count(&count).Error; err != nil {
-		return base.with(ConditionProjectionCurrent, ConditionStatusUnknown, "projection_lookup_failed", "Projection state cannot be determined", SeverityWarning)
-	}
-	if count == int64(len(ids)) {
-		return base.with(ConditionProjectionCurrent, ConditionStatusTrue, "current", "Catalog projection is current", SeverityInfo)
-	}
-	return base.with(ConditionProjectionCurrent, ConditionStatusPending, "projection_pending", "Catalog projection refresh is pending", SeverityInfo)
+	return base.with(ConditionProjectionCurrent, ConditionStatusSkipped, "metadata_projection_managed", "Metadata projection is managed by resource links", SeverityInfo)
 }
 
-func (s *Service) reviewCondition(tx *gorm.DB, base conditionInput, fileID uint, targets []database.CatalogItem) conditionInput {
+func (s *Service) reviewCondition(tx *gorm.DB, base conditionInput, fileID uint, targets []metadataTarget) conditionInput {
 	for _, item := range targets {
 		itemID := item.ID
 		itemBase := base
-		itemBase.CatalogItemID = &itemID
+		itemBase.MetadataItemID = &itemID
 		switch strings.TrimSpace(item.GovernanceStatus) {
 		case "needs_review":
 			return itemBase.with(ConditionReviewRequired, ConditionStatusReviewRequired, "metadata_needs_review", "Metadata match requires review", SeverityWarning)
@@ -1012,12 +921,14 @@ func (s *Service) reviewCondition(tx *gorm.DB, base conditionInput, fileID uint,
 	if fileID != 0 {
 		var count int64
 		if err := tx.Model(&database.ClassificationDecision{}).
-			Where("classification_decisions.inventory_file_id = ? AND classification_decisions.status IN ?", fileID, []string{"provisional", "review_required"}).
-			Where("NOT EXISTS (?)", tx.Model(&database.CatalogItem{}).
+			Where("classification_decisions.inventory_file_id = ? AND classification_decisions.status = ?", fileID, "review_required").
+			Where("NOT EXISTS (?)", tx.Model(&database.MetadataItem{}).
 				Select("1").
-				Where("catalog_items.id = classification_decisions.item_id").
-				Where("catalog_items.deleted_at IS NULL").
-				Where("catalog_items.governance_status IN ?", []string{"matched", "manual", "locked"})).
+				Joins("JOIN resource_metadata_links ON resource_metadata_links.metadata_item_id = metadata_items.id").
+				Joins("JOIN resource_files ON resource_files.resource_id = resource_metadata_links.resource_id").
+				Where("resource_files.inventory_file_id = ?", fileID).
+				Where("metadata_items.deleted_at IS NULL").
+				Where("metadata_items.governance_status IN ?", []string{"matched", "manual", "locked"})).
 			Count(&count).Error; err == nil && count > 0 {
 			return base.with(ConditionReviewRequired, ConditionStatusReviewRequired, "classification_needs_review", "Classification requires review", SeverityWarning)
 		}
@@ -1031,7 +942,7 @@ func (s *Service) hasMetadataNoCandidateOperation(tx *gorm.DB, itemID uint) bool
 	}
 	var count int64
 	if err := tx.Model(&database.MetadataOperation{}).
-		Where("target_item_id = ? AND operation = ? AND status = ?", itemID, "match", "no_candidate").
+		Where("target_metadata_item_id = ? AND operation = ? AND status = ?", itemID, "match", "no_candidate").
 		Count(&count).Error; err != nil {
 		return false
 	}
@@ -1124,7 +1035,7 @@ func (s *Service) setCondition(ctx context.Context, tx *gorm.DB, input condition
 		UnitKey:             input.UnitKey,
 		LibraryID:           input.LibraryID,
 		InventoryFileID:     input.InventoryFileID,
-		CatalogItemID:       input.CatalogItemID,
+		MetadataItemID:      input.MetadataItemID,
 		ConditionType:       input.ConditionType,
 		Status:              defaultString(input.Status, ConditionStatusUnknown),
 		Reason:              strings.TrimSpace(input.Reason),
@@ -1150,7 +1061,7 @@ func (s *Service) setCondition(ctx context.Context, tx *gorm.DB, input condition
 		return nil
 	}
 	expires := now.Add(DefaultEventRetention)
-	event := database.IngestEvent{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, CatalogItemID: condition.CatalogItemID, ConditionID: &condition.ID, ConditionType: condition.ConditionType, EventType: EventConditionChanged, Status: condition.Status, Reason: condition.Reason, Message: condition.Message, JobID: condition.JobID, MetadataOperationID: condition.MetadataOperationID, ProviderInstanceID: condition.ProviderInstanceID, DetailsJSON: condition.DetailsJSON, ExpiresAt: &expires}
+	event := database.IngestEvent{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, MetadataItemID: condition.MetadataItemID, ConditionID: &condition.ID, ConditionType: condition.ConditionType, EventType: EventConditionChanged, Status: condition.Status, Reason: condition.Reason, Message: condition.Message, JobID: condition.JobID, MetadataOperationID: condition.MetadataOperationID, ProviderInstanceID: condition.ProviderInstanceID, DetailsJSON: condition.DetailsJSON, ExpiresAt: &expires}
 	return tx.WithContext(ctx).Create(&event).Error
 }
 
@@ -1166,35 +1077,34 @@ func (s *Service) markDirtyFailed(ctx context.Context, unitID uint, err error) e
 	return s.db.WithContext(ctx).Model(&database.IngestDirtyUnit{}).Where("id = ?", unitID).Updates(map[string]any{"status": DirtyStatusFailed, "claimed_at": nil, "last_error": message}).Error
 }
 
-func linkedCatalogItemIDs(tx *gorm.DB, fileID uint) ([]uint, error) {
+func linkedMetadataItemIDs(tx *gorm.DB, fileID uint) ([]uint, error) {
 	var ids []uint
-	err := tx.Table("asset_items").Distinct("asset_items.item_id").
-		Joins("JOIN asset_files ON asset_files.asset_id = asset_items.asset_id").
-		Joins("JOIN media_assets ON media_assets.id = asset_items.asset_id AND media_assets.deleted_at IS NULL").
-		Joins("JOIN catalog_items ON catalog_items.id = asset_items.item_id AND catalog_items.deleted_at IS NULL").
-		Where("asset_files.file_id = ?", fileID).
-		Order("asset_items.item_id asc").
-		Pluck("asset_items.item_id", &ids).Error
+	err := tx.Model(&database.ResourceMetadataLink{}).Distinct("resource_metadata_links.metadata_item_id").
+		Joins("JOIN resource_files ON resource_files.resource_id = resource_metadata_links.resource_id").
+		Joins("JOIN metadata_items ON metadata_items.id = resource_metadata_links.metadata_item_id AND metadata_items.deleted_at IS NULL").
+		Where("resource_files.inventory_file_id = ?", fileID).
+		Order("resource_metadata_links.metadata_item_id asc").
+		Pluck("resource_metadata_links.metadata_item_id", &ids).Error
 	return ids, err
 }
 
-func linkedAssetIDs(tx *gorm.DB, fileID uint) ([]uint, error) {
+func linkedResourceIDs(tx *gorm.DB, fileID uint) ([]uint, error) {
 	var ids []uint
-	err := tx.Model(&database.AssetFile{}).Distinct("asset_id").Where("file_id = ?", fileID).Order("asset_id asc").Pluck("asset_id", &ids).Error
+	err := tx.Model(&database.ResourceFile{}).Distinct("resource_id").Where("inventory_file_id = ?", fileID).Order("resource_id asc").Pluck("resource_id", &ids).Error
 	return ids, err
 }
 
-func metadataTargetsForItems(tx *gorm.DB, itemIDs []uint) ([]database.CatalogItem, error) {
+func metadataTargetsForItems(tx *gorm.DB, libraryID uint, itemIDs []uint) ([]metadataTarget, error) {
 	if len(itemIDs) == 0 {
 		return nil, nil
 	}
-	var items []database.CatalogItem
+	var items []database.MetadataItem
 	if err := tx.Where("id IN ? AND deleted_at IS NULL", itemIDs).Find(&items).Error; err != nil {
 		return nil, err
 	}
 	targetIDs := make(map[uint]struct{}, len(items))
 	for _, item := range items {
-		switch strings.TrimSpace(item.Type) {
+		switch strings.TrimSpace(item.ItemType) {
 		case "movie", "series":
 			targetIDs[item.ID] = struct{}{}
 		case "season", "episode":
@@ -1210,19 +1120,19 @@ func metadataTargetsForItems(tx *gorm.DB, itemIDs []uint) ([]database.CatalogIte
 	for id := range targetIDs {
 		ids = append(ids, id)
 	}
-	var targets []database.CatalogItem
-	if err := tx.Where("id IN ? AND deleted_at IS NULL", ids).Order("id asc").Find(&targets).Error; err != nil {
+	var targetItems []database.MetadataItem
+	if err := tx.Where("id IN ? AND deleted_at IS NULL", ids).Order("id asc").Find(&targetItems).Error; err != nil {
 		return nil, err
+	}
+	targets := make([]metadataTarget, 0, len(targetItems))
+	for _, item := range targetItems {
+		targets = append(targets, metadataTarget{ID: item.ID, LibraryID: libraryID, ItemType: item.ItemType, GovernanceStatus: item.GovernanceStatus})
 	}
 	return targets, nil
 }
 
 func inventoryFileUnitKey(fileID uint) string {
 	return fmt.Sprintf("inventory_file:%d", fileID)
-}
-
-func catalogItemUnitKey(itemID uint) string {
-	return fmt.Sprintf("catalog_item:%d", itemID)
 }
 
 func (input conditionInput) with(conditionType string, status string, reason string, message string, severity string) conditionInput {

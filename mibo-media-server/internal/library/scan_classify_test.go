@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
@@ -352,6 +353,19 @@ func TestContentShapeMovieAssignmentUsesParentFolderForGenericMovieName(t *testi
 	}
 }
 
+func TestContentShapeMovieAssignmentUsesParentFolderWhenFilenameHasNoTitleTokens(t *testing.T) {
+	t.Parallel()
+
+	object := storage.Object{Path: "/library/Dune Part Two (2024)/01.mkv"}
+	classified, ok := classifiedMediaFromContentShapeAssignment(contentShapeDirectoryPlan{Shape: contentShapeMovieFolder, Confidence: 0.9, ReviewState: "auto"}, contentShapeFileAssignment{AssignmentType: contentShapeAssignmentMovie}, object, newFilenameTokenProfileCache())
+	if !ok || classified.Type != "movie" {
+		t.Fatalf("expected movie classification, got ok=%v classified=%#v", ok, classified)
+	}
+	if classified.Title != "Dune Part Two" {
+		t.Fatalf("expected parent folder movie title for numeric filename, got %q", classified.Title)
+	}
+}
+
 func TestContentShapeAssignmentInfersEpisodeFromSeriesPrefixAndSeasonFolder(t *testing.T) {
 	t.Parallel()
 
@@ -508,6 +522,24 @@ func TestFastDecisionStatusUsesConservativeThresholds(t *testing.T) {
 	}
 	if got := classifyFastDecisionStatus(0.4, nil, defaultFastClassificationThresholds); got != scanDecisionStatusReviewRequired {
 		t.Fatalf("expected low confidence review required, got %q", got)
+	}
+}
+
+func TestMovieExtraLinkRoleMapsDirectlyToResourceRoles(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"/library/Movie/trailer.mkv":           database.ResourceLinkRoleTrailer,
+		"/library/Movie/sample.mkv":            database.ResourceLinkRoleSample,
+		"/library/Movie/PV01.mp4":              database.ResourceLinkRoleExtra,
+		"/library/Movie/featurette.mkv":        database.ResourceLinkRoleExtra,
+		"/library/Movie/behind the scenes.mkv": database.ResourceLinkRoleExtra,
+		"/library/Movie/Movie.2024.2160p.mkv":  "",
+	}
+	for input, wantRole := range cases {
+		if got := movieExtraLinkRole(input); got != wantRole {
+			t.Fatalf("expected %q to map to %q, got %q", input, wantRole, got)
+		}
 	}
 }
 

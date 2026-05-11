@@ -27,8 +27,8 @@ func TestContentShapeReviewDecisionAndScopedCorrectionRule(t *testing.T) {
 	if err := db.WithContext(ctx).Where("library_id = ? AND decision_type = ?", scope.LibraryID, "content_shape_plan").First(&decision).Error; err != nil {
 		t.Fatalf("load review decision: %v", err)
 	}
-	if decision.Status != "review_required" || decision.AffectedFilesJSON == "" || decision.AlternativesJSON == "" {
-		t.Fatalf("expected review-required decision with evidence, got %#v", decision)
+	if decision.Status != "provisional" || decision.AffectedFilesJSON == "" || decision.AlternativesJSON == "" {
+		t.Fatalf("expected provisional decision with evidence, got %#v", decision)
 	}
 	if err := saveContentShapeCorrectionRule(ctx, db, scope, "Confirm absolute pack", contentShapeAbsoluteEpisodePack, map[string]any{"source": "user_scoped_rule"}, nil); err != nil {
 		t.Fatalf("save correction rule: %v", err)

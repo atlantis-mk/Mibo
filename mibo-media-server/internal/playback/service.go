@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
-	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/probe"
@@ -22,8 +20,8 @@ type Service struct {
 }
 
 type PlaybackSource struct {
-	ItemID         uint             `json:"item_id,omitempty"`
-	AssetID        uint             `json:"asset_id,omitempty"`
+	MetadataItemID uint             `json:"metadata_item_id,omitempty"`
+	ResourceID     uint             `json:"resource_id,omitempty"`
 	FileID         uint             `json:"file_id,omitempty"`
 	Title          string           `json:"title"`
 	Type           string           `json:"type"`
@@ -32,6 +30,9 @@ type PlaybackSource struct {
 	Direct         bool             `json:"direct"`
 	SizeBytes      int64            `json:"size_bytes"`
 	RuntimeSeconds *int             `json:"runtime_seconds,omitempty"`
+	SegmentIndex   int              `json:"segment_index,omitempty"`
+	StartSeconds   *float64         `json:"start_seconds,omitempty"`
+	EndSeconds     *float64         `json:"end_seconds,omitempty"`
 	QualityLabel   string           `json:"quality_label,omitempty"`
 	Edition        string           `json:"edition,omitempty"`
 	VideoCodec     string           `json:"video_codec,omitempty"`
@@ -46,7 +47,6 @@ type PlaybackSource struct {
 
 type FileLink struct {
 	FileID      uint            `json:"file_id,omitempty"`
-	AssetID     uint            `json:"asset_id,omitempty"`
 	StoragePath string          `json:"storage_path"`
 	URL         string          `json:"url"`
 	Checks      []PlaybackCheck `json:"checks"`
@@ -88,7 +88,17 @@ func (s *Service) Status() string {
 }
 
 func (s *Service) GetPlaybackSource(ctx context.Context, req PlaybackRequest) (PlaybackSource, error) {
-	return s.getCatalogPlaybackSource(ctx, req)
+	if req.MetadataItemID == 0 {
+		req.MetadataItemID = req.ItemID
+	}
+	if req.MetadataItemID != 0 {
+		if source, ok, err := s.getResourcePlaybackSource(ctx, req); err != nil {
+			return PlaybackSource{}, err
+		} else if ok {
+			return source, nil
+		}
+	}
+	return PlaybackSource{}, fmt.Errorf("metadata item %d has no resource playback context", req.MetadataItemID)
 }
 
 func (s *Service) GetInventoryFilePlaybackSource(ctx context.Context, fileID uint, clientProfile ClientProfile) (PlaybackSource, error) {
@@ -138,129 +148,16 @@ func (s *Service) GetInventoryFilePlaybackSource(ctx context.Context, fileID uin
 	return source, nil
 }
 
-type catalogPlaybackCandidate struct {
-	Asset   database.MediaAsset
-	File    database.InventoryFile
-	Files   map[uint]database.InventoryFile
-	Streams []database.MediaStream
-}
-
-func (s *Service) getCatalogPlaybackSource(ctx context.Context, req PlaybackRequest) (PlaybackSource, error) {
-	var item database.CatalogItem
-	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", req.ItemID).First(&item).Error; err != nil {
-		return PlaybackSource{}, err
-	}
-	if item.Type == "series" {
-		target, err := seriesplayback.Select(ctx, s.db, item.ID, req.UserID)
-		if err != nil {
-			return PlaybackSource{}, err
-		}
-		if target == nil {
-			return PlaybackSource{
-				ItemID:   item.ID,
-				Title:    item.Title,
-				Type:     item.Type,
-				Playable: false,
-				Decision: PlaybackDecision{Kind: "unplayable", ClientProfile: req.ClientProfile, SelectedBy: "series_target", Reasons: []DecisionReason{{Code: "series_has_no_playable_episode", Category: "availability", Message: "series has no locally playable episode target"}}},
-			}, nil
-		}
-		if target.AssetID != nil && req.AssetID == 0 {
-			req.AssetID = *target.AssetID
-		}
-		req.ItemID = target.EpisodeID
-		item = database.CatalogItem{}
-		if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", req.ItemID).First(&item).Error; err != nil {
-			return PlaybackSource{}, fmt.Errorf("load resolved series episode: %w", err)
-		}
-	}
-	candidates, err := s.loadCatalogPlaybackCandidates(ctx, req.ItemID)
-	if err != nil {
-		return PlaybackSource{}, fmt.Errorf("load catalog playback candidates: %w", err)
-	}
-	if len(candidates) == 0 {
-		return PlaybackSource{
-			ItemID:   item.ID,
-			Title:    item.Title,
-			Type:     item.Type,
-			Playable: false,
-			Decision: PlaybackDecision{Kind: "unplayable", ClientProfile: req.ClientProfile, SelectedBy: "no_asset", Reasons: []DecisionReason{{Code: "no_available_asset", Category: "availability", Message: "no playable asset is linked to this catalog item"}}},
-		}, nil
-	}
-
-	selected, selectedBy, ok := selectCatalogPlaybackCandidate(candidates, req.AssetID)
-	if !ok {
-		return PlaybackSource{
-			ItemID:   item.ID,
-			Title:    item.Title,
-			Type:     item.Type,
-			Playable: false,
-			Decision: PlaybackDecision{Kind: "unplayable", ClientProfile: req.ClientProfile, SelectedBy: "asset_filter", Reasons: []DecisionReason{{Code: "asset_not_available", Category: "availability", Message: "requested asset is not linked to this catalog item"}}},
-		}, nil
-	}
-
-	fileLink, err := s.GetInventoryFileLink(ctx, selected.File.ID)
-	if err != nil {
-		return PlaybackSource{}, fmt.Errorf("load inventory file link: %w", err)
-	}
-	pseudoFile, audioTracks, subtitleTracks := inventoryCandidateMediaInfo(selected)
-	subtitlePolicy, err := s.subtitlePolicy(ctx, item.LibraryID)
-	if err != nil {
-		return PlaybackSource{}, err
-	}
-	subtitleTracks = s.applySubtitlePolicy(s.enrichExternalSubtitleTracks(ctx, subtitleTracks), subtitlePolicy)
-	checks := append([]PlaybackCheck{}, fileLink.Checks...)
-	checks = append(checks, buildMediaInfoCheck(pseudoFile))
-	directDecision := assessDirectPlay(pseudoFile, req.ClientProfile)
-	if !fileLink.Playable {
-		directDecision.direct = false
-		directDecision.reasons = append([]DecisionReason{{Code: "source_unavailable", Category: "availability", Message: "media source is unavailable"}}, directDecision.reasons...)
-	}
-
-	base := PlaybackSource{
-		ItemID:         item.ID,
-		AssetID:        selected.Asset.ID,
-		FileID:         selected.File.ID,
-		Title:          item.Title,
-		Type:           item.Type,
-		Container:      selected.File.Container,
-		URL:            fileLink.URL,
-		Direct:         fileLink.Playable,
-		SizeBytes:      selected.File.SizeBytes,
-		RuntimeSeconds: item.RuntimeSeconds,
-		QualityLabel:   selected.Asset.QualityLabel,
-		Edition:        selected.Asset.Edition,
-		VideoCodec:     pseudoFile.VideoCodec,
-		Width:          pseudoFile.Width,
-		Height:         pseudoFile.Height,
-		AudioTracks:    audioTracks,
-		SubtitleTracks: subtitleTracks,
-		Checks:         checks,
-		Playable:       fileLink.Playable,
-	}
-	if base.Playable {
-		base.Decision = PlaybackDecision{Kind: "direct", ClientProfile: req.ClientProfile, SelectedBy: selectedBy, Reasons: directDecision.reasons}
-		return base, nil
-	}
-	base.URL = ""
-	base.Direct = false
-	base.Decision = PlaybackDecision{Kind: "unplayable", ClientProfile: req.ClientProfile, SelectedBy: selectedBy, Reasons: append(append([]DecisionReason{}, directDecision.reasons...), DecisionReason{Code: "no_supported_playback_path", Category: "fallback", Message: "no supported playback path is available for this asset"})}
-	return base, nil
-}
-
-func (s *Service) GetAssetLink(ctx context.Context, assetID uint) (FileLink, error) {
-	var link database.AssetFile
-	if err := s.db.WithContext(ctx).
-		Where("asset_id = ? AND role = ?", assetID, "source").
-		Order("part_index asc, id asc").
-		First(&link).Error; err != nil {
-		return FileLink{}, err
-	}
-	fileLink, err := s.GetInventoryFileLink(ctx, link.FileID)
-	if err != nil {
-		return FileLink{}, err
-	}
-	fileLink.AssetID = assetID
-	return fileLink, nil
+type playbackFileCandidate struct {
+	ID           uint
+	Status       string
+	Kind         string
+	ProbeStatus  string
+	QualityLabel string
+	Edition      string
+	File         database.InventoryFile
+	Files        map[uint]database.InventoryFile
+	Streams      []database.MediaStream
 }
 
 func (s *Service) GetInventoryFileLink(ctx context.Context, fileID uint) (FileLink, error) {
@@ -287,8 +184,22 @@ func (s *Service) GetInventoryFileLink(ctx context.Context, fileID uint) (FileLi
 		return FileLink{FileID: file.ID, StoragePath: file.StoragePath, Checks: checks, Playable: false}, nil
 	}
 	checks = append(checks, PlaybackCheck{Code: "file_exists", Status: "pass", Message: "inventory file resolved"})
-	checks = append(checks, PlaybackCheck{Code: "file_access", Status: "pass", Message: "inventory stream endpoint available"})
-	return FileLink{FileID: file.ID, StoragePath: file.StoragePath, URL: fmt.Sprintf("/api/v1/inventory-files/%d/stream", file.ID), Checks: checks, Playable: isPlayable(checks)}, nil
+	checks = append(checks, PlaybackCheck{Code: "file_access", Status: "pass", Message: "inventory playback URL resolved"})
+	return FileLink{FileID: file.ID, StoragePath: file.StoragePath, URL: s.inventoryPlaybackURL(ctx, provider, file, object), Checks: checks, Playable: isPlayable(checks)}, nil
+}
+
+func (s *Service) inventoryPlaybackURL(ctx context.Context, provider storage.Provider, file database.InventoryFile, object storage.Object) string {
+	if provider != nil && provider.Name() != "local" {
+		if rawURL := strings.TrimSpace(object.RawURL); rawURL != "" {
+			return rawURL
+		}
+		if link, err := provider.Link(ctx, storage.LinkRequest{Path: file.StoragePath}); err == nil {
+			if url := strings.TrimSpace(link.URL); url != "" {
+				return url
+			}
+		}
+	}
+	return fmt.Sprintf("/api/v1/inventory-files/%d/stream", file.ID)
 }
 
 func (s *Service) providerForInventoryFile(ctx context.Context, fileID uint) (storage.Provider, error) {
@@ -309,148 +220,8 @@ func (s *Service) providerForInventoryFile(ctx context.Context, fileID uint) (st
 	return s.storage.BuildForSource(source)
 }
 
-func (s *Service) loadCatalogPlaybackCandidates(ctx context.Context, itemID uint) ([]catalogPlaybackCandidate, error) {
-	var links []database.AssetItem
-	if err := s.db.WithContext(ctx).
-		Where("item_id = ?", itemID).
-		Order("role asc, segment_index asc, id asc").
-		Find(&links).Error; err != nil {
-		return nil, err
-	}
-	if len(links) == 0 {
-		return nil, nil
-	}
-	assetIDs := make([]uint, 0, len(links))
-	seen := map[uint]struct{}{}
-	for _, link := range links {
-		if _, ok := seen[link.AssetID]; ok {
-			continue
-		}
-		seen[link.AssetID] = struct{}{}
-		assetIDs = append(assetIDs, link.AssetID)
-	}
-	var assets []database.MediaAsset
-	if err := s.db.WithContext(ctx).Where("id IN ? AND deleted_at IS NULL", assetIDs).Find(&assets).Error; err != nil {
-		return nil, err
-	}
-	assetByID := make(map[uint]database.MediaAsset, len(assets))
-	for _, asset := range assets {
-		assetByID[asset.ID] = asset
-	}
-	var assetFiles []database.AssetFile
-	if err := s.db.WithContext(ctx).
-		Where("asset_id IN ? AND role IN ?", assetIDs, []string{inventory.FileRoleSource, inventory.FileRoleSubtitle}).
-		Order("asset_id asc, role asc, part_index asc, id asc").
-		Find(&assetFiles).Error; err != nil {
-		return nil, err
-	}
-	fileIDs := make([]uint, 0, len(assetFiles))
-	firstFileByAsset := make(map[uint]uint, len(assetFiles))
-	fileIDsByAsset := make(map[uint][]uint, len(assetFiles))
-	fileIDSet := make(map[uint]struct{}, len(assetFiles))
-	for _, link := range assetFiles {
-		if link.Role == inventory.FileRoleSource {
-			if _, ok := firstFileByAsset[link.AssetID]; !ok {
-				firstFileByAsset[link.AssetID] = link.FileID
-			}
-		}
-		fileIDsByAsset[link.AssetID] = append(fileIDsByAsset[link.AssetID], link.FileID)
-		if _, ok := fileIDSet[link.FileID]; !ok {
-			fileIDSet[link.FileID] = struct{}{}
-			fileIDs = append(fileIDs, link.FileID)
-		}
-	}
-	var files []database.InventoryFile
-	if err := s.db.WithContext(ctx).Where("id IN ? AND deleted_at IS NULL", fileIDs).Find(&files).Error; err != nil {
-		return nil, err
-	}
-	fileByID := make(map[uint]database.InventoryFile, len(files))
-	for _, file := range files {
-		fileByID[file.ID] = file
-	}
-	var streams []database.MediaStream
-	if len(fileIDs) > 0 {
-		if err := s.db.WithContext(ctx).Where("file_id IN ?", fileIDs).Order("file_id asc, stream_index asc").Find(&streams).Error; err != nil {
-			return nil, err
-		}
-	}
-	streamsByFile := make(map[uint][]database.MediaStream, len(fileIDs))
-	for _, stream := range streams {
-		streamsByFile[stream.FileID] = append(streamsByFile[stream.FileID], stream)
-	}
-	result := make([]catalogPlaybackCandidate, 0, len(assetIDs))
-	for _, assetID := range assetIDs {
-		asset, ok := assetByID[assetID]
-		if !ok {
-			continue
-		}
-		fileID, ok := firstFileByAsset[assetID]
-		if !ok {
-			continue
-		}
-		file, ok := fileByID[fileID]
-		if !ok {
-			continue
-		}
-		candidateFiles := make(map[uint]database.InventoryFile)
-		candidateStreams := make([]database.MediaStream, 0)
-		for _, linkedFileID := range fileIDsByAsset[assetID] {
-			linkedFile, ok := fileByID[linkedFileID]
-			if !ok {
-				continue
-			}
-			candidateFiles[linkedFileID] = linkedFile
-			candidateStreams = append(candidateStreams, streamsByFile[linkedFileID]...)
-		}
-		result = append(result, catalogPlaybackCandidate{Asset: asset, File: file, Files: candidateFiles, Streams: candidateStreams})
-	}
-	sort.SliceStable(result, func(i, j int) bool {
-		left := catalogPlaybackRank(result[i])
-		right := catalogPlaybackRank(result[j])
-		if left != right {
-			return left > right
-		}
-		return result[i].Asset.ID < result[j].Asset.ID
-	})
-	return result, nil
-}
-
-func selectCatalogPlaybackCandidate(candidates []catalogPlaybackCandidate, preferredAssetID uint) (catalogPlaybackCandidate, string, bool) {
-	if preferredAssetID != 0 {
-		for _, candidate := range candidates {
-			if candidate.Asset.ID == preferredAssetID {
-				return candidate, "preferred_asset", true
-			}
-		}
-		return catalogPlaybackCandidate{}, "preferred_asset", false
-	}
-	if len(candidates) == 0 {
-		return catalogPlaybackCandidate{}, "no_asset", false
-	}
-	return candidates[0], "asset_rank", true
-}
-
-func catalogPlaybackRank(candidate catalogPlaybackCandidate) int {
-	score := 0
-	if strings.TrimSpace(candidate.Asset.Status) == "available" {
-		score += 100
-	}
-	if strings.TrimSpace(candidate.Asset.AssetType) == "main" {
-		score += 20
-	}
-	if strings.TrimSpace(candidate.Asset.ProbeStatus) == probe.StatusReady {
-		score += 10
-	}
-	pseudo, _, _ := inventoryCandidateMediaInfo(candidate)
-	if assessDirectPlay(pseudo, ClientProfileWeb).direct {
-		score += 5
-	}
-	score += resolutionPixels(pseudo)
-	return score
-}
-
-func inventoryCandidateMediaInfo(candidate catalogPlaybackCandidate) (mediaInfo, []Track, []Track) {
-	pseudo := mediaInfo{Container: candidate.File.Container, ProbeStatus: candidate.Asset.ProbeStatus}
+func inventoryCandidateMediaInfo(candidate playbackFileCandidate) (mediaInfo, []Track, []Track) {
+	pseudo := mediaInfo{Container: candidate.File.Container, ProbeStatus: candidate.ProbeStatus}
 	audioTracks := make([]Track, 0)
 	subtitleTracks := make([]Track, 0)
 	for _, stream := range candidate.Streams {
@@ -472,7 +243,7 @@ func inventoryCandidateMediaInfo(candidate catalogPlaybackCandidate) (mediaInfo,
 }
 
 func inventoryFileMediaInfo(file database.InventoryFile, streams []database.MediaStream) (mediaInfo, []Track, []Track) {
-	return inventoryCandidateMediaInfo(catalogPlaybackCandidate{Asset: database.MediaAsset{ProbeStatus: probe.StatusPending}, File: file, Streams: streams})
+	return inventoryCandidateMediaInfo(playbackFileCandidate{ProbeStatus: probe.StatusPending, File: file, Streams: streams})
 }
 
 func (s *Service) loadMediaStreamsForFile(ctx context.Context, fileID uint) ([]database.MediaStream, error) {
@@ -500,7 +271,7 @@ func titleFromInventoryPath(storagePath string) string {
 	return strings.TrimSpace(base)
 }
 
-func buildSubtitleTrack(candidate catalogPlaybackCandidate, stream database.MediaStream) Track {
+func buildSubtitleTrack(candidate playbackFileCandidate, stream database.MediaStream) Track {
 	track := Track{Codec: strings.TrimSpace(stream.Codec), Language: strings.TrimSpace(stream.Language), Title: strings.TrimSpace(stream.Title), Channels: intValue(stream.Channels)}
 	if !playbackStreamDispositionBool(stream.DispositionJSON, "external") {
 		return track

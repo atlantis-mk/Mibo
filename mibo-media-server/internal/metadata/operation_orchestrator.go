@@ -6,38 +6,40 @@ import (
 )
 
 func (s *Service) runMetadataOperation(ctx context.Context, input MetadataOperationRequest) (MetadataOperationResult, error) {
-	if input.OriginItemID != 0 && input.TargetItemID == 0 {
-		target, err := s.resolveCatalogMatchTarget(ctx, input.OriginItemID)
-		if err != nil {
-			return MetadataOperationResult{}, err
-		}
-		input.TargetItemID = target.ID
+	if input.OriginMetadataItemID == 0 && input.TargetMetadataItemID == 0 {
+		return MetadataOperationResult{}, fmt.Errorf("metadata item id is required")
+	}
+	return s.runMetadataItemOperation(ctx, input)
+}
+
+func (s *Service) runMetadataItemOperation(ctx context.Context, input MetadataOperationRequest) (MetadataOperationResult, error) {
+	if input.TargetMetadataItemID == 0 {
+		input.TargetMetadataItemID = input.OriginMetadataItemID
+	}
+	if input.OriginMetadataItemID == 0 {
+		input.OriginMetadataItemID = input.TargetMetadataItemID
 	}
 	switch input.Operation {
 	case OperationTypeMatch:
-		result, ok, err := s.runMatchMetadataOperation(ctx, input)
+		result, ok, err := s.runMatchMetadataItemOperation(ctx, input)
 		if err != nil {
 			return MetadataOperationResult{}, err
 		}
 		if !ok {
-			return MetadataOperationResult{}, fmt.Errorf("metadata match does not support item %d", input.OriginItemID)
+			return MetadataOperationResult{}, fmt.Errorf("metadata match does not support metadata item %d", input.OriginMetadataItemID)
 		}
 		return result, nil
 	case OperationTypeRefetch:
-		result, ok, err := s.runRefetchMetadataOperation(ctx, input)
+		result, ok, err := s.runRefetchMetadataItemOperation(ctx, input)
 		if err != nil {
 			return MetadataOperationResult{}, err
 		}
 		if !ok {
-			return MetadataOperationResult{}, fmt.Errorf("metadata refetch does not support item %d", input.OriginItemID)
+			return MetadataOperationResult{}, fmt.Errorf("metadata refetch does not support metadata item %d", input.OriginMetadataItemID)
 		}
 		return result, nil
 	case OperationTypeManualApply:
-		result, err := s.runManualApplyMetadataOperation(ctx, input)
-		if err != nil {
-			return MetadataOperationResult{}, err
-		}
-		return result, nil
+		return s.runManualApplyMetadataItemOperation(ctx, input)
 	default:
 		return MetadataOperationResult{}, fmt.Errorf("unsupported metadata operation %q", input.Operation)
 	}

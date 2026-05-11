@@ -35,9 +35,9 @@ import {
 } from "#/components/media-poster-card"
 import type { FilenameExclusionPreview } from "#/lib/mibo-api"
 import type {
-  CatalogDetailPresentation,
   CatalogEpisodeRail,
   CatalogSeasonRail,
+  MediaDetailPresentation,
 } from "#/lib/media-presentation"
 import { createAuthedMiboApi } from "#/lib/mibo-query"
 import { useAuthStore } from "#/stores/auth-store"
@@ -59,7 +59,7 @@ export function SeriesEpisodesSection({
   isLoading,
   errorMessage,
 }: {
-  item: CatalogDetailPresentation
+  item: MediaDetailPresentation
   seasons: CatalogSeasonRail[]
   episodePage: number
   isLoading: boolean
@@ -221,10 +221,10 @@ function SeasonEpisodesRail({
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {visibleEpisodes.map((episode) => (
           <EpisodeCard
-            key={`${season.season_number}-${episode.episode_number}-${episode.item_id}`}
-            episode={episode}
-            fallbackImage={season.poster_url}
-          />
+			key={`${season.season_number}-${episode.episode_number}-${episode.metadata_item_id}`}
+			episode={episode}
+			fallbackImage={season.poster_url}
+		/>
         ))}
       </div>
       <EpisodePagination currentPage={currentPage} totalPages={totalPages} />
@@ -319,6 +319,7 @@ function EpisodeCard({
       typeof episode.progress_percent === "number" &&
       episode.progress_percent > 0
   )
+  const inventoryFileId = episode.inventory_file_id
   const invalidateAfterIgnore = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["catalog"] }),
@@ -332,8 +333,11 @@ function EpisodeCard({
   const singleFileIgnoreMutation = useMutation({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法标记忽略。")
-      return createAuthedMiboApi(token).markCatalogItemScanExclusion(
-        episode.item_id,
+      if (typeof inventoryFileId !== "number" || inventoryFileId <= 0) {
+        throw new Error("当前剧集缺少文件锚点，无法标记忽略。")
+      }
+      return createAuthedMiboApi(token).markInventoryFileScanExclusion(
+        inventoryFileId,
         "advertisement"
       )
     },
@@ -345,8 +349,11 @@ function EpisodeCard({
   const previewIgnoreMutation = useMutation({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法预览忽略影响。")
-      return createAuthedMiboApi(token).previewCatalogItemScanExclusion(
-        episode.item_id
+      if (typeof inventoryFileId !== "number" || inventoryFileId <= 0) {
+        throw new Error("当前剧集缺少文件锚点，无法预览忽略影响。")
+      }
+      return createAuthedMiboApi(token).previewInventoryFileScanExclusion(
+        inventoryFileId
       )
     },
     onSuccess: (preview) => {
@@ -357,8 +364,11 @@ function EpisodeCard({
   const filenameGroupMutation = useMutation({
     mutationFn: async () => {
       if (!token) throw new Error("当前未登录，无法标记同名忽略。")
-      return createAuthedMiboApi(token).createCatalogItemFilenameExclusionRule(
-        episode.item_id,
+      if (typeof inventoryFileId !== "number" || inventoryFileId <= 0) {
+        throw new Error("当前剧集缺少文件锚点，无法标记同名忽略。")
+      }
+      return createAuthedMiboApi(token).createInventoryFileFilenameExclusionRule(
+        inventoryFileId,
         "advertisement"
       )
     },
@@ -378,10 +388,9 @@ function EpisodeCard({
         <Button asChild size="sm" className="rounded-full">
           <Link
             to="/play/$id"
-            params={{ id: String(episode.item_id) }}
+				params={{ id: String(episode.metadata_item_id) }}
             search={{
               fromStart: !hasProgress,
-              assetId: undefined,
               inventoryFileId: undefined,
             }}
             preload={false}
@@ -397,7 +406,7 @@ function EpisodeCard({
           size="sm"
           variant="destructive"
           className="rounded-full"
-          disabled={!token || ignorePending}
+          disabled={!token || !inventoryFileId || ignorePending}
           onClick={(event) => {
             event.preventDefault()
             event.stopPropagation()
@@ -413,7 +422,7 @@ function EpisodeCard({
   return (
     <div className="group relative">
       <MediaLandscapeCard
-        itemId={episode.item_id}
+		itemId={episode.metadata_item_id}
         imageUrl={episode.still_url}
         fallbackImageUrl={fallbackImage}
         title={title}
@@ -494,7 +503,7 @@ function EpisodeCard({
 export function RelatedMediaSection({
   item,
 }: {
-  item: CatalogDetailPresentation
+  item: MediaDetailPresentation
 }) {
   const [swiper, setSwiper] = useState<SwiperType | null>(null)
   const [canScrollPrev, setCanScrollPrev] = useState(false)

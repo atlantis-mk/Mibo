@@ -9,16 +9,25 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/atlan/mibo-media-server/internal/catalog/seriesplayback"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/ingest"
-	"gorm.io/gorm"
 )
 
-type CatalogLatestByLibrarySection struct {
-	LibraryID   uint              `json:"library_id"`
-	LibraryName string            `json:"library_name"`
-	Items       []CatalogListItem `json:"items"`
+type HomeContentSection struct {
+	Key   string            `json:"key"`
+	Title string            `json:"title"`
+	Items []CatalogListItem `json:"items"`
+}
+
+type HomeMediaOverview struct {
+	Sections []HomeMediaSectionSummary `json:"sections"`
+}
+
+type HomeMediaSectionSummary struct {
+	Key   string            `json:"key"`
+	Title string            `json:"title"`
+	Count int               `json:"count"`
+	Items []CatalogListItem `json:"items"`
 }
 
 type BrowseItemsInput struct {
@@ -54,236 +63,88 @@ type browseListEntry struct {
 	Year      *int
 	CreatedAt string
 	StableID  uint
+	Watched   bool
+	InProgress bool
+	LastPlayedAt string
 }
 
 func (s *Service) ListLibraryItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
 	if libraryID == 0 {
 		return nil, errors.New("library id is required")
 	}
-	return s.listItems(ctx, &libraryID, query, typeFilter, limit)
-}
-
-func (s *Service) ListItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
-	var libraryFilter *uint
-	if libraryID != 0 {
-		libraryFilter = &libraryID
-	}
-	return s.listItems(ctx, libraryFilter, query, typeFilter, limit)
-}
-
-func (s *Service) SearchItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
-	if strings.TrimSpace(query) == "" {
-		return s.ListItems(ctx, libraryID, "", typeFilter, limit)
-	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-
-	allowedTypes := []string{ItemTypeMovie, ItemTypeSeries}
-	switch strings.ToLower(strings.TrimSpace(typeFilter)) {
-	case ItemTypeMovie:
-		allowedTypes = []string{ItemTypeMovie}
-	case ItemTypeSeries, "show":
-		allowedTypes = []string{ItemTypeSeries}
-	}
-
-	db := s.db.WithContext(ctx).
-		Model(&database.CatalogSearchDocument{}).
-		Where("item_type IN ?", allowedTypes)
-	if libraryID != 0 {
-		db = db.Where("library_id = ?", libraryID)
-	}
-	like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
-	db = db.Where("LOWER(title) LIKE ? OR LOWER(original_title) LIKE ? OR LOWER(people_text) LIKE ? OR LOWER(tags_text) LIKE ? OR LOWER(provider_ids_text) LIKE ?", like, like, like, like, like)
-
-	var docs []database.CatalogSearchDocument
-	if err := db.Order("title asc").Order("item_id asc").Limit(limit).Find(&docs).Error; err != nil {
+	projected, err := s.ListLibraryProjectionItems(ctx, libraryID, query, typeFilter, limit)
+	if err != nil {
 		return nil, err
 	}
-	if len(docs) == 0 {
-		return []CatalogListItem{}, nil
-	}
-	itemIDs := make([]uint, 0, len(docs))
-	for _, doc := range docs {
-		itemIDs = append(itemIDs, doc.ItemID)
-	}
-	var items []database.CatalogItem
-	if err := s.db.WithContext(ctx).Where("id IN ? AND deleted_at IS NULL", itemIDs).Find(&items).Error; err != nil {
+	if err := s.attachOrganizingSummaries(ctx, projected); err != nil {
 		return nil, err
 	}
-	itemByID := make(map[uint]database.CatalogItem, len(items))
-	for _, item := range items {
-		itemByID[item.ID] = item
+	discovered, err := s.discoveredBrowseEntries(ctx, BrowseItemsInput{LibraryID: libraryID, Query: query, TypeFilter: typeFilter, Limit: limit})
+	if err != nil {
+		return nil, err
 	}
-	ordered := make([]database.CatalogItem, 0, len(docs))
-	for _, doc := range docs {
-		if item, ok := itemByID[doc.ItemID]; ok {
-			ordered = append(ordered, item)
+	if len(discovered) == 0 {
+		return projected, nil
+	}
+	entries := make([]browseListEntry, 0, len(projected)+len(discovered))
+	for _, item := range projected {
+		entries = append(entries, browseListEntry{Item: item, TitleKey: catalogListItemTitleKey(item), Year: item.Year, StableID: item.MetadataItemID})
+	}
+	entries = append(entries, discovered...)
+	applyBrowseListEntryOrder(entries, BrowseItemsInput{Sort: "title", SortDirection: "asc"})
+	capacity := len(entries)
+	if capacity > limit {
+		capacity = limit
+	}
+	items := make([]CatalogListItem, 0, capacity)
+	for _, entry := range entries {
+		items = append(items, entry.Item)
+		if len(items) == limit {
+			break
 		}
 	}
-	return s.buildCatalogListItems(ctx, ordered)
+	return items, nil
+}
+
+func (s *Service) ListItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
+	return s.SearchProjectionItems(ctx, libraryID, query, typeFilter, limit)
+}
+
+func (s *Service) SearchItems(ctx context.Context, libraryID uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
+	return s.SearchProjectionItems(ctx, libraryID, query, typeFilter, limit)
 }
 
 func (s *Service) BrowseItems(ctx context.Context, input BrowseItemsInput) (BrowseItemsResult, error) {
 	input = normalizeBrowseItemsInput(input)
-	return s.browseItemsWithCatalogPrefix(ctx, input)
+	entries, err := s.browseEntries(ctx, input)
+	if err != nil {
+		return BrowseItemsResult{}, err
+	}
+	return buildBrowseItemsResult(entries, int64(len(entries)), input), nil
 }
 
-func (s *Service) browseItemsWithCatalogPrefix(ctx context.Context, input BrowseItemsInput) (BrowseItemsResult, error) {
-	catalogLimit := input.Offset + input.Limit
-	catalogEntries, catalogTotal, err := s.catalogBrowseEntries(ctx, input, catalogLimit)
+func (s *Service) browseEntries(ctx context.Context, input BrowseItemsInput) ([]browseListEntry, error) {
+	projectedEntries, err := s.projectedBrowseEntries(ctx, input)
 	if err != nil {
-		return BrowseItemsResult{}, err
+		return nil, err
 	}
-	discovered, err := s.discoveredBrowseEntries(ctx, input)
+	discoveredEntries, err := s.discoveredBrowseEntries(ctx, input)
 	if err != nil {
-		return BrowseItemsResult{}, err
+		return nil, err
 	}
-	entries := make([]browseListEntry, 0, len(catalogEntries)+len(discovered))
-	entries = append(entries, catalogEntries...)
-	entries = append(entries, discovered...)
+	entries := make([]browseListEntry, 0, len(projectedEntries)+len(discoveredEntries))
+	entries = append(entries, projectedEntries...)
+	entries = append(entries, discoveredEntries...)
+	entries = filterBrowseListEntriesByOrganizing(entries, input.OrganizingState)
+	if err := s.attachBrowseUserState(ctx, input.UserID, entries); err != nil {
+		return nil, err
+	}
+	entries = filterBrowseListEntriesByWatchedState(entries, input.WatchedState)
 	applyBrowseListEntryOrder(entries, input)
-	return buildBrowseItemsResult(entries, catalogTotal+int64(len(discovered)), input), nil
-}
-
-func (s *Service) catalogBrowseEntries(ctx context.Context, input BrowseItemsInput, limit int) ([]browseListEntry, int64, error) {
-	countQuery := s.buildBrowseCatalogQuery(ctx, input, false)
-	var total int64
-	if err := countQuery.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if total == 0 {
-		return []browseListEntry{}, 0, nil
-	}
-	query := applyBrowseItemsOrder(s.buildBrowseCatalogQuery(ctx, input, true), input)
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-	var items []database.CatalogItem
-	if err := query.Find(&items).Error; err != nil {
-		return nil, 0, err
-	}
-	mapped, err := s.buildCatalogListItems(ctx, items)
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := s.attachOrganizingSummaries(ctx, mapped); err != nil {
-		return nil, 0, err
-	}
-	return buildCatalogBrowseEntries(mapped, items), total, nil
-}
-
-func (s *Service) buildBrowseCatalogQuery(ctx context.Context, input BrowseItemsInput, selectItems bool) *gorm.DB {
-	db := s.db.WithContext(ctx).
-		Model(&database.CatalogItem{})
-	if selectItems {
-		db = db.Select("catalog_items.*")
-	}
-	db = db.
-		Joins("LEFT JOIN catalog_search_documents AS browse_docs ON browse_docs.item_id = catalog_items.id").
-		Where("catalog_items.deleted_at IS NULL")
-	if input.LibraryID != 0 {
-		db = db.Where("catalog_items.library_id = ?", input.LibraryID)
-	}
-	switch input.TypeFilter {
-	case ItemTypeMovie:
-		db = db.Where("catalog_items.parent_id IS NULL").Where("catalog_items.type = ?", ItemTypeMovie)
-	case ItemTypeEpisode:
-		db = db.Where("catalog_items.type = ?", ItemTypeEpisode)
-	case ItemTypeSeries, "show":
-		db = db.Where("catalog_items.parent_id IS NULL").Where("catalog_items.type = ?", ItemTypeSeries)
-	default:
-		db = db.Where("catalog_items.parent_id IS NULL").Where("catalog_items.type IN ?", []string{ItemTypeMovie, ItemTypeSeries})
-	}
-	if input.Year != nil {
-		db = db.Where("catalog_items.year = ?", *input.Year)
-	}
-	if input.MinRating != nil {
-		db = db.Where("catalog_items.community_rating IS NOT NULL AND catalog_items.community_rating >= ?", *input.MinRating)
-	}
-	if query := strings.TrimSpace(input.Query); query != "" {
-		like := "%" + strings.ToLower(query) + "%"
-		db = db.Where(`(LOWER(catalog_items.title) LIKE ?
-			OR LOWER(catalog_items.original_title) LIKE ?
-			OR LOWER(catalog_items.sort_title) LIKE ?
-			OR LOWER(browse_docs.people_text) LIKE ?
-			OR LOWER(browse_docs.tags_text) LIKE ?
-			OR LOWER(browse_docs.provider_ids_text) LIKE ?)`, like, like, like, like, like, like)
-	}
-	if genre := strings.TrimSpace(input.Genre); genre != "" {
-		db = db.Where("LOWER(browse_docs.tags_text) LIKE ?", "%"+strings.ToLower(genre)+"%")
-	}
-	if region := strings.TrimSpace(input.Region); region != "" {
-		db = db.Where("LOWER(browse_docs.tags_text) LIKE ?", "%"+strings.ToLower(region)+"%")
-	}
-	if input.WatchedState != "all" {
-		db = db.Joins("LEFT JOIN user_item_data browse_user_item_data ON browse_user_item_data.item_id = catalog_items.id AND browse_user_item_data.asset_id IS NULL AND browse_user_item_data.user_id = ?", input.UserID)
-		switch input.WatchedState {
-		case "watched":
-			db = db.Where("browse_user_item_data.completed_at IS NOT NULL")
-		case "in_progress":
-			db = db.Where("browse_user_item_data.completed_at IS NULL AND browse_user_item_data.position_seconds > 0")
-		case "unwatched":
-			db = db.Where("browse_user_item_data.id IS NULL OR (browse_user_item_data.completed_at IS NULL AND browse_user_item_data.position_seconds = 0)")
-		}
-	}
-	if input.OrganizingState != "all" {
-		db = db.Joins("LEFT JOIN ingest_conditions browse_review_required_condition ON browse_review_required_condition.catalog_item_id = catalog_items.id AND browse_review_required_condition.condition_type = ?", ingest.ConditionReviewRequired)
-		db = db.Joins("LEFT JOIN ingest_conditions browse_materialized_condition ON browse_materialized_condition.catalog_item_id = catalog_items.id AND browse_materialized_condition.condition_type = ?", ingest.ConditionMaterialized)
-		db = db.Joins("LEFT JOIN ingest_conditions browse_probe_condition ON browse_probe_condition.catalog_item_id = catalog_items.id AND browse_probe_condition.condition_type = ?", ingest.ConditionProbed)
-		db = db.Joins("LEFT JOIN ingest_conditions browse_metadata_condition ON browse_metadata_condition.catalog_item_id = catalog_items.id AND browse_metadata_condition.condition_type = ?", ingest.ConditionMetadataMatched)
-		db = db.Joins("LEFT JOIN ingest_conditions browse_projection_condition ON browse_projection_condition.catalog_item_id = catalog_items.id AND browse_projection_condition.condition_type = ?", ingest.ConditionProjectionCurrent)
-		db = db.Joins("LEFT JOIN ingest_conditions browse_visible_condition ON browse_visible_condition.catalog_item_id = catalog_items.id AND browse_visible_condition.condition_type = ?", ingest.ConditionVisible)
-		isOrganizingExpr := `CASE WHEN (
-			browse_review_required_condition.status = ?
-			OR browse_metadata_condition.status = ?
-			OR (browse_metadata_condition.status = ? AND browse_metadata_condition.reason = ?)
-			OR browse_review_required_condition.status = ?
-			OR browse_materialized_condition.status = ?
-			OR browse_probe_condition.status = ?
-			OR browse_metadata_condition.status = ?
-			OR browse_projection_condition.status = ?
-			OR browse_visible_condition.status = ?
-			OR browse_review_required_condition.status IN (?, ?, ?)
-			OR browse_materialized_condition.status IN (?, ?, ?)
-			OR browse_visible_condition.status IN (?, ?, ?)
-			OR (browse_materialized_condition.status <> ? AND browse_probe_condition.status IN (?, ?, ?))
-			OR (browse_materialized_condition.status <> ? AND browse_metadata_condition.status IN (?, ?, ?))
-			OR (browse_materialized_condition.status <> ? AND browse_projection_condition.status IN (?, ?, ?))
-		) THEN 1 ELSE 0 END`
-		organizingArgs := []any{
-			ingest.ConditionStatusReviewRequired,
-			ingest.ConditionStatusReviewRequired,
-			ingest.ConditionStatusFalse, "no_candidate",
-			ingest.ConditionStatusFailed,
-			ingest.ConditionStatusFailed,
-			ingest.ConditionStatusFailed,
-			ingest.ConditionStatusFailed,
-			ingest.ConditionStatusFailed,
-			ingest.ConditionStatusFailed,
-			ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
-			ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
-			ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
-			ingest.ConditionStatusTrue, ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
-			ingest.ConditionStatusTrue, ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
-			ingest.ConditionStatusTrue, ingest.ConditionStatusPending, ingest.ConditionStatusRunning, ingest.ConditionStatusUnknown,
-		}
-		switch input.OrganizingState {
-		case "organized":
-			db = db.Where(isOrganizingExpr+" = 0", organizingArgs...)
-		case "unorganized":
-			db = db.Where(isOrganizingExpr+" = 1", organizingArgs...)
-		}
-	}
-	return db
-}
-
-func buildCatalogBrowseEntries(mapped []CatalogListItem, items []database.CatalogItem) []browseListEntry {
-	entries := make([]browseListEntry, 0, len(mapped))
-	for idx, item := range mapped {
-		entries = append(entries, browseListEntry{Item: item, TitleKey: catalogListItemTitleKey(item), Year: item.Year, CreatedAt: items[idx].CreatedAt.Format("2006-01-02T15:04:05.000000000Z07:00"), StableID: item.ID})
-	}
-	return entries
+	return entries, nil
 }
 
 func buildBrowseItemsResult(entries []browseListEntry, total int64, input BrowseItemsInput) BrowseItemsResult {
@@ -309,11 +170,6 @@ func buildBrowseItemsResult(entries []browseListEntry, total int64, input Browse
 		SortDirection: input.SortDirection,
 	}
 }
-func applyPlayableSeriesVisibility(db *gorm.DB) *gorm.DB {
-	return db.Joins("LEFT JOIN item_rollups browse_item_rollups ON browse_item_rollups.item_id = catalog_items.id").
-		Where("catalog_items.type <> ? OR COALESCE(browse_item_rollups.available_count, 0) > 0", ItemTypeSeries)
-}
-
 func (s *Service) discoveredBrowseEntries(ctx context.Context, input BrowseItemsInput) ([]browseListEntry, error) {
 	if input.OrganizingState == "organized" {
 		return nil, nil
@@ -330,24 +186,13 @@ func (s *Service) discoveredBrowseEntries(ctx context.Context, input BrowseItems
 		Where("inventory_files.status = ?", "available").
 		Where("inventory_files.content_class = ?", "video").
 		Where(`NOT EXISTS (
-			SELECT 1 FROM asset_files
-			JOIN media_assets ON media_assets.id = asset_files.asset_id AND media_assets.deleted_at IS NULL
-			JOIN asset_items ON asset_items.asset_id = media_assets.id
-			JOIN catalog_items ON catalog_items.id = asset_items.item_id AND catalog_items.deleted_at IS NULL
-			WHERE asset_files.file_id = inventory_files.id
+			SELECT 1 FROM resource_files
+			JOIN resource_metadata_links ON resource_metadata_links.resource_id = resource_files.resource_id
+			JOIN metadata_items ON metadata_items.id = resource_metadata_links.metadata_item_id AND metadata_items.deleted_at IS NULL
+			WHERE resource_files.inventory_file_id = inventory_files.id
 		)`)
 	if input.LibraryID != 0 {
 		query = query.Where("inventory_files.library_id = ?", input.LibraryID)
-	}
-	if input.WatchedState == "unwatched" {
-		query = query.Where(`NOT EXISTS (
-			SELECT 1 FROM user_item_data
-			WHERE user_item_data.asset_id IN (
-				SELECT asset_files.asset_id FROM asset_files WHERE asset_files.file_id = inventory_files.id
-			)
-			AND user_item_data.user_id = ?
-			AND (user_item_data.completed_at IS NOT NULL OR user_item_data.position_seconds > 0)
-		)`, input.UserID)
 	}
 	var files []database.InventoryFile
 	if err := query.Find(&files).Error; err != nil {
@@ -393,6 +238,102 @@ func (s *Service) discoveredBrowseEntries(ctx context.Context, input BrowseItems
 		entries = append(entries, browseListEntry{Item: item, TitleKey: strings.ToLower(title), CreatedAt: file.CreatedAt.Format("2006-01-02T15:04:05.000000000Z07:00"), StableID: file.ID})
 	}
 	return entries, nil
+}
+
+func (s *Service) projectedBrowseEntries(ctx context.Context, input BrowseItemsInput) ([]browseListEntry, error) {
+	allowedTypes := []string{database.MetadataItemTypeMovie, database.MetadataItemTypeSeries}
+	switch input.TypeFilter {
+	case ItemTypeMovie:
+		allowedTypes = []string{database.MetadataItemTypeMovie}
+	case ItemTypeSeries, "show":
+		allowedTypes = []string{database.MetadataItemTypeSeries}
+	case ItemTypeEpisode:
+		allowedTypes = []string{database.MetadataItemTypeEpisode}
+	}
+	db := s.db.WithContext(ctx).
+		Table("library_metadata_projections AS p").
+		Select("p.*").
+		Joins("JOIN metadata_items AS m ON m.id = p.metadata_item_id AND m.deleted_at IS NULL").
+		Where("p.hidden = ?", false).
+		Where("p.availability_status = ?", database.ProjectionAvailabilityAvailable).
+		Where("p.item_type IN ?", allowedTypes)
+	if input.LibraryID != 0 {
+		db = db.Where("p.library_id = ?", input.LibraryID)
+	}
+	if input.Query != "" {
+		like := "%" + strings.ToLower(input.Query) + "%"
+		if input.LibraryID != 0 {
+			db = db.Joins("LEFT JOIN library_search_documents AS d ON d.library_id = p.library_id AND d.metadata_item_id = p.metadata_item_id").Where("LOWER(p.title) LIKE ? OR LOWER(m.original_title) LIKE ? OR LOWER(COALESCE(d.people_text, '')) LIKE ? OR LOWER(COALESCE(d.tags_text, '')) LIKE ? OR LOWER(COALESCE(d.provider_ids_text, '')) LIKE ? OR LOWER(COALESCE(d.resource_text, '')) LIKE ?", like, like, like, like, like, like)
+		} else {
+			db = db.Joins("LEFT JOIN metadata_search_documents AS d ON d.metadata_item_id = p.metadata_item_id").Where("LOWER(p.title) LIKE ? OR LOWER(m.original_title) LIKE ? OR LOWER(COALESCE(d.people_text, '')) LIKE ? OR LOWER(COALESCE(d.tags_text, '')) LIKE ? OR LOWER(COALESCE(d.provider_ids_text, '')) LIKE ?", like, like, like, like, like)
+		}
+	}
+	if input.Year != nil {
+		db = db.Where("m.year = ?", *input.Year)
+	}
+	if input.MinRating != nil {
+		db = db.Where("m.community_rating >= ?", *input.MinRating)
+	}
+	if input.Genre != "" {
+		db = db.Where(`EXISTS (
+			SELECT 1 FROM metadata_item_tags mit
+			JOIN tags t ON t.id = mit.tag_id
+			WHERE mit.metadata_item_id = p.metadata_item_id
+			AND LOWER(t.kind) = 'genre'
+			AND LOWER(t.name) = ?
+		)`, strings.ToLower(input.Genre))
+	}
+	var rawProjections []database.LibraryMetadataProjection
+	if err := db.Order("p.library_id asc").Order("p.metadata_item_id asc").Find(&rawProjections).Error; err != nil {
+		return nil, err
+	}
+	projections := rawProjections
+	if input.LibraryID == 0 {
+		projections = dedupeBrowseProjections(rawProjections)
+	}
+	items, err := s.buildProjectionListItems(ctx, projections)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachOrganizingSummaries(ctx, items); err != nil {
+		return nil, err
+	}
+	projectionByItemID := make(map[uint]database.LibraryMetadataProjection, len(projections))
+	for _, projection := range projections {
+		projectionByItemID[projection.MetadataItemID] = projection
+	}
+	entries := make([]browseListEntry, 0, len(items))
+	for _, item := range items {
+		projection, ok := projectionByItemID[item.MetadataItemID]
+		if !ok {
+			continue
+		}
+		createdAt := projection.UpdatedAt.Format("2006-01-02T15:04:05.000000000Z07:00")
+		if projection.LatestAddedAt != nil {
+			createdAt = projection.LatestAddedAt.Format("2006-01-02T15:04:05.000000000Z07:00")
+		}
+		entries = append(entries, browseListEntry{
+			Item: item,
+			TitleKey: catalogListItemTitleKey(item),
+			Year: item.Year,
+			CreatedAt: createdAt,
+			StableID: item.MetadataItemID,
+		})
+	}
+	return entries, nil
+}
+
+func dedupeBrowseProjections(projections []database.LibraryMetadataProjection) []database.LibraryMetadataProjection {
+	result := make([]database.LibraryMetadataProjection, 0, len(projections))
+	seen := make(map[uint]struct{}, len(projections))
+	for _, projection := range projections {
+		if _, ok := seen[projection.MetadataItemID]; ok {
+			continue
+		}
+		seen[projection.MetadataItemID] = struct{}{}
+		result = append(result, projection)
+	}
+	return result
 }
 
 func (s *Service) inventoryFileThumbnailURLs(ctx context.Context, files []database.InventoryFile) (map[uint]string, error) {
@@ -475,6 +416,67 @@ func filterBrowseListEntriesByOrganizing(entries []browseListEntry, organizingSt
 	return filtered
 }
 
+func filterBrowseListEntriesByWatchedState(entries []browseListEntry, watchedState string) []browseListEntry {
+	switch watchedState {
+	case "unwatched", "in_progress", "watched":
+	default:
+		return entries
+	}
+	filtered := make([]browseListEntry, 0, len(entries))
+	for _, entry := range entries {
+		switch watchedState {
+		case "unwatched":
+			if !entry.Watched && !entry.InProgress {
+				filtered = append(filtered, entry)
+			}
+		case "in_progress":
+			if entry.InProgress {
+				filtered = append(filtered, entry)
+			}
+		case "watched":
+			if entry.Watched {
+				filtered = append(filtered, entry)
+			}
+		}
+	}
+	return filtered
+}
+
+func (s *Service) attachBrowseUserState(ctx context.Context, userID uint, entries []browseListEntry) error {
+	if userID == 0 || len(entries) == 0 {
+		return nil
+	}
+	metadataIDs := make([]uint, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Item.MetadataItemID != 0 {
+			metadataIDs = append(metadataIDs, entry.Item.MetadataItemID)
+		}
+	}
+	if len(metadataIDs) == 0 {
+		return nil
+	}
+	var rows []database.UserMetadataData
+	if err := s.db.WithContext(ctx).Where("user_id = ? AND metadata_item_id IN ?", userID, metadataIDs).Find(&rows).Error; err != nil {
+		return err
+	}
+	stateByMetadataID := make(map[uint]database.UserMetadataData, len(rows))
+	for _, row := range rows {
+		stateByMetadataID[row.MetadataItemID] = row
+	}
+	for idx := range entries {
+		row, ok := stateByMetadataID[entries[idx].Item.MetadataItemID]
+		if !ok {
+			continue
+		}
+		entries[idx].Watched = row.CompletedAt != nil
+		entries[idx].InProgress = row.CompletedAt == nil && (row.PositionSeconds > 0 || row.LastPlayedAt != nil)
+		if row.LastPlayedAt != nil {
+			entries[idx].LastPlayedAt = row.LastPlayedAt.Format("2006-01-02T15:04:05.000000000Z07:00")
+		}
+	}
+	return nil
+}
+
 func (s *Service) attachOrganizingSummaries(ctx context.Context, items []CatalogListItem) error {
 	if len(items) == 0 {
 		return nil
@@ -488,7 +490,7 @@ func (s *Service) attachOrganizingSummaries(ctx context.Context, items []Catalog
 	if len(itemIDs) == 0 {
 		return nil
 	}
-	conditions, err := s.organizingConditionsByCatalogItemID(ctx, itemIDs)
+	conditions, err := s.organizingConditionsByMetadataItemID(ctx, itemIDs)
 	if err != nil {
 		return err
 	}
@@ -503,20 +505,20 @@ func (s *Service) attachOrganizingSummaries(ctx context.Context, items []Catalog
 	return nil
 }
 
-func (s *Service) organizingConditionsByCatalogItemID(ctx context.Context, itemIDs []uint) (map[uint][]database.IngestCondition, error) {
+func (s *Service) organizingConditionsByMetadataItemID(ctx context.Context, itemIDs []uint) (map[uint][]database.IngestCondition, error) {
 	result := make(map[uint][]database.IngestCondition, len(itemIDs))
 	if len(itemIDs) == 0 {
 		return result, nil
 	}
 	var conditions []database.IngestCondition
-	if err := s.db.WithContext(ctx).Where("catalog_item_id IN ?", itemIDs).Order("catalog_item_id asc, condition_type asc").Find(&conditions).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("metadata_item_id IN ?", itemIDs).Order("metadata_item_id asc, condition_type asc").Find(&conditions).Error; err != nil {
 		return nil, err
 	}
 	for _, condition := range conditions {
-		if condition.CatalogItemID == nil {
+		if condition.MetadataItemID == nil {
 			continue
 		}
-		result[*condition.CatalogItemID] = append(result[*condition.CatalogItemID], condition)
+		result[*condition.MetadataItemID] = append(result[*condition.MetadataItemID], condition)
 	}
 	return result, nil
 }
@@ -707,6 +709,18 @@ func applyBrowseListEntryOrder(entries []browseListEntry, input BrowseItemsInput
 		left := entries[i]
 		right := entries[j]
 		switch input.Sort {
+		case "watch_status":
+			leftRank := browseWatchStatusRank(left)
+			rightRank := browseWatchStatusRank(right)
+			if leftRank != rightRank {
+				if desc {
+					return leftRank > rightRank
+				}
+				return leftRank < rightRank
+			}
+			if left.LastPlayedAt != right.LastPlayedAt {
+				return compareBrowseString(left.LastPlayedAt, right.LastPlayedAt, desc)
+			}
 		case "title":
 			if left.TitleKey != right.TitleKey {
 				return compareBrowseString(left.TitleKey, right.TitleKey, desc)
@@ -732,6 +746,16 @@ func applyBrowseListEntryOrder(entries []browseListEntry, input BrowseItemsInput
 		}
 		return left.StableID < right.StableID
 	})
+}
+
+func browseWatchStatusRank(entry browseListEntry) int {
+	if entry.Watched {
+		return 2
+	}
+	if entry.InProgress {
+		return 1
+	}
+	return 0
 }
 
 func compareBrowseString(left string, right string, desc bool) bool {
@@ -787,462 +811,47 @@ func normalizeBrowseItemsInput(input BrowseItemsInput) BrowseItemsInput {
 	return input
 }
 
-func applyBrowseItemsOrder(db *gorm.DB, input BrowseItemsInput) *gorm.DB {
-	direction := "desc"
-	if input.SortDirection == "asc" {
-		direction = "asc"
+func (s *Service) GetGovernanceWorkspace(ctx context.Context, metadataItemID uint, libraryID uint) (CatalogGovernanceWorkspace, error) {
+	if metadataItemID == 0 {
+		return CatalogGovernanceWorkspace{}, errors.New("metadata item id is required")
 	}
-	switch input.Sort {
-	case "title":
-		return db.Order("COALESCE(NULLIF(catalog_items.sort_title, ''), NULLIF(catalog_items.sort_key, ''), catalog_items.title) " + direction).Order("catalog_items.id " + direction)
-	case "year":
-		return db.Order("catalog_items.year IS NULL asc").Order("catalog_items.year " + direction).Order("catalog_items.id " + direction)
-	case "watch_status":
-		if input.UserID != 0 {
-			db = db.Joins("LEFT JOIN user_item_data browse_sort_user_item_data ON browse_sort_user_item_data.item_id = catalog_items.id AND browse_sort_user_item_data.asset_id IS NULL AND browse_sort_user_item_data.user_id = ?", input.UserID)
-			return db.Order(`CASE
-				WHEN browse_sort_user_item_data.completed_at IS NULL AND browse_sort_user_item_data.position_seconds > 0 THEN 1
-				WHEN browse_sort_user_item_data.completed_at IS NOT NULL THEN 2
-				ELSE 0
-			END ` + direction).Order("COALESCE(NULLIF(catalog_items.sort_title, ''), NULLIF(catalog_items.sort_key, ''), catalog_items.title) asc").Order("catalog_items.id asc")
-		}
+	var item database.MetadataItem
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", metadataItemID).First(&item).Error; err != nil {
+		return CatalogGovernanceWorkspace{}, err
 	}
-	return db.Order("catalog_items.created_at " + direction).Order("catalog_items.id " + direction)
-}
-
-func (s *Service) listItems(ctx context.Context, libraryID *uint, query string, typeFilter string, limit int) ([]CatalogListItem, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
+	projection := database.LibraryMetadataProjection{LibraryID: libraryID, MetadataItemID: item.ID, AvailabilityStatus: database.ProjectionAvailabilityUnavailable}
+	if libraryID != 0 {
+		_ = s.db.WithContext(ctx).Where("library_id = ? AND metadata_item_id = ?", libraryID, item.ID).First(&projection).Error
 	}
-
-	allowedTypes := []string{ItemTypeMovie, ItemTypeSeries}
-	switch strings.ToLower(strings.TrimSpace(typeFilter)) {
-	case ItemTypeMovie:
-		allowedTypes = []string{ItemTypeMovie}
-	case ItemTypeSeries, "show":
-		allowedTypes = []string{ItemTypeSeries}
-	}
-
-	db := s.db.WithContext(ctx).
-		Table("catalog_search_documents AS browse_docs").
-		Select("catalog_items.*").
-		Joins("JOIN catalog_items ON catalog_items.id = browse_docs.item_id").
-		Where("catalog_items.deleted_at IS NULL").
-		Where("catalog_items.parent_id IS NULL").
-		Where("browse_docs.availability_status = ?", AvailabilityAvailable).
-		Where("browse_docs.item_type IN ?", allowedTypes)
-	db = applyPlayableSeriesVisibility(db)
-	if libraryID != nil {
-		db = db.Where("browse_docs.library_id = ?", *libraryID)
-	}
-	if trimmedQuery := strings.TrimSpace(query); trimmedQuery != "" {
-		like := "%" + strings.ToLower(trimmedQuery) + "%"
-		db = db.Where("LOWER(browse_docs.title) LIKE ? OR LOWER(browse_docs.original_title) LIKE ? OR LOWER(catalog_items.sort_title) LIKE ?", like, like, like)
-	}
-
-	var items []database.CatalogItem
-	if err := db.Order("COALESCE(NULLIF(catalog_items.sort_title, ''), NULLIF(catalog_items.sort_key, ''), catalog_items.title) asc").Order("catalog_items.id asc").Limit(limit).Find(&items).Error; err != nil {
-		return nil, err
-	}
-	return s.buildCatalogListItems(ctx, items)
-}
-
-func (s *Service) GetItemDetail(ctx context.Context, itemID uint) (CatalogItemDetail, error) {
-	return s.GetItemDetailForUser(ctx, itemID, nil)
-}
-
-func (s *Service) GetItemDetailForUser(ctx context.Context, itemID uint, userID *uint) (CatalogItemDetail, error) {
-	item, err := s.loadCatalogItem(ctx, itemID)
+	imagesByItem, err := s.loadMetadataItemImages(ctx, []uint{item.ID})
 	if err != nil {
-		return CatalogItemDetail{}, err
+		return CatalogGovernanceWorkspace{}, err
 	}
-
-	rollups, images, externalIDs, sources, fieldStates, err := s.loadCatalogQueryData(ctx, []uint{item.ID})
+	identitiesByItem, err := s.loadMetadataExternalIdentities(ctx, []uint{item.ID})
 	if err != nil {
-		return CatalogItemDetail{}, err
+		return CatalogGovernanceWorkspace{}, err
 	}
-	assetsByItem, err := s.loadCatalogAssetsByItem(ctx, []uint{item.ID})
+	resources, err := s.loadMetadataResourceDetails(ctx, item.ID, libraryID)
 	if err != nil {
-		return CatalogItemDetail{}, err
+		return CatalogGovernanceWorkspace{}, err
 	}
-	tagsByItem, err := s.loadCatalogDisplayTagsByItem(ctx, []uint{item.ID})
-	if err != nil {
-		return CatalogItemDetail{}, err
-	}
-	relatedItems, err := s.loadRelatedCatalogItems(ctx, item, tagsByItem[item.ID], 12)
-	if err != nil {
-		return CatalogItemDetail{}, err
-	}
-	cast, directors, err := s.loadCatalogItemPeopleDetails(ctx, item, externalIDs[item.ID])
-	if err != nil {
-		return CatalogItemDetail{}, err
-	}
-
-	seasons := []CatalogSeasonDetail{}
-	episodes := []CatalogEpisodeDetail{}
-	if item.Type == ItemTypeSeries {
-		seasons, err = s.ListSeriesSeasons(ctx, item.ID)
-		if err != nil {
-			return CatalogItemDetail{}, err
-		}
-	}
-	var seriesPlaybackTarget *CatalogSeriesPlaybackTarget
-	if item.Type == ItemTypeSeries {
-		seriesPlaybackTarget, err = s.getSeriesPlaybackTarget(ctx, item.ID, userID)
-		if err != nil {
-			return CatalogItemDetail{}, err
-		}
-	}
-	if item.Type == ItemTypeSeason {
-		episodes, err = s.buildCatalogEpisodeDetailsForParent(ctx, item.ID)
-		if err != nil {
-			return CatalogItemDetail{}, err
-		}
-	}
-	episodeContext, seasonID, err := s.loadEpisodeParentContext(ctx, item)
-	if err != nil {
-		return CatalogItemDetail{}, err
-	}
-	sameSeasonEpisodes, err := s.buildSameSeasonEpisodeShelf(ctx, seasonID, item.ID, userID)
-	if err != nil {
-		return CatalogItemDetail{}, err
-	}
-
-	return BuildCatalogItemDetail(CatalogItemDetailInput{
-		Item:                 item,
-		Rollup:               rollups[item.ID],
-		Images:               images[item.ID],
-		ExternalIDs:          externalIDs[item.ID],
-		Sources:              sources[item.ID],
-		FieldStates:          fieldStates[item.ID],
-		Cast:                 cast,
-		Directors:            directors,
-		Tags:                 tagsByItem[item.ID],
-		Seasons:              seasons,
-		Episodes:             episodes,
-		EpisodeContext:       episodeContext,
-		SeriesPlaybackTarget: seriesPlaybackTarget,
-		SameSeasonEpisodes:   sameSeasonEpisodes,
-		Assets:               assetsByItem[item.ID],
-		Related:              relatedItems,
-	}), nil
-}
-
-func (s *Service) getSeriesPlaybackTarget(ctx context.Context, seriesID uint, userID *uint) (*CatalogSeriesPlaybackTarget, error) {
-	target, err := seriesplayback.Select(ctx, s.db, seriesID, userID)
-	if err != nil {
-		return nil, err
-	}
-	if target == nil {
-		return nil, nil
-	}
-	return &CatalogSeriesPlaybackTarget{
-		EpisodeItemID:   target.EpisodeID,
-		AssetID:         target.AssetID,
-		Title:           target.Title,
-		Label:           target.Label,
-		SelectionReason: target.Reason,
+	return CatalogGovernanceWorkspace{
+		MetadataItemID:      item.ID,
+		LibraryID:           projection.LibraryID,
+		Type:                metadataItemTypeToCatalogType(item.ItemType),
+		Title:               strings.TrimSpace(item.Title),
+		AvailabilityStatus:  metadataProjectionAvailability(projection),
+		GovernanceStatus:    strings.TrimSpace(item.GovernanceStatus),
+		SelectedImages:      ensureCatalogSelectedImages(selectedMetadataImages(imagesByItem[item.ID])),
+		ImageCandidates:     ensureCatalogSelectedImages(imagesByItem[item.ID]),
+		ExternalIdentities:  ensureCatalogExternalIdentities(identitiesByItem[item.ID]),
+		SourceEvidence:      []CatalogSourceEvidence{},
+		FieldStates:         []CatalogFieldState{},
+		Resources:           ensureCatalogResourceDetails(resources),
+		Classification:      []CatalogClassificationDecision{},
+		ClassificationRules: []CatalogClassificationRuleSummary{},
+		RecommendedChildren: []CatalogListItem{},
 	}, nil
-}
-
-func (s *Service) loadEpisodeParentContext(ctx context.Context, item database.CatalogItem) (*CatalogEpisodeParentContext, *uint, error) {
-	if item.Type != ItemTypeEpisode {
-		return nil, nil, nil
-	}
-
-	var season *database.CatalogItem
-	if item.ParentID != nil && *item.ParentID > 0 {
-		loaded, err := s.loadCatalogItem(ctx, *item.ParentID)
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, err
-		}
-		if err == nil && loaded.Type == ItemTypeSeason {
-			season = &loaded
-		}
-	}
-
-	var series *database.CatalogItem
-	if season != nil && season.ParentID != nil && *season.ParentID > 0 {
-		loaded, err := s.loadCatalogItem(ctx, *season.ParentID)
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, err
-		}
-		if err == nil && loaded.Type == ItemTypeSeries {
-			series = &loaded
-		}
-	}
-	if series == nil && item.RootID != nil && *item.RootID > 0 {
-		loaded, err := s.loadCatalogItem(ctx, *item.RootID)
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, err
-		}
-		if err == nil && loaded.Type == ItemTypeSeries {
-			series = &loaded
-		}
-	}
-
-	imageIDs := make([]uint, 0, 2)
-	if series != nil {
-		imageIDs = append(imageIDs, series.ID)
-	}
-	if season != nil {
-		imageIDs = append(imageIDs, season.ID)
-	}
-	_, images, _, _, _, err := s.loadCatalogQueryData(ctx, imageIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var seasonID *uint
-	if season != nil {
-		id := season.ID
-		seasonID = &id
-	}
-	return BuildCatalogEpisodeParentContext(series, season, selectedImagesForItem(images, series), selectedImagesForItem(images, season), item), seasonID, nil
-}
-
-func selectedImagesForItem(images map[uint][]database.ItemImage, item *database.CatalogItem) []database.ItemImage {
-	if item == nil {
-		return nil
-	}
-	return images[item.ID]
-}
-
-func (s *Service) buildSameSeasonEpisodeShelf(ctx context.Context, seasonID *uint, currentItemID uint, userID *uint) ([]CatalogEpisodeShelfItem, error) {
-	if seasonID == nil || *seasonID == 0 {
-		return []CatalogEpisodeShelfItem{}, nil
-	}
-	season, err := s.loadCatalogItem(ctx, *seasonID)
-	if err != nil {
-		return nil, err
-	}
-	if season.Type != ItemTypeSeason || season.ParentID == nil || *season.ParentID == 0 {
-		return []CatalogEpisodeShelfItem{}, nil
-	}
-	playableEpisodeIDs, err := seriesplayback.LoadPlayableEpisodeIDs(ctx, s.db, *season.ParentID)
-	if err != nil {
-		return nil, err
-	}
-	episodes, err := s.buildCatalogEpisodeDetailsForParent(ctx, *seasonID)
-	if err != nil {
-		return nil, err
-	}
-	if len(episodes) == 0 {
-		return []CatalogEpisodeShelfItem{}, nil
-	}
-
-	episodeIDs := make([]uint, 0, len(episodes))
-	durationsByItem := make(map[uint]*int, len(episodes))
-	for _, episode := range episodes {
-		if _, ok := playableEpisodeIDs[episode.ID]; !ok {
-			continue
-		}
-		episodeIDs = append(episodeIDs, episode.ID)
-		durationsByItem[episode.ID] = episode.RuntimeSeconds
-	}
-	progressByItem := map[uint]*CatalogUserProgressState{}
-	if userID != nil && *userID > 0 {
-		progressByItem, err = s.loadCatalogUserProgressStatesByItem(ctx, *userID, episodeIDs, durationsByItem)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	shelf := make([]CatalogEpisodeShelfItem, 0, len(episodes))
-	for _, episode := range episodes {
-		if _, ok := playableEpisodeIDs[episode.ID]; !ok {
-			continue
-		}
-		shelf = append(shelf, BuildCatalogEpisodeShelfItem(CatalogEpisodeShelfItemInput{
-			Episode:       episode,
-			CurrentItemID: currentItemID,
-			Progress:      progressByItem[episode.ID],
-		}))
-	}
-	return shelf, nil
-}
-
-func (s *Service) loadCatalogUserProgressStatesByItem(ctx context.Context, userID uint, itemIDs []uint, durationsByItem map[uint]*int) (map[uint]*CatalogUserProgressState, error) {
-	result := make(map[uint]*CatalogUserProgressState, len(itemIDs))
-	if userID == 0 || len(itemIDs) == 0 {
-		return result, nil
-	}
-
-	var rows []database.UserItemData
-	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND item_id IN ? AND asset_id IS NULL", userID, itemIDs).
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		state := catalogUserProgressState(row, durationsByItem[row.ItemID])
-		result[row.ItemID] = &state
-	}
-	return result, nil
-}
-
-func (s *Service) loadCatalogItemPeopleDetails(ctx context.Context, item database.CatalogItem, externalIDs []database.CatalogExternalID) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
-	_ = externalIDs
-	return s.loadCatalogPeopleDetails(ctx, item.ID)
-}
-
-func (s *Service) loadCatalogPeopleDetails(ctx context.Context, itemID uint) ([]CatalogPersonDetail, []CatalogPersonDetail, error) {
-	rows := make([]struct {
-		PersonID     uint
-		RelationRole string
-		Character    string
-		Name         string
-		AvatarURL    string
-	}, 0)
-	if err := s.db.WithContext(ctx).
-		Table("item_people").
-		Select("people.id AS person_id, item_people.role AS relation_role, item_people.character, people.name, people.avatar_url").
-		Joins("JOIN people ON people.id = item_people.person_id").
-		Where("item_people.item_id = ?", itemID).
-		Order("item_people.role asc, item_people.sort_order asc, people.name asc").
-		Scan(&rows).Error; err != nil {
-		return nil, nil, err
-	}
-
-	cast := make([]CatalogPersonDetail, 0, len(rows))
-	directors := make([]CatalogPersonDetail, 0, len(rows))
-	for _, row := range rows {
-		person := CatalogPersonDetail{
-			ID:        row.PersonID,
-			Name:      strings.TrimSpace(row.Name),
-			Role:      strings.TrimSpace(row.Character),
-			AvatarURL: strings.TrimSpace(row.AvatarURL),
-		}
-		if person.Name == "" {
-			continue
-		}
-		switch strings.TrimSpace(row.RelationRole) {
-		case "director":
-			directors = append(directors, person)
-		default:
-			cast = append(cast, person)
-		}
-	}
-	return cast, directors, nil
-}
-
-func (s *Service) ListSeriesSeasons(ctx context.Context, seriesID uint) ([]CatalogSeasonDetail, error) {
-	series, err := s.loadCatalogItem(ctx, seriesID)
-	if err != nil {
-		return nil, err
-	}
-	if series.Type != ItemTypeSeries {
-		return []CatalogSeasonDetail{}, nil
-	}
-
-	var seasons []database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("parent_id = ? AND type = ? AND deleted_at IS NULL", series.ID, ItemTypeSeason).
-		Order("index_number asc").Order("id asc").
-		Find(&seasons).Error; err != nil {
-		return nil, err
-	}
-	if len(seasons) == 0 {
-		return []CatalogSeasonDetail{}, nil
-	}
-
-	seasonIDs := make([]uint, 0, len(seasons))
-	for _, season := range seasons {
-		seasonIDs = append(seasonIDs, season.ID)
-	}
-
-	rollups, images, externalIDs, sources, fieldStates, err := s.loadCatalogQueryData(ctx, seasonIDs)
-	if err != nil {
-		return nil, err
-	}
-	episodesBySeason, err := s.buildCatalogEpisodeDetailsByParent(ctx, seasonIDs)
-	if err != nil {
-		return nil, err
-	}
-	playableEpisodeIDs, err := seriesplayback.LoadPlayableEpisodeIDs(ctx, s.db, series.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]CatalogSeasonDetail, 0, len(seasons))
-	for _, season := range seasons {
-		episodes := make([]CatalogEpisodeDetail, 0, len(episodesBySeason[season.ID]))
-		for _, episode := range episodesBySeason[season.ID] {
-			if _, ok := playableEpisodeIDs[episode.ID]; !ok {
-				continue
-			}
-			episodes = append(episodes, episode)
-		}
-		if len(episodes) == 0 {
-			continue
-		}
-		result = append(result, BuildCatalogSeasonDetail(CatalogSeasonDetailInput{
-			Item:        season,
-			Rollup:      rollups[season.ID],
-			Images:      images[season.ID],
-			ExternalIDs: externalIDs[season.ID],
-			Sources:     sources[season.ID],
-			FieldStates: fieldStates[season.ID],
-			Episodes:    episodes,
-		}))
-	}
-	return result, nil
-}
-
-func (s *Service) GetGovernanceWorkspace(ctx context.Context, itemID uint) (CatalogGovernanceWorkspace, error) {
-	item, err := s.loadCatalogItem(ctx, itemID)
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-	_, images, externalIDs, sources, fieldStates, err := s.loadCatalogQueryData(ctx, []uint{item.ID})
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-	assetsByItem, err := s.loadCatalogAssetsByItem(ctx, []uint{item.ID})
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-	classification, err := s.loadCatalogClassificationDecisions(ctx, item)
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-	classificationRules, err := s.loadCatalogClassificationRules(ctx, item.LibraryID)
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-
-	children, err := s.ListChildren(ctx, item.ID)
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-	recommendedChildren, err := s.buildCatalogListItems(ctx, children)
-	if err != nil {
-		return CatalogGovernanceWorkspace{}, err
-	}
-
-	return BuildCatalogGovernanceWorkspace(CatalogGovernanceWorkspaceInput{
-		Item:                item,
-		Images:              images[item.ID],
-		ExternalIDs:         externalIDs[item.ID],
-		Sources:             sources[item.ID],
-		FieldStates:         fieldStates[item.ID],
-		Assets:              assetsByItem[item.ID],
-		Classification:      classification,
-		ClassificationRules: classificationRules,
-		RecommendedChildren: recommendedChildren,
-	}), nil
-}
-
-func (s *Service) loadCatalogClassificationDecisions(ctx context.Context, item database.CatalogItem) ([]database.ClassificationDecision, error) {
-	var decisions []database.ClassificationDecision
-	query := s.db.WithContext(ctx).
-		Where("library_id = ?", item.LibraryID).
-		Where("item_id = ? OR target_key = ? OR source_path = ?", item.ID, item.Path, item.Path).
-		Order("created_at desc").Order("id desc")
-	if err := query.Find(&decisions).Error; err != nil {
-		return nil, err
-	}
-	return decisions, nil
 }
 
 func (s *Service) loadCatalogClassificationRules(ctx context.Context, libraryID uint) ([]database.ClassificationRule, error) {
@@ -1260,81 +869,111 @@ func (s *Service) ListRecentlyAdded(ctx context.Context, limit int) ([]CatalogLi
 	if limit <= 0 || limit > 100 {
 		limit = 12
 	}
-	items, err := s.listLatestRootItems(ctx, nil, limit)
-	if err != nil {
+	var projections []database.LibraryMetadataProjection
+	if err := s.db.WithContext(ctx).
+		Where("hidden = ?", false).
+		Where("availability_status = ?", database.ProjectionAvailabilityAvailable).
+		Where("item_type IN ?", []string{database.MetadataItemTypeMovie, database.MetadataItemTypeSeries}).
+		Order("latest_added_at desc").Order("metadata_item_id desc").
+		Limit(limit).
+		Find(&projections).Error; err != nil {
 		return nil, err
 	}
-	return s.buildCatalogListItems(ctx, items)
+	return s.buildProjectionListItems(ctx, projections)
 }
 
-func (s *Service) ListLatestByLibrary(ctx context.Context, limit int) ([]CatalogLatestByLibrarySection, error) {
+func (s *Service) ListHomeContentSections(ctx context.Context, limit int) ([]HomeContentSection, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 12
 	}
-	var libraries []database.Library
-	if err := s.db.WithContext(ctx).
-		Where("status IN ?", []string{"active", "syncing"}).
-		Order("name asc").
-		Find(&libraries).Error; err != nil {
-		return nil, err
+	definitions := []struct {
+		key      string
+		title    string
+		itemType string
+	}{
+		{key: "movies", title: "电影", itemType: database.MetadataItemTypeMovie},
+		{key: "series", title: "剧集", itemType: database.MetadataItemTypeSeries},
 	}
-	sections := make([]CatalogLatestByLibrarySection, 0, len(libraries))
-	for _, library := range libraries {
-		items, err := s.listLatestRootItems(ctx, &library.ID, limit)
+	sections := make([]HomeContentSection, 0, len(definitions))
+	for _, definition := range definitions {
+		items, err := s.listLatestProjectionItemsByType(ctx, definition.itemType, limit)
 		if err != nil {
 			return nil, err
 		}
 		if len(items) == 0 {
 			continue
 		}
-		mapped, err := s.buildCatalogListItems(ctx, items)
-		if err != nil {
-			return nil, err
-		}
-		sections = append(sections, CatalogLatestByLibrarySection{
-			LibraryID:   library.ID,
-			LibraryName: library.Name,
-			Items:       mapped,
-		})
+		sections = append(sections, HomeContentSection{Key: definition.key, Title: definition.title, Items: items})
 	}
 	return sections, nil
 }
 
-func (s *Service) listLatestRootItems(ctx context.Context, libraryID *uint, limit int) ([]database.CatalogItem, error) {
-	if limit <= 0 {
-		return []database.CatalogItem{}, nil
+func (s *Service) ListHomeMediaOverview(ctx context.Context, previewLimit int) (HomeMediaOverview, error) {
+	if previewLimit <= 0 || previewLimit > 20 {
+		previewLimit = 4
 	}
-	db := s.db.WithContext(ctx).
-		Table("catalog_search_documents AS browse_docs").
-		Select("catalog_items.*").
-		Joins("JOIN catalog_items ON catalog_items.id = browse_docs.item_id").
-		Joins("JOIN libraries ON libraries.id = catalog_items.library_id AND libraries.status IN ?", []string{"active", "syncing"}).
-		Where("catalog_items.deleted_at IS NULL").
-		Where("catalog_items.parent_id IS NULL").
-		Where("browse_docs.availability_status = ?", AvailabilityAvailable).
-		Where("browse_docs.item_type IN ?", []string{ItemTypeMovie, ItemTypeSeries})
-	db = applyPlayableSeriesVisibility(db)
-	if libraryID != nil {
-		db = db.Where("browse_docs.library_id = ?", *libraryID)
+	definitions := []struct {
+		key      string
+		title    string
+		itemType string
+	}{
+		{key: "movies", title: "电影", itemType: database.MetadataItemTypeMovie},
+		{key: "series", title: "剧集", itemType: database.MetadataItemTypeSeries},
 	}
-	var items []database.CatalogItem
-	if err := db.Order("catalog_items.created_at desc").Order("catalog_items.id desc").Limit(limit).Find(&items).Error; err != nil {
-		return nil, err
+	sections := make([]HomeMediaSectionSummary, 0, len(definitions))
+	for _, definition := range definitions {
+		count, err := s.countProjectionItemsByType(ctx, definition.itemType)
+		if err != nil {
+			return HomeMediaOverview{}, err
+		}
+		items, err := s.listLatestProjectionItemsByType(ctx, definition.itemType, previewLimit)
+		if err != nil {
+			return HomeMediaOverview{}, err
+		}
+		sections = append(sections, HomeMediaSectionSummary{Key: definition.key, Title: definition.title, Count: count, Items: items})
 	}
-	return items, nil
+	return HomeMediaOverview{Sections: sections}, nil
 }
 
-func (s *Service) loadCatalogItem(ctx context.Context, itemID uint) (database.CatalogItem, error) {
-	var item database.CatalogItem
-	err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", itemID).First(&item).Error
-	return item, err
+func (s *Service) listLatestProjectionItemsByType(ctx context.Context, itemType string, limit int) ([]CatalogListItem, error) {
+	if strings.TrimSpace(itemType) == "" || limit <= 0 {
+		return []CatalogListItem{}, nil
+	}
+	var projections []database.LibraryMetadataProjection
+	if err := s.db.WithContext(ctx).
+		Where("hidden = ?", false).
+		Where("availability_status = ?", database.ProjectionAvailabilityAvailable).
+		Where("item_type = ?", itemType).
+		Order("latest_added_at desc").Order("metadata_item_id desc").
+		Limit(limit).
+		Find(&projections).Error; err != nil {
+		return nil, err
+	}
+	return s.buildProjectionListItems(ctx, projections)
+}
+
+func (s *Service) countProjectionItemsByType(ctx context.Context, itemType string) (int, error) {
+	if strings.TrimSpace(itemType) == "" {
+		return 0, nil
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).
+		Model(&database.LibraryMetadataProjection{}).
+		Where("hidden = ?", false).
+		Where("availability_status = ?", database.ProjectionAvailabilityAvailable).
+		Where("item_type = ?", itemType).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return int(count), nil
 }
 
 func (s *Service) IsGovernanceTargetAllowed(ctx context.Context, workspaceItemID uint, targetItemID uint) (bool, error) {
 	if workspaceItemID == 0 || targetItemID == 0 {
 		return false, nil
 	}
-	item, err := s.loadCatalogItem(ctx, targetItemID)
+	var item database.MetadataItem
+	err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", targetItemID).First(&item).Error
 	if err != nil {
 		return false, err
 	}
@@ -1345,428 +984,24 @@ func (s *Service) IsGovernanceTargetAllowed(ctx context.Context, workspaceItemID
 		if item.ParentID == nil || *item.ParentID == 0 {
 			return false, nil
 		}
-		item, err = s.loadCatalogItem(ctx, *item.ParentID)
-		if err != nil {
+		if err = s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", *item.ParentID).First(&item).Error; err != nil {
 			return false, err
 		}
 	}
 }
 
-func (s *Service) buildCatalogListItems(ctx context.Context, items []database.CatalogItem) ([]CatalogListItem, error) {
-	if len(items) == 0 {
-		return []CatalogListItem{}, nil
+func buildCatalogResourceFileAndStreamSummaries(resourceFiles []database.ResourceFile, inventoryFilesByID map[uint]database.InventoryFile, streamsByFileID map[uint][]database.MediaStream) ([]CatalogResourceFileSummary, []CatalogMediaStreamSummary) {
+	if len(resourceFiles) == 0 {
+		return []CatalogResourceFileSummary{}, []CatalogMediaStreamSummary{}
 	}
-	itemIDs := make([]uint, 0, len(items))
-	for _, item := range items {
-		itemIDs = append(itemIDs, item.ID)
-	}
-	rollups, images, externalIDs, _, _, err := s.loadCatalogQueryData(ctx, itemIDs)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]CatalogListItem, 0, len(items))
-	for _, item := range items {
-		result = append(result, BuildCatalogListItem(CatalogListItemInput{
-			Item:        item,
-			Rollup:      rollups[item.ID],
-			Images:      images[item.ID],
-			ExternalIDs: externalIDs[item.ID],
-		}))
-	}
-	return result, nil
-}
-
-func (s *Service) loadCatalogDisplayTagsByItem(ctx context.Context, itemIDs []uint) (map[uint][]CatalogTagDetail, error) {
-	result := make(map[uint][]CatalogTagDetail, len(itemIDs))
-	if len(itemIDs) == 0 {
-		return result, nil
-	}
-	var rows []struct {
-		ItemID uint
-		Kind   string
-		Name   string
-	}
-	if err := s.db.WithContext(ctx).
-		Table("item_tags").
-		Select("item_tags.item_id, tags.kind, tags.name").
-		Joins("JOIN tags ON tags.id = item_tags.tag_id").
-		Where("item_tags.item_id IN ?", itemIDs).
-		Order("item_tags.item_id asc, CASE WHEN LOWER(tags.kind) = 'genre' THEN 0 ELSE 1 END asc, tags.kind asc, tags.name asc").
-		Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	seen := make(map[uint]map[string]struct{}, len(itemIDs))
-	for _, row := range rows {
-		name := strings.TrimSpace(row.Name)
-		if name == "" {
-			continue
-		}
-		kind := strings.TrimSpace(row.Kind)
-		key := strings.ToLower(kind) + "\x00" + strings.ToLower(name)
-		if seen[row.ItemID] == nil {
-			seen[row.ItemID] = make(map[string]struct{})
-		}
-		if _, ok := seen[row.ItemID][key]; ok {
-			continue
-		}
-		seen[row.ItemID][key] = struct{}{}
-		result[row.ItemID] = append(result[row.ItemID], CatalogTagDetail{Kind: kind, Name: name})
-	}
-	return result, nil
-}
-
-func (s *Service) loadRelatedCatalogItems(ctx context.Context, item database.CatalogItem, tags []CatalogTagDetail, limit int) ([]CatalogListItem, error) {
-	if limit <= 0 || limit > 24 {
-		limit = 12
-	}
-	if item.ID == 0 || item.LibraryID == 0 {
-		return []CatalogListItem{}, nil
-	}
-
-	items, err := s.findRelatedItemsByTags(ctx, item, tags, limit)
-	if err != nil {
-		return nil, err
-	}
-	if len(items) < limit {
-		fallback, err := s.findRelatedItemsByLibrary(ctx, item, limit-len(items), relatedItemIDSet(items, item.ID))
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, fallback...)
-	}
-	return s.buildCatalogListItems(ctx, items)
-}
-
-func (s *Service) findRelatedItemsByTags(ctx context.Context, item database.CatalogItem, tags []CatalogTagDetail, limit int) ([]database.CatalogItem, error) {
-	tagNames := relatedTagNames(tags)
-	if len(tagNames) == 0 {
-		return []database.CatalogItem{}, nil
-	}
-	var items []database.CatalogItem
-	err := s.db.WithContext(ctx).
-		Table("catalog_search_documents AS related_docs").
-		Select("catalog_items.*").
-		Joins("JOIN catalog_items ON catalog_items.id = related_docs.item_id").
-		Joins("JOIN item_tags ON item_tags.item_id = catalog_items.id").
-		Joins("JOIN tags ON tags.id = item_tags.tag_id").
-		Where("catalog_items.deleted_at IS NULL").
-		Where("related_docs.library_id = ?", item.LibraryID).
-		Where("catalog_items.id <> ?", item.ID).
-		Where("catalog_items.parent_id IS NULL").
-		Where("related_docs.item_type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
-		Where("LOWER(tags.name) IN ?", tagNames).
-		Group("catalog_items.id").
-		Order("COUNT(tags.id) desc").
-		Order("related_docs.year desc").
-		Order("catalog_items.sort_key asc").
-		Order("catalog_items.title asc").
-		Order("catalog_items.id asc").
-		Limit(limit).
-		Find(&items).Error
-	return items, err
-}
-
-func (s *Service) findRelatedItemsByLibrary(ctx context.Context, item database.CatalogItem, limit int, excluded map[uint]struct{}) ([]database.CatalogItem, error) {
-	if limit <= 0 {
-		return []database.CatalogItem{}, nil
-	}
-	excludedIDs := make([]uint, 0, len(excluded))
-	for id := range excluded {
-		excludedIDs = append(excludedIDs, id)
-	}
-	sort.Slice(excludedIDs, func(i, j int) bool { return excludedIDs[i] < excludedIDs[j] })
-	var items []database.CatalogItem
-	query := s.db.WithContext(ctx).
-		Table("catalog_search_documents AS related_docs").
-		Select("catalog_items.*").
-		Joins("JOIN catalog_items ON catalog_items.id = related_docs.item_id").
-		Where("catalog_items.deleted_at IS NULL").
-		Where("related_docs.library_id = ?", item.LibraryID).
-		Where("catalog_items.parent_id IS NULL").
-		Where("related_docs.item_type IN ?", []string{ItemTypeMovie, ItemTypeSeries}).
-		Where("catalog_items.id NOT IN ?", excludedIDs).
-		Order("related_docs.year desc").
-		Order("catalog_items.sort_key asc").
-		Order("catalog_items.title asc").
-		Order("catalog_items.id asc").
-		Limit(limit)
-	if err := query.Find(&items).Error; err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-func relatedTagNames(tags []CatalogTagDetail) []string {
-	if len(tags) == 0 {
-		return nil
-	}
-	preferred := make([]string, 0, len(tags))
-	fallback := make([]string, 0, len(tags))
-	seenPreferred := make(map[string]struct{}, len(tags))
-	seenFallback := make(map[string]struct{}, len(tags))
-	for _, tag := range tags {
-		name := strings.ToLower(strings.TrimSpace(tag.Name))
-		if name == "" {
-			continue
-		}
-		if _, ok := seenFallback[name]; !ok {
-			fallback = append(fallback, name)
-			seenFallback[name] = struct{}{}
-		}
-		if strings.EqualFold(strings.TrimSpace(tag.Kind), "genre") {
-			if _, ok := seenPreferred[name]; ok {
-				continue
-			}
-			preferred = append(preferred, name)
-			seenPreferred[name] = struct{}{}
-		}
-	}
-	if len(preferred) > 0 {
-		return preferred
-	}
-	return fallback
-}
-
-func relatedItemIDSet(items []database.CatalogItem, currentID uint) map[uint]struct{} {
-	ids := make(map[uint]struct{}, len(items)+1)
-	ids[currentID] = struct{}{}
-	for _, item := range items {
-		ids[item.ID] = struct{}{}
-	}
-	return ids
-}
-
-func (s *Service) buildCatalogEpisodeDetailsForParent(ctx context.Context, parentID uint) ([]CatalogEpisodeDetail, error) {
-	byParent, err := s.buildCatalogEpisodeDetailsByParent(ctx, []uint{parentID})
-	if err != nil {
-		return nil, err
-	}
-	return byParent[parentID], nil
-}
-
-func (s *Service) buildCatalogEpisodeDetailsByParent(ctx context.Context, parentIDs []uint) (map[uint][]CatalogEpisodeDetail, error) {
-	if len(parentIDs) == 0 {
-		return map[uint][]CatalogEpisodeDetail{}, nil
-	}
-	var episodes []database.CatalogItem
-	if err := s.db.WithContext(ctx).
-		Where("parent_id IN ? AND type = ? AND deleted_at IS NULL", parentIDs, ItemTypeEpisode).
-		Order("parent_id asc").Order("index_number asc").Order("id asc").
-		Find(&episodes).Error; err != nil {
-		return nil, err
-	}
-	if len(episodes) == 0 {
-		return map[uint][]CatalogEpisodeDetail{}, nil
-	}
-	itemIDs := make([]uint, 0, len(episodes))
-	for _, episode := range episodes {
-		itemIDs = append(itemIDs, episode.ID)
-	}
-	_, images, externalIDs, sources, fieldStates, err := s.loadCatalogQueryData(ctx, itemIDs)
-	if err != nil {
-		return nil, err
-	}
-	assetsByItem, err := s.loadCatalogAssetsByItem(ctx, itemIDs)
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[uint][]CatalogEpisodeDetail, len(parentIDs))
-	for _, episode := range episodes {
-		if episode.ParentID == nil {
-			continue
-		}
-		result[*episode.ParentID] = append(result[*episode.ParentID], BuildCatalogEpisodeDetail(CatalogEpisodeDetailInput{
-			Item:        episode,
-			Images:      images[episode.ID],
-			ExternalIDs: externalIDs[episode.ID],
-			Sources:     sources[episode.ID],
-			FieldStates: fieldStates[episode.ID],
-			Assets:      assetsByItem[episode.ID],
-		}))
-	}
-	return result, nil
-}
-
-func (s *Service) loadCatalogQueryData(ctx context.Context, itemIDs []uint) (map[uint]*database.ItemRollup, map[uint][]database.ItemImage, map[uint][]database.CatalogExternalID, map[uint][]database.MetadataSource, map[uint][]database.MetadataFieldState, error) {
-	rollups := make(map[uint]*database.ItemRollup, len(itemIDs))
-	images := make(map[uint][]database.ItemImage, len(itemIDs))
-	externalIDs := make(map[uint][]database.CatalogExternalID, len(itemIDs))
-	sources := make(map[uint][]database.MetadataSource, len(itemIDs))
-	fieldStates := make(map[uint][]database.MetadataFieldState, len(itemIDs))
-	if len(itemIDs) == 0 {
-		return rollups, images, externalIDs, sources, fieldStates, nil
-	}
-
-	var rollupRows []database.ItemRollup
-	if err := s.db.WithContext(ctx).Where("item_id IN ?", itemIDs).Find(&rollupRows).Error; err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, row := range rollupRows {
-		rowCopy := row
-		rollups[row.ItemID] = &rowCopy
-	}
-
-	var imageRows []database.ItemImage
-	if err := s.db.WithContext(ctx).Where("item_id IN ?", itemIDs).Order("item_id asc, sort_order asc, id asc").Find(&imageRows).Error; err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, row := range imageRows {
-		images[row.ItemID] = append(images[row.ItemID], row)
-	}
-
-	var externalIDRows []database.CatalogExternalID
-	if err := s.db.WithContext(ctx).Where("item_id IN ?", itemIDs).Order("item_id asc, is_primary desc, provider asc, provider_type asc, id asc").Find(&externalIDRows).Error; err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, row := range externalIDRows {
-		externalIDs[row.ItemID] = append(externalIDs[row.ItemID], row)
-	}
-
-	var sourceRows []database.MetadataSource
-	if err := s.db.WithContext(ctx).Where("item_id IN ?", itemIDs).Order("item_id asc, fetched_at desc, id desc").Find(&sourceRows).Error; err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, row := range sourceRows {
-		sources[row.ItemID] = append(sources[row.ItemID], row)
-	}
-
-	var fieldStateRows []database.MetadataFieldState
-	if err := s.db.WithContext(ctx).Where("item_id IN ?", itemIDs).Order("item_id asc, field_key asc, id asc").Find(&fieldStateRows).Error; err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, row := range fieldStateRows {
-		fieldStates[row.ItemID] = append(fieldStates[row.ItemID], row)
-	}
-
-	return rollups, images, externalIDs, sources, fieldStates, nil
-}
-
-func (s *Service) loadCatalogAssetsByItem(ctx context.Context, itemIDs []uint) (map[uint][]CatalogAssetDetail, error) {
-	result := make(map[uint][]CatalogAssetDetail, len(itemIDs))
-	if len(itemIDs) == 0 {
-		return result, nil
-	}
-
-	var links []database.AssetItem
-	if err := s.db.WithContext(ctx).
-		Where("item_id IN ?", itemIDs).
-		Order("item_id asc, role asc, segment_index asc, id asc").
-		Find(&links).Error; err != nil {
-		return nil, err
-	}
-	if len(links) == 0 {
-		return result, nil
-	}
-
-	assetIDs := make([]uint, 0, len(links))
-	assetIDSet := make(map[uint]struct{}, len(links))
-	linksByItem := make(map[uint][]database.AssetItem, len(itemIDs))
-	for _, link := range links {
-		linksByItem[link.ItemID] = append(linksByItem[link.ItemID], link)
-		if _, ok := assetIDSet[link.AssetID]; ok {
-			continue
-		}
-		assetIDSet[link.AssetID] = struct{}{}
-		assetIDs = append(assetIDs, link.AssetID)
-	}
-
-	var assetLinks []database.AssetItem
-	if err := s.db.WithContext(ctx).
-		Where("asset_id IN ?", assetIDs).
-		Order("asset_id asc, role asc, segment_index asc, id asc").
-		Find(&assetLinks).Error; err != nil {
-		return nil, err
-	}
-	linksByAsset := make(map[uint][]database.AssetItem, len(assetLinks))
-	for _, link := range assetLinks {
-		linksByAsset[link.AssetID] = append(linksByAsset[link.AssetID], link)
-	}
-
-	var assets []database.MediaAsset
-	if err := s.db.WithContext(ctx).Where("id IN ? AND deleted_at IS NULL", assetIDs).Order("id asc").Find(&assets).Error; err != nil {
-		return nil, err
-	}
-	assetByID := make(map[uint]database.MediaAsset, len(assets))
-	for _, asset := range assets {
-		assetByID[asset.ID] = asset
-	}
-
-	var assetFileRows []database.AssetFile
-	if err := s.db.WithContext(ctx).Where("asset_id IN ?", assetIDs).Order("asset_id asc, part_index asc, id asc").Find(&assetFileRows).Error; err != nil {
-		return nil, err
-	}
-	fileIDsByAsset := make(map[uint][]uint, len(assetIDs))
-	assetFilesByAsset := make(map[uint][]database.AssetFile, len(assetIDs))
-	fileIDSet := make(map[uint]struct{}, len(assetFileRows))
-	fileIDs := make([]uint, 0, len(assetFileRows))
-	for _, row := range assetFileRows {
-		fileIDsByAsset[row.AssetID] = append(fileIDsByAsset[row.AssetID], row.FileID)
-		assetFilesByAsset[row.AssetID] = append(assetFilesByAsset[row.AssetID], row)
-		if _, ok := fileIDSet[row.FileID]; ok {
-			continue
-		}
-		fileIDSet[row.FileID] = struct{}{}
-		fileIDs = append(fileIDs, row.FileID)
-	}
-
-	inventoryFilesByID := make(map[uint]database.InventoryFile, len(fileIDs))
-	streamsByFileID := make(map[uint][]database.MediaStream, len(fileIDs))
-	if len(fileIDs) > 0 {
-		var inventoryFiles []database.InventoryFile
-		if err := s.db.WithContext(ctx).Where("id IN ?", fileIDs).Order("id asc").Find(&inventoryFiles).Error; err != nil {
-			return nil, err
-		}
-		for _, file := range inventoryFiles {
-			inventoryFilesByID[file.ID] = file
-		}
-
-		var streams []database.MediaStream
-		if err := s.db.WithContext(ctx).Where("file_id IN ?", fileIDs).Order("file_id asc, stream_index asc").Find(&streams).Error; err != nil {
-			return nil, err
-		}
-		for _, stream := range streams {
-			streamsByFileID[stream.FileID] = append(streamsByFileID[stream.FileID], stream)
-		}
-	}
-
-	for itemID, itemLinks := range linksByItem {
-		assetDetails := make([]CatalogAssetDetail, 0, len(itemLinks))
-		seenAssets := make(map[uint]struct{}, len(itemLinks))
-		for _, link := range itemLinks {
-			if _, ok := seenAssets[link.AssetID]; ok {
-				continue
-			}
-			asset, ok := assetByID[link.AssetID]
-			if !ok {
-				continue
-			}
-			fileSummaries, streamSummaries := buildCatalogAssetFileAndStreamSummaries(assetFilesByAsset[link.AssetID], inventoryFilesByID, streamsByFileID)
-			assetDetails = append(assetDetails, BuildCatalogAssetDetail(CatalogAssetDetailInput{Asset: asset, Links: linksByAsset[link.AssetID], FileIDs: fileIDsByAsset[link.AssetID], Files: fileSummaries, Streams: streamSummaries}))
-			seenAssets[link.AssetID] = struct{}{}
-		}
-		sort.SliceStable(assetDetails, func(i, j int) bool {
-			if assetDetails[i].Status != assetDetails[j].Status {
-				return assetDetails[i].Status < assetDetails[j].Status
-			}
-			return assetDetails[i].ID < assetDetails[j].ID
-		})
-		result[itemID] = assetDetails
-	}
-	return result, nil
-}
-
-func buildCatalogAssetFileAndStreamSummaries(assetFiles []database.AssetFile, inventoryFilesByID map[uint]database.InventoryFile, streamsByFileID map[uint][]database.MediaStream) ([]CatalogAssetFileSummary, []CatalogMediaStreamSummary) {
-	if len(assetFiles) == 0 {
-		return []CatalogAssetFileSummary{}, []CatalogMediaStreamSummary{}
-	}
-	fileSummaries := make([]CatalogAssetFileSummary, 0, len(assetFiles))
+	fileSummaries := make([]CatalogResourceFileSummary, 0, len(resourceFiles))
 	streamSummaries := make([]CatalogMediaStreamSummary, 0)
-	for _, assetFile := range assetFiles {
-		file := inventoryFilesByID[assetFile.FileID]
-		fileSummaries = append(fileSummaries, CatalogAssetFileSummary{
-			FileID:              assetFile.FileID,
-			Role:                strings.TrimSpace(assetFile.Role),
-			PartIndex:           assetFile.PartIndex,
+	for _, resourceFile := range resourceFiles {
+		file := inventoryFilesByID[resourceFile.InventoryFileID]
+		fileSummaries = append(fileSummaries, CatalogResourceFileSummary{
+			FileID:              resourceFile.InventoryFileID,
+			Role:                strings.TrimSpace(resourceFile.Role),
+			PartIndex:           resourceFile.PartIndex,
 			StorageProvider:     strings.TrimSpace(file.StorageProvider),
 			StoragePath:         strings.TrimSpace(file.StoragePath),
 			StableIdentity:      strings.TrimSpace(file.StableIdentityKey),
@@ -1776,7 +1011,7 @@ func buildCatalogAssetFileAndStreamSummaries(assetFiles []database.AssetFile, in
 			ModifiedAt:          file.ModifiedAt,
 			ProviderDiagnostics: buildCatalogProviderDiagnostics(file),
 		})
-		for _, stream := range streamsByFileID[assetFile.FileID] {
+		for _, stream := range streamsByFileID[resourceFile.InventoryFileID] {
 			streamSummaries = append(streamSummaries, buildCatalogMediaStreamSummary(stream, file))
 		}
 	}

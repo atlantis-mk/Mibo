@@ -1,39 +1,34 @@
-import {
-  CheckIcon,
-  LoaderCircleIcon,
-  RefreshCwIcon,
-  SearchIcon,
-} from 'lucide-react'
+import { CheckIcon, LoaderCircleIcon, RefreshCwIcon } from "lucide-react"
 
-import { Button } from '#/components/ui/button'
+import { Button } from "#/components/ui/button"
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from '#/components/ui/card'
-import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
-import { Input } from '#/components/ui/input'
-import { Separator } from '#/components/ui/separator'
-import { Textarea } from '#/components/ui/textarea'
+} from "#/components/ui/card"
+import { Field, FieldGroup, FieldLabel } from "#/components/ui/field"
+import { Input } from "#/components/ui/input"
+import { Separator } from "#/components/ui/separator"
+import { Textarea } from "#/components/ui/textarea"
 import type {
-  CatalogAssetDetail,
   CatalogClassificationDecision,
   CatalogFieldState,
   CatalogGovernanceWorkspace,
   CatalogListItem,
   CatalogSelectedImage,
   CatalogSourceEvidence,
-  MetadataSearchCandidate,
-} from '#/lib/mibo-api'
+  MediaResourceDetail,
+} from "#/lib/mibo-api"
+import { formatResourceVariantLabel } from "#/features/media/components/standalone-media-detail-utils"
 
-import { ArtworkPreview, CandidateCard, SummaryRow } from './detail-sections'
+import { ArtworkPreview, SummaryRow } from "./detail-sections"
 import {
   formatClassificationStatus,
   formatClassificationType,
   formatMediaType,
-} from './formatters'
+} from "./formatters"
 
 type MetadataDraft = {
   title: string
@@ -151,136 +146,6 @@ export function DraftEditorCard({
   )
 }
 
-export function CandidateSearchCard({
-  searchTitle,
-  searchYear,
-  searchIMDbId,
-  searchTMDBId,
-  searchTVDBId,
-  isPending,
-  isSuccess,
-  activeCandidates,
-  onSearchTitleChange,
-  onSearchYearChange,
-  onSearchIMDbIdChange,
-  onSearchTMDBIdChange,
-  onSearchTVDBIdChange,
-  onSearch,
-  onPreview,
-}: {
-  searchTitle: string
-  searchYear: string
-  searchIMDbId: string
-  searchTMDBId: string
-  searchTVDBId: string
-  isPending: boolean
-  isSuccess: boolean
-  activeCandidates: MetadataSearchCandidate[]
-  onSearchTitleChange: (value: string) => void
-  onSearchYearChange: (value: string) => void
-  onSearchIMDbIdChange: (value: string) => void
-  onSearchTMDBIdChange: (value: string) => void
-  onSearchTVDBIdChange: (value: string) => void
-  onSearch: () => void
-  onPreview: (candidate: MetadataSearchCandidate) => void
-}) {
-  return (
-    <Card className="rounded-[1.5rem] border-border/60 bg-card/80 py-0 shadow-sm">
-      <CardHeader className="px-5 py-5">
-        <CardTitle>匹配候选治理</CardTitle>
-        <CardDescription>
-          搜索候选后先预览差异，再确认应用，避免直接覆盖当前元数据。
-        </CardDescription>
-      </CardHeader>
-      <Separator className="bg-border" />
-      <CardContent className="space-y-4 px-5 py-5">
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_auto]">
-          <Field>
-            <FieldLabel htmlFor="candidate-title">搜索标题</FieldLabel>
-            <Input
-              id="candidate-title"
-              value={searchTitle}
-              onChange={(event) => onSearchTitleChange(event.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="candidate-year">年份</FieldLabel>
-            <Input
-              id="candidate-year"
-              inputMode="numeric"
-              value={searchYear}
-              onChange={(event) => onSearchYearChange(event.target.value)}
-            />
-          </Field>
-          <div className="flex items-end">
-            <Button onClick={onSearch} disabled={isPending}>
-              {isPending ? (
-                <LoaderCircleIcon className="size-4 animate-spin" />
-              ) : (
-                <SearchIcon className="size-4" />
-              )}
-              搜索候选
-            </Button>
-          </div>
-        </div>
-        <div className="grid gap-4 md:grid-cols-3">
-          <Field>
-            <FieldLabel htmlFor="candidate-imdb-id">IMDb ID</FieldLabel>
-            <Input
-              id="candidate-imdb-id"
-              value={searchIMDbId}
-              onChange={(event) => onSearchIMDbIdChange(event.target.value)}
-              placeholder="tt1234567"
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="candidate-tmdb-id">TMDB ID</FieldLabel>
-            <Input
-              id="candidate-tmdb-id"
-              value={searchTMDBId}
-              onChange={(event) => onSearchTMDBIdChange(event.target.value)}
-              placeholder="101"
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="candidate-tvdb-id">TVDB ID</FieldLabel>
-            <Input
-              id="candidate-tvdb-id"
-              value={searchTVDBId}
-              onChange={(event) => onSearchTVDBIdChange(event.target.value)}
-              placeholder="12345"
-            />
-          </Field>
-        </div>
-        <p className="text-xs leading-5 text-muted-foreground">
-          支持标题模糊搜索，也支持通过 IMDb / TMDB / TVDB ID 直接精确定位候选。
-        </p>
-        <div className="space-y-3">
-          {activeCandidates.length ? (
-            activeCandidates.map((candidate) => (
-              <CandidateCard
-                key={metadataCandidateKey(candidate)}
-                candidate={candidate}
-                onPreview={() => onPreview(candidate)}
-              />
-            ))
-          ) : (
-            <div className="rounded-[1.25rem] border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
-              {isSuccess
-                ? '没有找到候选，可以调整标题后重试。'
-                : '输入标题后搜索候选。'}
-            </div>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function metadataCandidateKey(candidate: MetadataSearchCandidate) {
-  return `${candidate.provider.trim().toLowerCase()}-${candidate.external_id.trim()}`
-}
-
 export function MetadataSummaryCard({
   item,
 }: {
@@ -303,42 +168,34 @@ export function MetadataSummaryCard({
       <Separator className="bg-border" />
       <CardContent className="grid gap-4 px-5 py-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <SummaryRow label="标题" value={item.title} />
-        <SummaryRow label="原始标题" value={item.original_title || '未填写'} />
+        <SummaryRow label="原始标题" value={item.original_title || "未填写"} />
         <SummaryRow
           label="年份"
-          value={item.year ? String(item.year) : '未填写'}
+          value={item.year ? String(item.year) : "未填写"}
         />
         <SummaryRow label="类型" value={formatMediaType(item.type)} />
-        <SummaryRow label="可用性" value={item.availability_status || '未知'} />
+        <SummaryRow label="可用性" value={item.availability_status || "未知"} />
         <SummaryRow
           label="治理状态"
-          value={item.governance_status || 'pending'}
+          value={item.governance_status || "pending"}
         />
         <SummaryRow
           label="元数据来源"
-          value={item.metadata_provider?.toUpperCase() || '未匹配'}
+          value={item.metadata_provider?.toUpperCase() || "未匹配"}
         />
-        <SummaryRow label="外部 ID" value={item.external_id || '未关联'} />
+        <SummaryRow label="外部 ID" value={item.external_id || "未关联"} />
       </CardContent>
     </Card>
   )
 }
 
 export function AsyncActionsCard({
-  rematchPending,
-  refetchPending,
   reprobePending,
   reprobeDisabled,
-  onRematch,
-  onRefetch,
   onReprobe,
 }: {
-  rematchPending: boolean
-  refetchPending: boolean
   reprobePending: boolean
   reprobeDisabled: boolean
-  onRematch: () => void
-  onRefetch: () => void
   onReprobe: () => void
 }) {
   return (
@@ -346,37 +203,11 @@ export function AsyncActionsCard({
       <CardHeader className="px-5 py-5">
         <CardTitle>后台动作</CardTitle>
         <CardDescription>
-          将重匹配和重抓拆开显示，保留明确职责边界。
+          当前只保留资源探测动作；元数据匹配会在扫描流程中自动处理。
         </CardDescription>
       </CardHeader>
       <Separator className="bg-border" />
       <CardContent className="space-y-3 px-5 py-5">
-        <Button
-          className="w-full justify-start"
-          variant="outline"
-          onClick={onRematch}
-          disabled={rematchPending}
-        >
-          {rematchPending ? (
-            <LoaderCircleIcon className="size-4 animate-spin" />
-          ) : (
-            <RefreshCwIcon className="size-4" />
-          )}
-          重新匹配
-        </Button>
-        <Button
-          className="w-full justify-start"
-          variant="outline"
-          onClick={onRefetch}
-          disabled={refetchPending}
-        >
-          {refetchPending ? (
-            <LoaderCircleIcon className="size-4 animate-spin" />
-          ) : (
-            <RefreshCwIcon className="size-4" />
-          )}
-          元数据重抓
-        </Button>
         <Button
           className="w-full justify-start"
           variant="outline"
@@ -445,17 +276,17 @@ export function FieldLocksCard({
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {field.is_locked
-                    ? field.lock_reason || '已锁定'
-                    : '当前未锁定'}
+                    ? field.lock_reason || "已锁定"
+                    : "当前未锁定"}
                 </div>
               </div>
               <Button
                 size="sm"
-                variant={field.is_locked ? 'secondary' : 'outline'}
+                variant={field.is_locked ? "secondary" : "outline"}
                 onClick={() => onToggleLock(field.field_key, !field.is_locked)}
                 disabled={isPending}
               >
-                {field.is_locked ? '解锁' : '锁定'}
+                {field.is_locked ? "解锁" : "锁定"}
               </Button>
             </div>
           ))
@@ -493,52 +324,54 @@ export function ClassificationReviewCard({
                 key={decision.id}
                 className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3 text-sm"
               >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-medium text-foreground">
-                    {formatClassificationType(decision.candidate_type ?? '')}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-foreground">
+                      {formatClassificationType(decision.candidate_type ?? "")}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {decision.source_path}
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {decision.source_path}
-                  </div>
+                  <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                    {formatClassificationStatus(decision.status)}
+                  </span>
                 </div>
-                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-                  {formatClassificationStatus(decision.status)}
-                </span>
-              </div>
-              <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
-                <div>
-                  置信度：
-                  {typeof decision.confidence === 'number'
-                    ? `${Math.round(decision.confidence * 100)}%`
-                    : '未记录'}
+                <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
+                  <div>
+                    置信度：
+                    {typeof decision.confidence === "number"
+                      ? `${Math.round(decision.confidence * 100)}%`
+                      : "未记录"}
+                  </div>
+                  {decision.reason ? <div>原因：{decision.reason}</div> : null}
+                  {alternatives.length ? (
+                    <div>
+                      备选：
+                      {alternatives
+                        .map((item) => formatClassificationType(item.type))
+                        .join("、")}
+                    </div>
+                  ) : null}
+                  {evidence.length ? (
+                    <div>
+                      证据：
+                      {evidence
+                        .slice(0, 3)
+                        .map((item) => item.value || item.kind)
+                        .join("、")}
+                    </div>
+                  ) : null}
+                  {correctionActions.length ? (
+                    <div>
+                      可选操作：
+                      {correctionActions
+                        .map((action) => action.label)
+                        .join("、")}
+                    </div>
+                  ) : null}
                 </div>
-                {decision.reason ? <div>原因：{decision.reason}</div> : null}
-                {alternatives.length ? (
-                  <div>
-                    备选：
-                    {alternatives
-                      .map((item) => formatClassificationType(item.type))
-                      .join('、')}
-                  </div>
-                ) : null}
-                {evidence.length ? (
-                  <div>
-                    证据：
-                    {evidence
-                      .slice(0, 3)
-                      .map((item) => item.value || item.kind)
-                      .join('、')}
-                  </div>
-                ) : null}
-                {correctionActions.length ? (
-                  <div>
-                    可选操作：
-                    {correctionActions.map((action) => action.label).join('、')}
-                  </div>
-                ) : null}
               </div>
-            </div>
             )
           })
         ) : (
@@ -584,10 +417,10 @@ export function SourceEvidenceCard({
                 ) : null}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {source.external_id || '无外部 ID'} · {source.fetched_at}
+                {source.external_id || "无外部 ID"} · {source.fetched_at}
               </div>
-              <div className="mt-2 text-xs text-foreground/80 [overflow-wrap:anywhere]">
-                {source.summary ? JSON.stringify(source.summary) : '无来源摘要'}
+              <div className="mt-2 text-xs [overflow-wrap:anywhere] text-foreground/80">
+                {source.summary ? JSON.stringify(source.summary) : "无来源摘要"}
               </div>
             </div>
           ))
@@ -603,18 +436,18 @@ export function SourceEvidenceCard({
 
 function catalogSourceEvidenceKey(
   source: CatalogSourceEvidence,
-  index: number,
+  index: number
 ) {
   return [
     source.source_type,
     source.source_name,
-    source.external_id || 'no-external-id',
-    source.language || 'no-language',
+    source.external_id || "no-external-id",
+    source.language || "no-language",
     source.fetched_at,
     index,
   ]
     .map((part) => String(part).trim())
-    .join('-')
+    .join("-")
 }
 
 export function ImageCandidatesCard({
@@ -641,7 +474,7 @@ export function ImageCandidatesCard({
             const isSelected = selectedImages.some(
               (selected) =>
                 selected.image_type === image.image_type &&
-                selected.url === image.url,
+                selected.url === image.url
             )
 
             return (
@@ -668,12 +501,12 @@ export function ImageCandidatesCard({
                 </div>
                 <Button
                   size="sm"
-                  variant={isSelected ? 'secondary' : 'outline'}
+                  variant={isSelected ? "secondary" : "outline"}
                   onClick={() => onSelect(image.image_type, image.url)}
                   disabled={isPending}
                 >
                   {isSelected ? <CheckIcon className="size-4" /> : null}
-                  {isSelected ? '已选中' : '设为当前'}
+                  {isSelected ? "已选中" : "设为当前"}
                 </Button>
               </div>
             )
@@ -688,15 +521,12 @@ export function ImageCandidatesCard({
   )
 }
 
-export function AssetLinksCard({
+export function ResourceLinksCard({
   workspaceItem,
   relatedChildren,
-  assets,
+  resources,
   reprobePendingFileId,
-  linkMutation,
   onReprobe,
-  onLink,
-  onUnlink,
 }: {
   workspaceItem: {
     id: number
@@ -706,16 +536,9 @@ export function AssetLinksCard({
     governance_status: string
   }
   relatedChildren: CatalogListItem[]
-  assets: CatalogAssetDetail[]
+  resources: MediaResourceDetail[]
   reprobePendingFileId?: number
-  linkMutation?: {
-    assetId: number
-    targetItemId: number
-    mode: 'link' | 'unlink'
-  }
   onReprobe: (fileId: number) => void
-  onLink: (assetId: number, targetItemId: number) => void
-  onUnlink: (assetId: number, targetItemId: number) => void
 }) {
   const candidateItems = [
     {
@@ -731,30 +554,27 @@ export function AssetLinksCard({
   return (
     <Card className="rounded-[1.5rem] border-border/60 bg-card/80 py-0 shadow-sm">
       <CardHeader className="px-5 py-5">
-        <CardTitle>资产链接</CardTitle>
+        <CardTitle>资源链接</CardTitle>
         <CardDescription>
-          展示播放版本、质量、链接条目和重新探测入口。
+          展示播放资源、质量、元数据链接和重新探测入口。
         </CardDescription>
       </CardHeader>
       <Separator className="bg-border" />
       <CardContent className="space-y-3 px-5 py-5">
-        {assets.length ? (
-          assets.map((asset) => (
-            <AssetLinkEditor
-              key={asset.id}
+        {resources.length ? (
+          resources.map((resource) => (
+            <ResourceLinkEditor
+              key={resource.id}
               workspaceItem={workspaceItem}
               candidateItems={candidateItems}
-              asset={asset}
+              resource={resource}
               reprobePendingFileId={reprobePendingFileId}
-              linkMutation={linkMutation}
               onReprobe={onReprobe}
-              onLink={onLink}
-              onUnlink={onUnlink}
             />
           ))
         ) : (
           <div className="text-sm text-muted-foreground">
-            当前没有资产链接。
+            当前没有资源链接。
           </div>
         )}
       </CardContent>
@@ -764,16 +584,19 @@ export function AssetLinksCard({
 
 export function RelatedChildrenCard({
   workspace,
-  assets,
+  resources,
 }: {
   workspace: CatalogGovernanceWorkspace
-  assets: CatalogAssetDetail[]
+  resources: MediaResourceDetail[]
 }) {
   const relatedChildren = workspace.recommended_children ?? []
   const linkedCounts = new Map<number, number>()
-  for (const asset of assets) {
-    for (const link of asset.links ?? []) {
-      linkedCounts.set(link.item_id, (linkedCounts.get(link.item_id) ?? 0) + 1)
+  for (const resource of resources) {
+    for (const link of resource.links ?? []) {
+      linkedCounts.set(
+        link.metadata_item_id,
+        (linkedCounts.get(link.metadata_item_id) ?? 0) + 1
+      )
     }
   }
 
@@ -795,11 +618,11 @@ export function RelatedChildrenCard({
                 {child.title}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {formatMediaType(child.type)} · {child.availability_status} ·{' '}
+                {formatMediaType(child.type)} · {child.availability_status} ·{" "}
                 {child.governance_status}
               </div>
               <div className="mt-2 text-xs text-muted-foreground">
-                已链接资产 {linkedCounts.get(child.id) ?? 0} 个
+                已链接资源 {linkedCounts.get(child.id) ?? 0} 个
               </div>
             </div>
           ))
@@ -813,15 +636,12 @@ export function RelatedChildrenCard({
   )
 }
 
-function AssetLinkEditor({
+function ResourceLinkEditor({
   workspaceItem,
   candidateItems,
-  asset,
+  resource,
   reprobePendingFileId,
-  linkMutation,
   onReprobe,
-  onLink,
-  onUnlink,
 }: {
   workspaceItem: {
     id: number
@@ -834,83 +654,54 @@ function AssetLinkEditor({
     availability_status: string
     governance_status: string
   }>
-  asset: CatalogAssetDetail
+  resource: MediaResourceDetail
   reprobePendingFileId?: number
-  linkMutation?: {
-    assetId: number
-    targetItemId: number
-    mode: 'link' | 'unlink'
-  }
   onReprobe: (fileId: number) => void
-  onLink: (assetId: number, targetItemId: number) => void
-  onUnlink: (assetId: number, targetItemId: number) => void
 }) {
-  const assetLinks = asset.links ?? []
-  const linkedItemIds = new Set(assetLinks.map((link) => link.item_id))
-  const linkedItems = assetLinks.map((link) => ({
+  const resourceLinks = resource.links ?? []
+  const linkedItems = resourceLinks.map((link) => ({
     ...link,
-    item: candidateItems.find((candidate) => candidate.id === link.item_id),
+    item: candidateItems.find(
+      (candidate) => candidate.id === link.metadata_item_id
+    ),
   }))
-  const availableTargets = candidateItems.filter(
-    (candidate) => !linkedItemIds.has(candidate.id),
-  )
 
   return (
     <div className="rounded-[1rem] border border-border/60 bg-background/60 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-foreground">
-            {asset.display_name || `资产 ${asset.id}`}
+            {formatResourceVariantLabel(resource)}
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {[asset.asset_type, asset.edition, asset.quality_label]
-              .filter(Boolean)
-              .join(' · ')}
+            {[resource.resource_type].filter(Boolean).join(" · ")}
           </div>
         </div>
         <div className="text-xs text-muted-foreground">
-          {asset.status} · {asset.probe_status}
+          {resource.status} · {resource.probe_status}
         </div>
       </div>
       <div className="mt-2 text-xs text-muted-foreground">
-        当前治理条目：{workspaceItem.title} · 关联条目 {assetLinks.length} 个 ·
-        文件 {(asset.file_ids ?? []).length} 个
+        当前治理条目：{workspaceItem.title} · 关联条目 {resourceLinks.length} 个
+        · 文件 {(resource.file_ids ?? []).length} 个
       </div>
 
       <div className="mt-3 space-y-2">
         <div className="text-xs font-medium text-foreground">现有链接</div>
         {linkedItems.length ? (
-          linkedItems.map(({ item, ...link }) => {
-            const isPending =
-              linkMutation?.mode === 'unlink' &&
-              linkMutation.assetId === asset.id &&
-              linkMutation.targetItemId === link.item_id
-            return (
-              <div
-                key={`${asset.id}-${link.item_id}-${link.role}-${link.segment_index}`}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-card/70 px-3 py-2"
-              >
-                <div className="min-w-0 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">
-                    {item?.title || `条目 ${link.item_id}`}
-                  </span>{' '}
-                  · {item ? formatMediaType(item.type) : '未知类型'} ·{' '}
-                  {link.role}
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onUnlink(asset.id, link.item_id)}
-                  disabled={isPending}
-                >
-                  {isPending ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : null}
-                  取消链接
-                </Button>
+          linkedItems.map(({ item, ...link }) => (
+            <div
+              key={`${resource.id}-${link.metadata_item_id}-${link.role}-${link.segment_index}`}
+              className="rounded-lg border border-border/50 bg-card/70 px-3 py-2"
+            >
+              <div className="min-w-0 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {item?.title || `条目 ${link.metadata_item_id}`}
+                </span>{" "}
+                · {item ? formatMediaType(item.type) : "未知类型"} · {link.role}
               </div>
-            )
-          })
+            </div>
+          ))
         ) : (
           <div className="text-xs text-muted-foreground">
             当前没有已登记链接。
@@ -920,38 +711,13 @@ function AssetLinkEditor({
 
       <div className="mt-3 space-y-2">
         <div className="text-xs font-medium text-foreground">安全修正</div>
-        {availableTargets.length ? (
-          <div className="flex flex-wrap gap-2">
-            {availableTargets.map((target) => {
-              const isPending =
-                linkMutation?.mode === 'link' &&
-                linkMutation.assetId === asset.id &&
-                linkMutation.targetItemId === target.id
-              return (
-                <Button
-                  key={`${asset.id}-target-${target.id}`}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onLink(asset.id, target.id)}
-                  disabled={isPending}
-                >
-                  {isPending ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : null}
-                  链接到 {target.title}
-                </Button>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="text-xs text-muted-foreground">
-            当前治理条目及其推荐子项都已经包含此资产链接。
-          </div>
-        )}
+        <div className="text-xs text-muted-foreground">
+          旧资产链接修正已下线；请使用资源治理操作修正 metadata 关系。
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {(asset.file_ids ?? []).map((fileId) => (
+        {(resource.file_ids ?? []).map((fileId) => (
           <Button
             key={fileId}
             size="sm"

@@ -73,6 +73,18 @@ func newWorkflowHTTPTestServer(t *testing.T) (http.Handler, string, *workflow.Se
 	catalogSvc := catalog.NewService(db)
 	playbackSvc := playback.NewService(db, registry)
 	authHeader := createAuthHeader(t, context.Background(), authSvc)
-	handler := New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc, workflowSvc)
+	handler := New(Dependencies{
+		Config:   cfg,
+		DB:       db,
+		Registry: registry,
+		Auth:     authSvc,
+		Catalog:  catalogSvc,
+		Library:  librarySvc,
+		Playback: playbackSvc,
+		Progress: progressSvc,
+		Search:   searchSvc,
+		Settings: settingsSvc,
+		Workflow: workflowSvc,
+	})
 	return handler, authHeader, workflowSvc
 }

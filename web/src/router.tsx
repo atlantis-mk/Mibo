@@ -73,7 +73,7 @@ const indexRoute = createRoute({
 
 const libraryRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/library/$id",
+  path: "/library",
   validateSearch: (search: Record<string, unknown>) => ({
     ...libraryFiltersToSearch(parseLibraryFiltersSearch(search)),
     ...(normalizeLibraryPageSearch(search.page) !== undefined
@@ -115,6 +115,9 @@ const searchRoute = createRoute({
   path: "/search",
   validateSearch: (search: Record<string, unknown>) => ({
     q: typeof search.q === "string" ? search.q : undefined,
+    ...(parseLibraryTypeSearch(search.type) !== undefined
+      ? { type: parseLibraryTypeSearch(search.type) }
+      : {}),
   }),
   component: SearchRoute,
 })
@@ -141,11 +144,11 @@ const playRoute = createRoute({
       search.fromStart === true ||
       search.fromStart === "true" ||
       search.fromStart === "1"
-    const assetId =
-      typeof search.assetId === "number"
-        ? search.assetId
-        : typeof search.assetId === "string"
-          ? Number.parseInt(search.assetId, 10) || undefined
+    const resourceId =
+      typeof search.resourceId === "number"
+        ? search.resourceId
+        : typeof search.resourceId === "string"
+          ? Number.parseInt(search.resourceId, 10) || undefined
           : undefined
     const inventoryFileId =
       typeof search.inventoryFileId === "number"
@@ -156,7 +159,7 @@ const playRoute = createRoute({
 
     return {
       ...(fromStart ? { fromStart: true } : {}),
-      ...(assetId !== undefined ? { assetId } : {}),
+      ...(resourceId !== undefined ? { resourceId } : {}),
       ...(inventoryFileId !== undefined ? { inventoryFileId } : {}),
     }
   },
@@ -392,7 +395,6 @@ function AppLayout() {
 }
 
 function LibraryRoute() {
-  const { id } = libraryRoute.useParams()
   const search = libraryRoute.useSearch()
   const navigate = libraryRoute.useNavigate()
   const page = search.page ?? 1
@@ -401,7 +403,6 @@ function LibraryRoute() {
 
   return (
     <LibraryDetail
-      libraryId={Number(id)}
       page={page}
       pageSize={pageSize}
       filters={filters}
@@ -592,17 +593,17 @@ function PersonRoute() {
 function SearchRoute() {
   const search = searchRoute.useSearch()
 
-  return <SearchPage initialQuery={search.q} />
+  return <SearchPage initialQuery={search.q} initialType={search.type} />
 }
 
 function PlayRoute() {
   const { id } = playRoute.useParams()
-  const { fromStart, assetId, inventoryFileId } = playRoute.useSearch()
+  const { fromStart, resourceId, inventoryFileId } = playRoute.useSearch()
 
   return (
     <PlayExperience
       itemId={Number(id)}
-      assetId={assetId}
+      resourceId={resourceId}
       inventoryFileId={inventoryFileId}
       fromStart={fromStart}
     />

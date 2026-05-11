@@ -51,7 +51,7 @@ func TestContentShapePersistedPlanAndAssignmentsSavedAndReused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	state := materializeBatchState{scanPolicy: database.LibraryScanPolicy{IgnoreHiddenFiles: true}, tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
+	state := recognitionBatchState{scanPolicy: database.LibraryScanPolicy{IgnoreHiddenFiles: true}, tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
 	state.tokenProfileCache.counters = state.shapeCounters
 	svc := NewService(config.Config{}, db, nil, nil)
 	cfg := EffectiveLibraryConfig{Library: database.Library{ID: 1, Type: "auto", RootPath: "/library"}}
@@ -59,7 +59,7 @@ func TestContentShapePersistedPlanAndAssignmentsSavedAndReused(t *testing.T) {
 	provider := staticNameProvider{name: "local"}
 	snapshot := largeEpisodeShapeSnapshot("/library/Show", 5)
 
-	first, err := svc.contentShapePlanForMaterializeDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
+	first, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("first content shape plan: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestContentShapePersistedPlanAndAssignmentsSavedAndReused(t *testing.T) {
 	}
 
 	state.shapePlansByDir = make(map[string]contentShapeDirectoryPlan)
-	second, err := svc.contentShapePlanForMaterializeDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
+	second, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("second content shape plan: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestContentShapePersistedReviewDecisionNotDuplicatedOnReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	state := materializeBatchState{scanPolicy: database.LibraryScanPolicy{IgnoreHiddenFiles: true}, tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
+	state := recognitionBatchState{scanPolicy: database.LibraryScanPolicy{IgnoreHiddenFiles: true}, tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
 	state.tokenProfileCache.counters = state.shapeCounters
 	svc := NewService(config.Config{}, db, nil, nil)
 	cfg := EffectiveLibraryConfig{Library: database.Library{ID: 1, Type: "auto", RootPath: "/library"}}
@@ -149,11 +149,11 @@ func TestContentShapePersistedReviewDecisionNotDuplicatedOnReuse(t *testing.T) {
 		t.Fatalf("expected one seeded review decision, got %d", firstCount)
 	}
 
-	if _, err := svc.contentShapePlanForMaterializeDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
+	if _, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
 		t.Fatalf("reuse review plan: %v", err)
 	}
 	state.shapePlansByDir = make(map[string]contentShapeDirectoryPlan)
-	if _, err := svc.contentShapePlanForMaterializeDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
+	if _, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
 		t.Fatalf("reuse persisted review plan after cache clear: %v", err)
 	}
 	var secondCount int64
@@ -211,26 +211,6 @@ func TestContentShapeLowConfidencePlaceholderClassifiesAsMovie(t *testing.T) {
 	}
 }
 
-func TestContentShapeLowConfidencePlaceholderDecisionRequiresReview(t *testing.T) {
-	t.Parallel()
-
-	plan := contentShapeDirectoryPlan{Shape: contentShapeMovieCollection, Confidence: 0.5, ReviewState: "auto", MovieWorkKey: "ambiguous-collection"}
-	assignment := contentShapeFileAssignment{AssignmentType: contentShapeAssignmentMovie, TargetKey: "heat:1995", Confidence: 0.5, ReviewState: "auto"}
-	artifact := catalogScanArtifact{ItemType: "movie", SourcePath: "/library/Ambiguous/Heat.1995.mkv"}
-	applyContentShapePlanEvidence(&artifact, plan, assignment)
-
-	if len(artifact.Decisions) != 1 {
-		t.Fatalf("expected one content shape decision, got %#v", artifact.Decisions)
-	}
-	decision := artifact.Decisions[0]
-	if decision.Type != "content_shape_guarded_placeholder" || decision.Status != scanDecisionStatusReviewRequired {
-		t.Fatalf("expected review-required placeholder decision, got %#v", decision)
-	}
-	if artifact.ContentShapeAssignment["placeholder"] != artifact.ItemType || artifact.ContentShapeAssignment["placeholder_reason"] != "uncertain_content_shape" {
-		t.Fatalf("expected guarded placeholder metadata, got %#v", artifact.ContentShapeAssignment)
-	}
-}
-
 func TestContentShapePlanReuseRejectsDeletedOrConflictingDeltas(t *testing.T) {
 	t.Parallel()
 
@@ -265,18 +245,18 @@ func TestContentShapeAssignmentsStableAcrossBatches(t *testing.T) {
 func TestContentShapeLargeEpisodeDirectoryPlanReusedAcrossBatches(t *testing.T) {
 	t.Parallel()
 
-	state := materializeBatchState{tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
+	state := recognitionBatchState{tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
 	state.tokenProfileCache.counters = state.shapeCounters
 	svc := NewService(config.Config{}, nil, nil, nil)
 	config := EffectiveLibraryConfig{Library: database.Library{ID: 1, Type: "auto", RootPath: "/library"}}
 	pathRecord := database.LibraryPath{LibraryID: 1, MediaSourceID: 1, RootPath: "/library"}
 	provider := staticNameProvider{name: "local"}
 	snapshot := largeEpisodeShapeSnapshot("/library/Show", 1000)
-	first, err := svc.contentShapePlanForMaterializeDirectory(context.Background(), config, pathRecord, provider, snapshot, &state)
+	first, err := svc.contentShapePlanForRecognitionDirectory(context.Background(), config, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("compile first plan: %v", err)
 	}
-	second, err := svc.contentShapePlanForMaterializeDirectory(context.Background(), config, pathRecord, provider, scanDirectorySnapshot{Path: snapshot.Path, Objects: snapshot.Objects[:25]}, &state)
+	second, err := svc.contentShapePlanForRecognitionDirectory(context.Background(), config, pathRecord, provider, scanDirectorySnapshot{Path: snapshot.Path, Objects: snapshot.Objects[:25]}, &state)
 	if err != nil {
 		t.Fatalf("reuse second plan: %v", err)
 	}
@@ -300,7 +280,7 @@ func TestContentShapeFlatEpisodeAssignmentsRemainDistinctWhenReused(t *testing.T
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	state := materializeBatchState{scanPolicy: database.LibraryScanPolicy{IgnoreHiddenFiles: true}, tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
+	state := recognitionBatchState{scanPolicy: database.LibraryScanPolicy{IgnoreHiddenFiles: true}, tokenProfileCache: newFilenameTokenProfileCache(), shapePlansByDir: make(map[string]contentShapeDirectoryPlan), shapeAssignmentsByDir: make(map[string]map[string]contentShapeFileAssignment), shapeCounters: &contentShapeCounters{}}
 	state.tokenProfileCache.counters = state.shapeCounters
 	svc := NewService(config.Config{}, db, nil, nil)
 	cfg := EffectiveLibraryConfig{Library: database.Library{ID: 1, Type: "auto", RootPath: "/library"}}
@@ -308,7 +288,7 @@ func TestContentShapeFlatEpisodeAssignmentsRemainDistinctWhenReused(t *testing.T
 	provider := staticNameProvider{name: "local"}
 	snapshot := scanDirectorySnapshot{Path: "/library/FlatShow", Objects: []storage.Object{{Path: "/library/FlatShow/Alpha.mkv"}, {Path: "/library/FlatShow/Beta.mkv"}, {Path: "/library/FlatShow/Gamma.mkv"}}}
 
-	plan, err := svc.contentShapePlanForMaterializeDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
+	plan, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("build flat plan: %v", err)
 	}

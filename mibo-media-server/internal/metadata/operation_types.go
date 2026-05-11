@@ -12,6 +12,12 @@ const (
 	OperationTypeGovernanceClassificationCorrection = "governance_classification_correction"
 	OperationTypeGovernanceAssetLink                = "governance_asset_link"
 	OperationTypeGovernanceAssetUnlink              = "governance_asset_unlink"
+	OperationTypeGovernanceResourceLink             = "governance_resource_link"
+	OperationTypeGovernanceResourceUnlink           = "governance_resource_unlink"
+	OperationTypeGovernanceResourceLinkUpdate       = "governance_resource_link_update"
+	OperationTypeGovernanceMetadataMerge            = "governance_metadata_merge"
+	OperationTypeGovernanceMetadataSplit            = "governance_metadata_split"
+	OperationTypeGovernanceProjectionVisibility     = "governance_projection_visibility"
 
 	OperationStatusApplied     = "applied"
 	OperationStatusNoCandidate = "no_candidate"
@@ -34,43 +40,54 @@ const (
 
 type MetadataOperationRequest struct {
 	Operation                 string
-	OriginItemID              uint
-	TargetItemID              uint
+	OriginMetadataItemID      uint
+	TargetMetadataItemID      uint
+	LibraryID                 uint
 	ManualCandidateExternalID string
 	PreferredProviderInstance string
 	Force                     bool
 }
 
+type MetadataFieldChange struct {
+	ItemID     uint
+	FieldKey   string
+	Value      any
+	SourceID   *uint
+	Confidence *float64
+	ApplyMode  string
+	Force      bool
+}
+
 type MetadataOperationResult struct {
-	Operation         string
-	OriginItemID      uint
-	TargetItemID      uint
-	TargetType        string
-	Status            string
-	GovernanceStatus  string
-	Plan              MetadataExecutionPlanSummary
-	ProviderAttempts  []MetadataProviderAttempt
-	MetadataSourceIDs []uint
-	AppliedFields     []MetadataAppliedField
-	SkippedFields     []MetadataSkippedField
-	AffectedScope     MetadataAffectedScope
-	Warnings          []MetadataOperationWarning
+	Operation            string
+	OriginMetadataItemID uint
+	TargetMetadataItemID uint
+	TargetType           string
+	Status               string
+	GovernanceStatus     string
+	Plan                 MetadataExecutionPlanSummary
+	ProviderAttempts     []MetadataProviderAttempt
+	MetadataSourceIDs    []uint
+	AppliedFields        []MetadataAppliedField
+	SkippedFields        []MetadataSkippedField
+	AffectedScope        MetadataAffectedScope
+	Warnings             []MetadataOperationWarning
 }
 
 type MetadataOperationResponse struct {
-	Operation         string                       `json:"operation"`
-	OriginItemID      uint                         `json:"origin_item_id"`
-	TargetItemID      uint                         `json:"target_item_id"`
-	TargetType        string                       `json:"target_type"`
-	Status            string                       `json:"status"`
-	GovernanceStatus  string                       `json:"governance_status,omitempty"`
-	Plan              MetadataExecutionPlanSummary `json:"plan"`
-	ProviderAttempts  []MetadataProviderAttempt    `json:"provider_attempts,omitempty"`
-	MetadataSourceIDs []uint                       `json:"metadata_source_ids,omitempty"`
-	AppliedFields     []MetadataAppliedField       `json:"applied_fields,omitempty"`
-	SkippedFields     []MetadataSkippedField       `json:"skipped_fields,omitempty"`
-	AffectedScope     MetadataAffectedScope        `json:"affected_scope"`
-	Warnings          []MetadataOperationWarning   `json:"warnings,omitempty"`
+	Operation            string                       `json:"operation"`
+	OriginMetadataItemID uint                         `json:"origin_metadata_item_id,omitempty"`
+	TargetMetadataItemID uint                         `json:"target_metadata_item_id,omitempty"`
+	TargetType           string                       `json:"target_type"`
+	Status               string                       `json:"status"`
+	GovernanceStatus     string                       `json:"governance_status,omitempty"`
+	Plan                 MetadataExecutionPlanSummary `json:"plan"`
+	ProviderAttempts     []MetadataProviderAttempt    `json:"provider_attempts,omitempty"`
+	MetadataSourceIDs    []uint                       `json:"metadata_source_ids,omitempty"`
+	AppliedFields        []MetadataAppliedField       `json:"applied_fields,omitempty"`
+	SkippedFields        []MetadataSkippedField       `json:"skipped_fields,omitempty"`
+	AffectedScope        MetadataAffectedScope        `json:"affected_scope"`
+	Warnings             []MetadataOperationWarning   `json:"warnings,omitempty"`
 }
 
 type MetadataExecutionPlan struct {
@@ -253,7 +270,7 @@ type MetadataOperationWarning struct {
 }
 
 type MetadataAffectedScope struct {
-	ItemIDs   []uint
-	LibraryID uint
-	RootID    *uint
+	MetadataItemIDs []uint
+	LibraryID       uint
+	MetadataRootID  *uint
 }

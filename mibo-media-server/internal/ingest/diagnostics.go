@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -39,8 +40,8 @@ type DiagnosticStage struct {
 	LibraryName         string     `json:"library_name,omitempty"`
 	InventoryFileID     *uint      `json:"inventory_file_id,omitempty"`
 	StoragePath         string     `json:"storage_path,omitempty"`
-	CatalogItemID       *uint      `json:"catalog_item_id,omitempty"`
-	CatalogTitle        string     `json:"catalog_title,omitempty"`
+	MetadataItemID      *uint      `json:"metadata_item_id,omitempty"`
+	MetadataItemTitle   string     `json:"metadata_item_title,omitempty"`
 	ConditionType       string     `json:"condition_type"`
 	Status              string     `json:"status"`
 	Reason              string     `json:"reason,omitempty"`
@@ -107,12 +108,12 @@ func (s *Service) RetryStage(ctx context.Context, conditionID uint, userID *uint
 		if _, err := s.MarkInventoryFileDirty(ctx, *condition.InventoryFileID, "admin_retry_"+condition.ConditionType); err != nil {
 			return RetryStageResult{}, err
 		}
-	} else if condition.CatalogItemID != nil {
+	} else if condition.MetadataItemID != nil {
 		if condition.ConditionType == ConditionProjectionCurrent {
-			if _, err := s.MarkProjectionItemDirty(ctx, *condition.CatalogItemID, "admin_retry_projection"); err != nil {
+			if _, err := s.MarkProjectionLibraryDirty(ctx, condition.LibraryID, "", "admin_retry_projection"); err != nil {
 				return RetryStageResult{}, err
 			}
-		} else if _, err := s.MarkCatalogItemDirty(ctx, *condition.CatalogItemID, "admin_retry_"+condition.ConditionType); err != nil {
+		} else if _, err := s.MarkMetadataItemDirty(ctx, *condition.MetadataItemID, "admin_retry_"+condition.ConditionType); err != nil {
 			return RetryStageResult{}, err
 		}
 	} else {
@@ -124,7 +125,7 @@ func (s *Service) RetryStage(ctx context.Context, conditionID uint, userID *uint
 			return RetryStageResult{}, err
 		}
 	}
-	if _, err := s.AppendEvent(ctx, database.IngestEvent{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, CatalogItemID: condition.CatalogItemID, ConditionID: &condition.ID, ConditionType: condition.ConditionType, EventType: EventRetryRequested, Status: ConditionStatusPending, Reason: "admin_retry", Message: "Administrator requested ingest stage retry", UserID: userID}); err != nil {
+	if _, err := s.AppendEvent(ctx, database.IngestEvent{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, MetadataItemID: condition.MetadataItemID, ConditionID: &condition.ID, ConditionType: condition.ConditionType, EventType: EventRetryRequested, Status: ConditionStatusPending, Reason: "admin_retry", Message: "Administrator requested ingest stage retry", UserID: userID}); err != nil {
 		return RetryStageResult{}, err
 	}
 	return RetryStageResult{ConditionID: condition.ID, Status: "queued", Message: "Retry queued for affected ingest stage"}, nil
@@ -151,7 +152,7 @@ func (s *Service) ResolveReviewStage(ctx context.Context, conditionID uint, user
 			}
 			fileID := *condition.InventoryFileID
 			if err := tx.Model(&database.ClassificationDecision{}).
-				Where("inventory_file_id = ? AND status IN ?", fileID, []string{"provisional", "review_required"}).
+				Where("inventory_file_id = ? AND status = ?", fileID, "review_required").
 				Updates(map[string]any{"status": "accepted", "resolved_at": now, "updated_at": now}).Error; err != nil {
 				return err
 			}
@@ -161,18 +162,18 @@ func (s *Service) ResolveReviewStage(ctx context.Context, conditionID uint, user
 				return err
 			}
 		case "metadata_no_candidate", "metadata_needs_review":
-			if condition.CatalogItemID == nil || *condition.CatalogItemID == 0 {
-				return fmt.Errorf("condition %d is missing catalog item reference", condition.ID)
+			if condition.MetadataItemID == nil || *condition.MetadataItemID == 0 {
+				return fmt.Errorf("condition %d is missing metadata item reference", condition.ID)
 			}
-			if err := tx.Model(&database.CatalogItem{}).
-				Where("id = ?", *condition.CatalogItemID).
+			if err := tx.Model(&database.MetadataItem{}).
+				Where("id = ?", *condition.MetadataItemID).
 				Updates(map[string]any{"governance_status": "manual", "updated_at": now}).Error; err != nil {
 				return err
 			}
 		default:
 			return fmt.Errorf("condition %d review reason %q cannot be resolved automatically", condition.ID, reason)
 		}
-		if err := s.setCondition(ctx, tx, conditionInput{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, CatalogItemID: condition.CatalogItemID}.
+		if err := s.setCondition(ctx, tx, conditionInput{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, MetadataItemID: condition.MetadataItemID}.
 			with(ConditionReviewRequired, ConditionStatusFalse, "not_required", "No review is required", SeverityInfo)); err != nil {
 			return err
 		}
@@ -180,7 +181,7 @@ func (s *Service) ResolveReviewStage(ctx context.Context, conditionID uint, user
 	}); err != nil {
 		return ResolveReviewStageResult{}, err
 	}
-	if _, err := s.AppendEvent(ctx, database.IngestEvent{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, CatalogItemID: condition.CatalogItemID, ConditionID: &condition.ID, ConditionType: condition.ConditionType, EventType: EventConditionChanged, Status: ConditionStatusFalse, Reason: "admin_resolved", Message: "Administrator resolved review stage", UserID: userID}); err != nil {
+	if _, err := s.AppendEvent(ctx, database.IngestEvent{UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, InventoryFileID: condition.InventoryFileID, MetadataItemID: condition.MetadataItemID, ConditionID: &condition.ID, ConditionType: condition.ConditionType, EventType: EventConditionChanged, Status: ConditionStatusFalse, Reason: "admin_resolved", Message: "Administrator resolved review stage", UserID: userID}); err != nil {
 		return ResolveReviewStageResult{}, err
 	}
 	return ResolveReviewStageResult{ConditionID: condition.ID, Status: "resolved", Message: "Review stage resolved"}, nil
@@ -228,16 +229,66 @@ func (s *Service) buildDiagnosticsResult(ctx context.Context, conditions []datab
 		if retryEligible {
 			result.Summary.RetryEligible++
 		}
-		stage := DiagnosticStage{ID: condition.ID, UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, LibraryName: libraryNames[condition.LibraryID], InventoryFileID: condition.InventoryFileID, CatalogItemID: condition.CatalogItemID, ConditionType: condition.ConditionType, Status: condition.Status, Reason: condition.Reason, Message: condition.Message, Severity: condition.Severity, Attempts: condition.Attempts, JobID: condition.JobID, MetadataOperationID: condition.MetadataOperationID, ProviderInstanceID: condition.ProviderInstanceID, RetryEligible: retryEligible, Stale: stale, UpdatedAt: condition.UpdatedAt, LastTransitionAt: condition.LastTransitionAt}
+		stage := DiagnosticStage{ID: condition.ID, UnitKey: condition.UnitKey, LibraryID: condition.LibraryID, LibraryName: libraryNames[condition.LibraryID], InventoryFileID: condition.InventoryFileID, MetadataItemID: condition.MetadataItemID, ConditionType: condition.ConditionType, Status: condition.Status, Reason: condition.Reason, Message: condition.Message, Severity: condition.Severity, Attempts: condition.Attempts, JobID: condition.JobID, MetadataOperationID: condition.MetadataOperationID, ProviderInstanceID: condition.ProviderInstanceID, RetryEligible: retryEligible, Stale: stale, UpdatedAt: condition.UpdatedAt, LastTransitionAt: condition.LastTransitionAt}
 		if condition.InventoryFileID != nil {
 			stage.StoragePath = filePaths[*condition.InventoryFileID]
+			if stage.ConditionType == ConditionReviewRequired && stage.Reason == "classification_needs_review" {
+				stage.Message = s.enrichClassificationReviewMessage(ctx, *condition.InventoryFileID, stage.Message)
+			}
 		}
-		if condition.CatalogItemID != nil {
-			stage.CatalogTitle = itemTitles[*condition.CatalogItemID]
+		if condition.MetadataItemID != nil {
+			stage.MetadataItemTitle = itemTitles[*condition.MetadataItemID]
 		}
 		result.Stages = append(result.Stages, stage)
 	}
 	return result, nil
+}
+
+func (s *Service) enrichClassificationReviewMessage(ctx context.Context, fileID uint, base string) string {
+	if fileID == 0 {
+		return base
+	}
+	var decision database.ClassificationDecision
+	err := s.db.WithContext(ctx).
+		Where("inventory_file_id = ? AND decision_type = ?", fileID, "directory_reduction").
+		Order("updated_at desc, id desc").
+		First(&decision).Error
+	if err != nil {
+		return base
+	}
+	interpretation := strings.TrimSpace(decision.CandidateType)
+	reason := strings.TrimSpace(decision.Reason)
+	reviewSubtype := ""
+	if strings.TrimSpace(decision.EvidenceJSON) != "" {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(decision.EvidenceJSON)), &payload); err == nil {
+			reviewSubtype = strings.TrimSpace(fmt.Sprint(payload["review_subtype"]))
+		}
+	}
+	if interpretation == "" && reason == "" {
+		return base
+	}
+	parts := []string{strings.TrimSpace(base)}
+	if interpretation != "" {
+		parts = append(parts, "directory reduction: "+interpretation)
+	}
+	if reviewSubtype != "" && reviewSubtype != "<nil>" {
+		parts = append(parts, "subtype: "+reviewSubtype)
+	}
+	if reason != "" {
+		parts = append(parts, reason)
+	}
+	return strings.Join(compactStrings(parts), "; ")
+}
+
+func compactStrings(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			result = append(result, strings.TrimSpace(item))
+		}
+	}
+	return result
 }
 
 func conditionReportable(condition database.IngestCondition) bool {
@@ -248,7 +299,7 @@ func conditionReportable(condition database.IngestCondition) bool {
 	case "classification_needs_review":
 		return condition.InventoryFileID != nil && *condition.InventoryFileID != 0
 	case "metadata_no_candidate", "metadata_needs_review":
-		return condition.CatalogItemID != nil && *condition.CatalogItemID != 0
+		return condition.MetadataItemID != nil && *condition.MetadataItemID != 0
 	default:
 		return true
 	}
@@ -282,8 +333,8 @@ func (s *Service) diagnosticReferences(ctx context.Context, conditions []databas
 		if condition.InventoryFileID != nil {
 			fileIDs[*condition.InventoryFileID] = struct{}{}
 		}
-		if condition.CatalogItemID != nil {
-			itemIDs[*condition.CatalogItemID] = struct{}{}
+		if condition.MetadataItemID != nil {
+			itemIDs[*condition.MetadataItemID] = struct{}{}
 		}
 	}
 	libraryNames := map[uint]string{}
@@ -308,7 +359,7 @@ func (s *Service) diagnosticReferences(ctx context.Context, conditions []databas
 	}
 	itemTitles := map[uint]string{}
 	if len(itemIDs) > 0 {
-		var items []database.CatalogItem
+		var items []database.MetadataItem
 		if err := s.db.WithContext(ctx).Where("id IN ?", uintKeys(itemIDs)).Find(&items).Error; err != nil {
 			return nil, nil, nil, err
 		}

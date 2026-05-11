@@ -18,67 +18,16 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 	if input.MediaSourceID == 0 {
 		return database.Library{}, database.Job{}, fmt.Errorf("media_source_id is required")
 	}
-	var source database.MediaSource
-	if err := s.db.WithContext(ctx).First(&source, input.MediaSourceID).Error; err != nil {
-		return database.Library{}, database.Job{}, err
-	}
-	rootPath := normalizePath(input.RootPath)
-	if rootPath == "/" {
-		rootPath = source.RootPath
-	}
-	rootPath = normalizePathForProvider(source.Provider, rootPath)
-	provider, err := s.storage.BuildForSource(source)
+	source, provider, rootPath, err := s.resolveLibraryCreateSource(ctx, input.MediaSourceID, input.RootPath)
 	if err != nil {
 		return database.Library{}, database.Job{}, err
 	}
-	if _, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: rootPath}); err != nil {
-		return database.Library{}, database.Job{}, fmt.Errorf("resolve library root %s: %w", rootPath, err)
-	}
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		name = deriveLibraryNameFromPath(rootPath, source.Name)
-	}
-	probe := s.ProbeSource(ctx, provider, rootPath)
-	libraryType := LibraryTypeAuto
-	library := database.Library{Name: name, Type: libraryType, MediaSourceID: source.ID, RootPath: rootPath, Status: "pending", ScannerEnabled: true, ProbeStatus: probe.Status, ProbeSummaryJSON: encodeSourceProbeSummary(probe)}
-	if err := s.db.WithContext(ctx).Create(&library).Error; err != nil {
+	library, err := s.createLibraryRecord(ctx, source, provider, rootPath, strings.TrimSpace(input.Name))
+	if err != nil {
 		return database.Library{}, database.Job{}, err
 	}
-	if err := s.db.WithContext(ctx).Create(&database.LibraryPath{LibraryID: library.ID, MediaSourceID: source.ID, RootPath: rootPath, DisplayName: library.Name, Enabled: true}).Error; err != nil {
+	if err := s.applyCreateLibraryInput(ctx, library.ID, input); err != nil {
 		return database.Library{}, database.Job{}, err
-	}
-	if err := database.EnsureLibraryPolicyDefaults(s.db.WithContext(ctx), library.ID); err != nil {
-		return database.Library{}, database.Job{}, err
-	}
-	if input.Scan != nil {
-		if _, err := s.UpdateLibraryScanPolicy(ctx, library.ID, *input.Scan); err != nil {
-			return database.Library{}, database.Job{}, err
-		}
-	}
-	if input.Metadata != nil {
-		if _, err := s.UpdateLibraryMetadataPolicy(ctx, library.ID, *input.Metadata); err != nil {
-			return database.Library{}, database.Job{}, err
-		}
-	}
-	if input.MetadataStrategy != nil {
-		if _, err := settings.NewService(s.db, s.cfg.Metadata).UpdateLibraryMetadataStrategy(ctx, library.ID, *input.MetadataStrategy); err != nil {
-			return database.Library{}, database.Job{}, err
-		}
-	}
-	if input.Playback != nil {
-		if _, err := s.UpdateLibraryPlaybackPolicy(ctx, library.ID, *input.Playback); err != nil {
-			return database.Library{}, database.Job{}, err
-		}
-	}
-	if input.Subtitle != nil {
-		if _, err := s.UpdateLibrarySubtitlePolicy(ctx, library.ID, *input.Subtitle); err != nil {
-			return database.Library{}, database.Job{}, err
-		}
-	}
-	if input.ScanExclusionRules != nil {
-		if _, err := s.ReplaceLibraryScanExclusionRules(ctx, library.ID, input.ScanExclusionRules, nil); err != nil {
-			return database.Library{}, database.Job{}, err
-		}
 	}
 	job, err := s.QueueLibraryScanWithReason(ctx, library.ID, WorkflowReasonCreateLibrary)
 	if err != nil {
@@ -90,8 +39,93 @@ func (s *Service) CreateLibrary(ctx context.Context, input CreateLibraryInput) (
 	return library, job, nil
 }
 
+func (s *Service) resolveLibraryCreateSource(ctx context.Context, mediaSourceID uint, requestedRoot string) (database.MediaSource, storage.Provider, string, error) {
+	var source database.MediaSource
+	if err := s.db.WithContext(ctx).First(&source, mediaSourceID).Error; err != nil {
+		return database.MediaSource{}, nil, "", err
+	}
+	rootPath := normalizePath(requestedRoot)
+	if rootPath == "/" {
+		rootPath = source.RootPath
+	}
+	rootPath = normalizePathForProvider(source.Provider, rootPath)
+	provider, err := s.storageRegistry().BuildForSource(source)
+	if err != nil {
+		return database.MediaSource{}, nil, "", err
+	}
+	if _, err := provider.ResolveStorage(ctx, storage.ResolveStorageRequest{Path: rootPath}); err != nil {
+		return database.MediaSource{}, nil, "", fmt.Errorf("resolve library root %s: %w", rootPath, err)
+	}
+	return source, provider, rootPath, nil
+}
+
+func (s *Service) createLibraryRecord(ctx context.Context, source database.MediaSource, provider storage.Provider, rootPath string, requestedName string) (database.Library, error) {
+	name := requestedName
+	if name == "" {
+		name = deriveLibraryNameFromPath(rootPath, source.Name)
+	}
+	pendingProbe := SourceProbeSummary{Status: SourceProbeStatusPending, Classes: emptySourceProbeClassCounts(), MaxObjects: defaultSourceProbeMaxObjects, MaxDepth: defaultSourceProbeMaxDepth}
+	library := database.Library{Name: name, Type: LibraryTypeAuto, MediaSourceID: source.ID, RootPath: rootPath, Status: "pending", ScannerEnabled: true, ProbeStatus: pendingProbe.Status, ProbeSummaryJSON: encodeSourceProbeSummary(pendingProbe)}
+	if err := s.db.WithContext(ctx).Create(&library).Error; err != nil {
+		return database.Library{}, err
+	}
+	pathRecord := database.LibraryPath{LibraryID: library.ID, MediaSourceID: source.ID, RootPath: rootPath, DisplayName: library.Name, Enabled: true}
+	if err := s.db.WithContext(ctx).Create(&pathRecord).Error; err != nil {
+		return database.Library{}, err
+	}
+	if err := database.EnsureLibraryPolicyDefaults(s.db.WithContext(ctx), library.ID); err != nil {
+		return database.Library{}, err
+	}
+	s.probeLibrarySourceAsync(library.ID, provider, rootPath)
+	return library, nil
+}
+
+func (s *Service) probeLibrarySourceAsync(libraryID uint, provider storage.Provider, rootPath string) {
+	go func() {
+		probe := s.ProbeSource(context.Background(), provider, rootPath)
+		_ = s.db.WithContext(context.Background()).Model(&database.Library{}).Where("id = ?", libraryID).Updates(map[string]any{
+			"probe_status":       probe.Status,
+			"probe_summary_json": encodeSourceProbeSummary(probe),
+		}).Error
+	}()
+}
+
+func (s *Service) applyCreateLibraryInput(ctx context.Context, libraryID uint, input CreateLibraryInput) error {
+	if input.Scan != nil {
+		if _, err := s.UpdateLibraryScanPolicy(ctx, libraryID, *input.Scan); err != nil {
+			return err
+		}
+	}
+	if input.Metadata != nil {
+		if _, err := s.UpdateLibraryMetadataPolicy(ctx, libraryID, *input.Metadata); err != nil {
+			return err
+		}
+	}
+	if input.MetadataStrategy != nil {
+		if _, err := settings.NewService(s.db, s.cfg.Metadata).UpdateLibraryMetadataStrategy(ctx, libraryID, *input.MetadataStrategy); err != nil {
+			return err
+		}
+	}
+	if input.Playback != nil {
+		if _, err := s.UpdateLibraryPlaybackPolicy(ctx, libraryID, *input.Playback); err != nil {
+			return err
+		}
+	}
+	if input.Subtitle != nil {
+		if _, err := s.UpdateLibrarySubtitlePolicy(ctx, libraryID, *input.Subtitle); err != nil {
+			return err
+		}
+	}
+	if input.ScanExclusionRules != nil {
+		if _, err := s.ReplaceLibraryScanExclusionRules(ctx, libraryID, input.ScanExclusionRules, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) QueueLibraryScanWithReason(ctx context.Context, libraryID uint, reason string) (database.Job, error) {
-	if s.workflow != nil {
+	if s.workflowCapability() != nil {
 		run, _, err := s.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryID, Reason: reason, Priority: 10})
 		return workflowRunCompatibilityJob(run), err
 	}
@@ -131,34 +165,30 @@ func (s *Service) QueueTargetedRefresh(ctx context.Context, libraryID uint, root
 	if err != nil {
 		return database.Job{}, err
 	}
+	if s.hasActiveScanWorkflow(ctx, config.Library.ID) {
+		return database.Job{}, nil
+	}
 	s.markLibraryScopeDirty(ctx, config.Library.ID, targetRoot, "targeted_refresh_queued")
-	if s.workflow != nil {
+	if s.workflowCapability() != nil {
 		run, _, err := s.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: config.Library.ID, RootPath: targetRoot, Reason: WorkflowReasonTargetedRefresh, Priority: 8})
 		return workflowRunCompatibilityJob(run), err
 	}
 	return database.Job{}, fmt.Errorf("workflow service unavailable")
 }
 
-func (s *Service) QueueCatalogItemProjectionRefresh(ctx context.Context, itemID uint) (database.Job, error) {
-	if s.workflow != nil {
-		if itemID == 0 {
-			return database.Job{}, fmt.Errorf("item id is required")
-		}
-		var item database.CatalogItem
-		if err := s.db.WithContext(ctx).First(&item, itemID).Error; err != nil {
-			return database.Job{}, err
-		}
-		run, err := s.queueStandaloneWorkflowTask(ctx, item.LibraryID, "", WorkflowReasonManualScan, workflow.TaskTypeRefreshProjection, workflow.StageProjection, fmt.Sprintf("projection:item:%d", itemID), map[string]any{"item_id": itemID, "library_id": item.LibraryID})
-		return workflowRunCompatibilityJob(run), err
+func (s *Service) hasActiveScanWorkflow(ctx context.Context, libraryID uint) bool {
+	if s.db == nil || libraryID == 0 {
+		return false
 	}
-	if itemID == 0 {
-		return database.Job{}, fmt.Errorf("item id is required")
-	}
-	return database.Job{}, fmt.Errorf("workflow service unavailable")
+	var count int64
+	err := s.db.WithContext(ctx).Model(&database.WorkflowRun{}).
+		Where("library_id = ? AND status IN ? AND reason IN ?", libraryID, []string{workflow.RunStatusQueued, workflow.RunStatusRunning}, []string{WorkflowReasonCreateLibrary, WorkflowReasonManualScan, WorkflowReasonTargetedRefresh, WorkflowReasonScheduledScan, WorkflowReasonStorageRefresh}).
+		Count(&count).Error
+	return err == nil && count > 0
 }
 
 func (s *Service) QueueCatalogLibraryProjectionRefresh(ctx context.Context, libraryID uint, rootPath string) (database.Job, error) {
-	if s.workflow != nil {
+	if s.workflowCapability() != nil {
 		run, err := s.queueStandaloneWorkflowTask(ctx, libraryID, rootPath, WorkflowReasonManualScan, workflow.TaskTypeRefreshProjection, workflow.StageProjection, fmt.Sprintf("projection:%s", rootPath), map[string]any{"library_id": libraryID, "root_path": rootPath})
 		return workflowRunCompatibilityJob(run), err
 	}
@@ -228,16 +258,31 @@ func deleteLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) erro
 	return nil
 }
 
+type libraryDeleteQuery struct {
+	query string
+	args  []any
+}
+
 func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID uint) error {
 	if err := cancelRunningLibraryJobs(ctx, tx, libraryID); err != nil {
 		return err
 	}
+	if err := execLibraryDeleteQueries(ctx, tx, libraryDeleteQueries(libraryID)); err != nil {
+		return err
+	}
+	if err := deleteLibraryModels(ctx, tx, libraryID); err != nil {
+		return err
+	}
+	return execCleanupQueries(ctx, tx)
+}
+
+func libraryDeleteQueries(libraryID uint) []libraryDeleteQuery {
 	queries := []string{
 		`DELETE FROM content_shape_assignments WHERE library_id = ?`,
 		`DELETE FROM content_shape_plans WHERE library_id = ?`,
 		`DELETE FROM content_shape_profiles WHERE library_id = ?`,
-		`DELETE FROM job_active_intents WHERE job_id IN (SELECT id FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
-		`DELETE FROM jobs WHERE status NOT IN ('running', 'cancel_requested') AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
+		`DELETE FROM job_active_intents WHERE job_id IN (SELECT id FROM jobs WHERE payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?))`,
+		`DELETE FROM jobs WHERE status NOT IN ('running', 'cancel_requested') AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?))`,
 		`DELETE FROM workflow_task_dependencies WHERE task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?) OR depends_on_task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
 		`DELETE FROM workflow_task_leases WHERE task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
 		`DELETE FROM workflow_resource_usages WHERE library_id = ? OR task_id IN (SELECT id FROM workflow_tasks WHERE library_id = ?)`,
@@ -257,68 +302,68 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 		`DELETE FROM ingest_conditions WHERE library_id = ?`,
 		`DELETE FROM ingest_dirty_units WHERE library_id = ?`,
 		`DELETE FROM media_streams WHERE file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
-		`DELETE FROM asset_files WHERE asset_id IN (SELECT id FROM media_assets WHERE library_id = ?) OR file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
-		`DELETE FROM asset_items WHERE asset_id IN (SELECT id FROM media_assets WHERE library_id = ?) OR item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM user_item_data WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?) OR asset_id IN (SELECT id FROM media_assets WHERE library_id = ?)`,
-		`DELETE FROM catalog_external_ids WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM catalog_identities WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM metadata_operations WHERE library_id = ? OR origin_item_id IN (SELECT id FROM catalog_items WHERE library_id = ?) OR target_item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM metadata_field_states WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM metadata_sources WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM item_images WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM item_people WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM item_tags WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM item_rollups WHERE item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
-		`DELETE FROM catalog_search_documents WHERE library_id = ? OR item_id IN (SELECT id FROM catalog_items WHERE library_id = ?)`,
+		`DELETE FROM resource_files WHERE inventory_file_id IN (SELECT id FROM inventory_files WHERE library_id = ?)`,
+		`DELETE FROM resource_library_links WHERE library_id = ?`,
+		`DELETE FROM user_resource_data WHERE resource_id IN (SELECT id FROM resources WHERE id NOT IN (SELECT DISTINCT resource_id FROM resource_files) AND id NOT IN (SELECT DISTINCT resource_id FROM resource_library_links))`,
+		`UPDATE user_metadata_data SET preferred_resource_id = NULL WHERE preferred_resource_id IN (SELECT id FROM resources WHERE id NOT IN (SELECT DISTINCT resource_id FROM resource_files) AND id NOT IN (SELECT DISTINCT resource_id FROM resource_library_links))`,
+		`DELETE FROM resource_metadata_links WHERE resource_id IN (SELECT id FROM resources WHERE id NOT IN (SELECT DISTINCT resource_id FROM resource_files) AND id NOT IN (SELECT DISTINCT resource_id FROM resource_library_links))`,
+		`DELETE FROM resources WHERE id NOT IN (SELECT DISTINCT resource_id FROM resource_files) AND id NOT IN (SELECT DISTINCT resource_id FROM resource_library_links)`,
+		`DELETE FROM library_metadata_projections WHERE library_id = ?`,
+		`DELETE FROM library_search_documents WHERE library_id = ?`,
+		`DELETE FROM metadata_operations WHERE library_id = ?`,
 	}
 	args := [][]any{
 		{libraryID},
 		{libraryID},
 		{libraryID},
-		{libraryID, libraryID, libraryID, libraryID},
-		{libraryID, libraryID, libraryID, libraryID},
-		{libraryID, libraryID},
-		{libraryID},
-		{libraryID, libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID, libraryID},
-		{libraryID, libraryID},
-		{libraryID, libraryID},
-		{libraryID},
-		{libraryID},
 		{libraryID, libraryID, libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
-		{libraryID},
+		{libraryID, libraryID, libraryID},
+		{libraryID, libraryID},
 		{libraryID},
 		{libraryID, libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{libraryID},
+		{},
+		{},
+		{},
+		{},
+		{libraryID},
+		{libraryID},
+		{libraryID},
 	}
+	result := make([]libraryDeleteQuery, 0, len(queries))
 	for i, query := range queries {
-		if err := tx.WithContext(ctx).Exec(query, args[i]...).Error; err != nil {
+		result = append(result, libraryDeleteQuery{query: query, args: args[i]})
+	}
+	return result
+}
+
+func execLibraryDeleteQueries(ctx context.Context, tx *gorm.DB, queries []libraryDeleteQuery) error {
+	for _, query := range queries {
+		if err := tx.WithContext(ctx).Exec(query.query, query.args...).Error; err != nil {
 			return err
 		}
 	}
-	if err := deleteLegacyLibraryRecords(ctx, tx, libraryID); err != nil {
-		return err
-	}
+	return nil
+}
 
+func deleteLibraryModels(ctx context.Context, tx *gorm.DB, libraryID uint) error {
 	modelDeletes := []struct {
 		model any
 		where string
@@ -326,16 +371,17 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 	}{
 		{&database.Schedule{}, "library_id = ?", []any{libraryID}},
 		{&database.StorageIndexEntry{}, "library_id = ?", []any{libraryID}},
-		{&database.MediaAsset{}, "library_id = ?", []any{libraryID}},
 		{&database.InventoryFile{}, "library_id = ?", []any{libraryID}},
-		{&database.CatalogItem{}, "library_id = ?", []any{libraryID}},
 	}
 	for _, deletion := range modelDeletes {
 		if err := tx.WithContext(ctx).Unscoped().Where(deletion.where, deletion.args...).Delete(deletion.model).Error; err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+func execCleanupQueries(ctx context.Context, tx *gorm.DB) error {
 	cleanupQueries := []string{
 		`DELETE FROM media_streams WHERE file_id NOT IN (SELECT id FROM inventory_files)`,
 		`DELETE FROM people WHERE id NOT IN (SELECT DISTINCT person_id FROM item_people)`,
@@ -346,39 +392,18 @@ func deleteLibraryDependentRecords(ctx context.Context, tx *gorm.DB, libraryID u
 			return err
 		}
 	}
-
 	return nil
 }
 
 func cancelRunningLibraryJobs(ctx context.Context, tx *gorm.DB, libraryID uint) error {
 	now := time.Now().UTC()
 	return tx.WithContext(ctx).Exec(
-		`UPDATE jobs SET status = 'cancel_requested', error_message = 'library deleted; cancellation requested', updated_at = ? WHERE status = 'running' AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?) OR payload_json IN (SELECT '{"item_id":' || CAST(id AS TEXT) || '}' FROM catalog_items WHERE library_id = ?))`,
+		`UPDATE jobs SET status = 'cancel_requested', error_message = 'library deleted; cancellation requested', updated_at = ? WHERE status = 'running' AND (payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || ',%' OR payload_json LIKE '%"library_id":' || CAST(? AS TEXT) || '}%' OR payload_json IN (SELECT '{"inventory_file_id":' || CAST(id AS TEXT) || '}' FROM inventory_files WHERE library_id = ?))`,
 		now,
 		libraryID,
 		libraryID,
 		libraryID,
-		libraryID,
 	).Error
-}
-
-func deleteLegacyLibraryRecords(ctx context.Context, tx *gorm.DB, libraryID uint) error {
-	if tx.Migrator().HasTable("playback_progresses") && tx.Migrator().HasTable("media_items") && tx.Migrator().HasTable("media_files") {
-		if err := tx.WithContext(ctx).Exec(`DELETE FROM playback_progresses WHERE media_item_id IN (SELECT id FROM media_items WHERE library_id = ?) OR media_file_id IN (SELECT id FROM media_files WHERE library_id = ?)`, libraryID, libraryID).Error; err != nil {
-			return err
-		}
-	}
-	if tx.Migrator().HasTable("media_files") {
-		if err := tx.WithContext(ctx).Exec(`DELETE FROM media_files WHERE library_id = ?`, libraryID).Error; err != nil {
-			return err
-		}
-	}
-	if tx.Migrator().HasTable("media_items") {
-		if err := tx.WithContext(ctx).Exec(`DELETE FROM media_items WHERE library_id = ?`, libraryID).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func normalizePath(input string) string {

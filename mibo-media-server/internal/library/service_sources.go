@@ -22,7 +22,7 @@ func (s *Service) CreateMediaSource(ctx context.Context, input CreateMediaSource
 	if err != nil {
 		return database.MediaSource{}, err
 	}
-	provider, err := s.storage.Build(providerName, &normalizedConfig, input.RootPath)
+	provider, err := s.storageRegistry().Build(providerName, &normalizedConfig, input.RootPath)
 	if err != nil {
 		return database.MediaSource{}, err
 	}
@@ -79,7 +79,7 @@ func (s *Service) UpdateMediaSource(ctx context.Context, sourceID uint, input Up
 	if err != nil {
 		return database.MediaSource{}, err
 	}
-	provider, err := s.storage.Build(source.Provider, &normalizedConfig, rootPath)
+	provider, err := s.storageRegistry().Build(source.Provider, &normalizedConfig, rootPath)
 	if err != nil {
 		return database.MediaSource{}, err
 	}
@@ -167,7 +167,7 @@ func (s *Service) providerForSource(ctx context.Context, sourceID uint) (databas
 	if err := s.db.WithContext(ctx).First(&source, sourceID).Error; err != nil {
 		return database.MediaSource{}, nil, err
 	}
-	provider, err := s.storage.BuildForSource(source)
+	provider, err := s.storageRegistry().BuildForSource(source)
 	if err != nil {
 		return database.MediaSource{}, nil, err
 	}

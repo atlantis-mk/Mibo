@@ -144,7 +144,19 @@ func newHealthTestServer(t *testing.T) (http.Handler, string, *gorm.DB, string) 
 	playbackSvc := playback.NewService(db, registry)
 	healthSvc := health.NewService(db, registry, librarySvc, cfg.OpenList.BaseURL)
 	authHeader := loginTestUser(t, authSvc, "health-user", "password123")
-	handler := New(cfg, db, registry, authSvc, librarySvc, nil, playbackSvc, progressSvc, searchSvc, nil, settingsSvc, catalogSvc, healthSvc)
+	handler := New(Dependencies{
+		Config:   cfg,
+		DB:       db,
+		Registry: registry,
+		Auth:     authSvc,
+		Catalog:  catalogSvc,
+		Library:  librarySvc,
+		Playback: playbackSvc,
+		Progress: progressSvc,
+		Search:   searchSvc,
+		Settings: settingsSvc,
+		Health:   healthSvc,
+	})
 	return handler, authHeader, db, root
 }
 

@@ -1,6 +1,7 @@
 package titleclean
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,18 +28,22 @@ type RemovedToken struct {
 }
 
 var (
-	yearTokenPattern         = regexp.MustCompile(`^(?:19|20)\d{2}$`)
-	episodeCodePattern       = regexp.MustCompile(`(?i)^s\d{1,2}e\d{1,3}(?:e\d{1,3})?$`)
-	multiEpisodeRangePattern = regexp.MustCompile(`(?i)^(.*?)([\s._-]+s\d{1,2}e\d{1,3}(?:-e?\d{1,3}|e\d{1,3})(?:[\s._-]+.*)?)$`)
-	standaloneWebsitePattern = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.(?:com|net|org|cn|tv|io)\b`)
-	bracketedTokenPattern    = regexp.MustCompile(`[\[【(]([^\]】)]*)[\]】)]`)
-	hashtagTokenPattern      = regexp.MustCompile(`(^|[\s._\-\[【(])#([\pL\pN_][\pL\pN_-]*)`)
-	hyphenReleasePattern     = regexp.MustCompile(`(?i)(.*(?:\b(?:19|20)\d{2}\b|\b(?:2160p|1080p|720p|480p|web[-._ ]?dl|web[-._ ]?rip|blu[-._ ]?ray|h\.?26[45]|x26[45]|hevc|aac|ddp|ac3|eac3)\b).*)-([a-z0-9][a-z0-9._-]{2,})$`)
-	fullEpisodeCountPattern  = regexp.MustCompile(`^全\d+集$`)
-	fpsTokenPattern          = regexp.MustCompile(`^\d{2,3}fps$`)
-	bitDepthTokenPattern     = regexp.MustCompile(`^\d{1,2}bit$`)
-	multiAudioTokenPattern   = regexp.MustCompile(`^\d+audios?$`)
+	yearTokenPattern          = regexp.MustCompile(`^(?:19|20)\d{2}$`)
+	episodeCodePattern        = regexp.MustCompile(`(?i)^s\d{1,2}e\d{1,3}(?:e\d{1,3})?$`)
+	multiEpisodeRangePattern  = regexp.MustCompile(`(?i)^(.*?)([\s._-]+s\d{1,2}e\d{1,3}(?:-e?\d{1,3}|e\d{1,3})(?:[\s._-]+.*)?)$`)
+	standaloneWebsitePattern  = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.(?:com|net|org|cn|tv|io)\b`)
+	bracketedTokenPattern     = regexp.MustCompile(`[\[【(]([^\]】)]*)[\]】)]`)
+	hashtagTokenPattern       = regexp.MustCompile(`(^|[\s._\-\[【(])#([\pL\pN_][\pL\pN_-]*)`)
+	hyphenReleasePattern      = regexp.MustCompile(`(?i)(.*(?:\b(?:19|20)\d{2}\b|\b(?:2160p|1080p|720p|480p|web[-._ ]?dl|web[-._ ]?rip|blu[-._ ]?ray|h\.?26[45]|x26[45]|hevc|aac|ddp|ac3|eac3)\b).*)-([a-z0-9][a-z0-9._-]{2,})$`)
+	fullEpisodeCountPattern   = regexp.MustCompile(`^全\d+集$`)
+	fpsTokenPattern           = regexp.MustCompile(`^\d{2,3}fps$`)
+	bitDepthTokenPattern      = regexp.MustCompile(`^\d{1,2}bit$`)
+	multiAudioTokenPattern    = regexp.MustCompile(`^\d+audios?$`)
 	audioSubtitleTokenPattern = regexp.MustCompile(`^(?:[257]1|ddp[257]1|aac[257]1|truehd[257]1|dd[257]1)(?:sub|subs|subtitle|subtitles)$`)
+	audioCodecChannelPattern  = regexp.MustCompile(`^(?:dts(?:hd)?(?:ma)?|hdma|ma|truehdatmos|truehd|ddp|dd|aac|ac3|eac3)(?:20|51|71)$`)
+	movieWorkQualityPattern   = regexp.MustCompile(`(?i)(2160p|1080p|720p|480p|4k|uhd|hdr10\+?|dv|dolby[\s._-]?vision|hevc|x265|h265|avc|x264|h264|web[\s._-]?dl|webrip|bluray|remux)`)
+	movieWorkEditionPattern   = regexp.MustCompile(`(?i)(director'?s[\s._-]?cut|extended|unrated|theatrical|imax|criterion|proper|repack)`)
+	movieWorkAudioPattern     = regexp.MustCompile(`(?i)\b(?:(?:ddp?|aac|dts|truehd|atmos|eac3|ac3)\s*)?[57](?:\s|\.)1\b`)
 )
 
 func Normalize(input NormalizeInput) NormalizeResult {
@@ -82,6 +87,16 @@ func Normalize(input NormalizeInput) NormalizeResult {
 		if token == "" {
 			continue
 		}
+		if boundary, ok := classifyReleaseTailBoundary(tokens, idx); ok {
+			result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: strings.Join(cleanTokenWindow(tokens, idx, boundary), " "), Reason: "release_tail"})
+			result.RemovedTokens = append(result.RemovedTokens, releaseTailRemovedTokens(tokens, idx)...)
+			if yearTokenPattern.MatchString(token) && result.Year == nil {
+				if year, err := strconv.Atoi(token); err == nil {
+					result.Year = &year
+				}
+			}
+			break
+		}
 		if yearTokenPattern.MatchString(token) {
 			seenReleaseMetadata = true
 			if result.Year == nil {
@@ -91,6 +106,13 @@ func Normalize(input NormalizeInput) NormalizeResult {
 			}
 			result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token, Reason: "year"})
 			continue
+		}
+		if seenReleaseMetadata {
+			if count, ok := classifyAudioTokenSequence(tokens, idx); ok {
+				result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: strings.Join(cleanTokenWindow(tokens, idx, count), " "), Reason: "audio"})
+				idx += count - 1
+				continue
+			}
 		}
 		if idx+1 < len(tokens) {
 			next := strings.Trim(tokens[idx+1], "-_.()[]{}【】")
@@ -115,6 +137,13 @@ func Normalize(input NormalizeInput) NormalizeResult {
 			result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token, Reason: reason})
 			continue
 		}
+		if seenReleaseMetadata && idx > 0 {
+			previous := strings.Trim(tokens[idx-1], "-_.()[]{}【】")
+			if looksLikeAudioTailToken(token, previous) {
+				result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token, Reason: "audio"})
+				continue
+			}
+		}
 		if seenReleaseMetadata && looksLikeShortReleaseToken(token) {
 			result.RemovedTokens = append(result.RemovedTokens, RemovedToken{Value: token, Reason: "release_group"})
 			continue
@@ -134,6 +163,35 @@ func Normalize(input NormalizeInput) NormalizeResult {
 	}
 	result.Title = title
 	return result
+}
+
+func MovieWorkTitle(input string) string {
+	cleaned := Normalize(NormalizeInput{RawTitle: strings.TrimSpace(input)}).Title
+	cleaned = movieWorkQualityPattern.ReplaceAllString(cleaned, " ")
+	cleaned = movieWorkEditionPattern.ReplaceAllString(cleaned, " ")
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	if cleaned == "" {
+		cleaned = strings.TrimSpace(input)
+	}
+	parts := strings.Fields(strings.NewReplacer(".", " ", "-", " ", "_", " ").Replace(cleaned))
+	kept := parts[:0]
+	for idx, part := range parts {
+		if suppressMovieWorkToken(part) {
+			continue
+		}
+		if idx > 0 && movieWorkAudioTailToken(part, parts[idx-1]) {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if len(kept) == 0 {
+		return strings.Join(strings.Fields(cleaned), " ")
+	}
+	return strings.Join(kept, " ")
+}
+
+func NormalizeMovieWorkTitle(input string) string {
+	return strings.ToLower(MovieWorkTitle(input))
 }
 
 func removeHashtagTokens(input string) (string, []string) {
@@ -297,10 +355,127 @@ func classifyPair(left, right string) (string, bool) {
 		return "source", true
 	case "h 264", "h 265", "x 264", "x 265":
 		return "video_codec", true
-	case "ddp5 1", "ddp7 1", "aac5 1", "aac2 0":
-		return "audio", true
 	}
 	return "", false
+}
+
+func classifyReleaseTailBoundary(tokens []string, start int) (int, bool) {
+	if start < 0 || start >= len(tokens) {
+		return 0, false
+	}
+	current := strings.Trim(tokens[start], "-_.()[]{}【】")
+	if current == "" {
+		return 0, false
+	}
+	if yearTokenPattern.MatchString(current) {
+		if start+1 < len(tokens) && startsReleaseTail(tokens, start+1) {
+			return len(tokens) - start, true
+		}
+		return 0, false
+	}
+	if start > 0 && startsReleaseTail(tokens, start) {
+		return len(tokens) - start, true
+	}
+	return 0, false
+}
+
+func startsReleaseTail(tokens []string, start int) bool {
+	if start < 0 || start >= len(tokens) {
+		return false
+	}
+	current := strings.Trim(tokens[start], "-_.()[]{}【】")
+	if current == "" {
+		return false
+	}
+	if reason, ok := classifyToken(current); ok {
+		switch reason {
+		case "quality", "source", "video_codec", "hdr", "platform":
+			return true
+		}
+	}
+	if start+1 < len(tokens) {
+		next := strings.Trim(tokens[start+1], "-_.()[]{}【】")
+		if reason, ok := classifyPair(current, next); ok {
+			switch reason {
+			case "source", "video_codec", "hdr":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func releaseTailRemovedTokens(tokens []string, start int) []RemovedToken {
+	removed := make([]RemovedToken, 0, len(tokens)-start)
+	for idx := start; idx < len(tokens); idx++ {
+		token := strings.Trim(tokens[idx], "-_.()[]{}【】")
+		if token == "" {
+			continue
+		}
+		if yearTokenPattern.MatchString(token) {
+			removed = append(removed, RemovedToken{Value: token, Reason: "year"})
+			continue
+		}
+		if count, ok := classifyAudioTokenSequence(tokens, idx); ok {
+			removed = append(removed, RemovedToken{Value: strings.Join(cleanTokenWindow(tokens, idx, count), " "), Reason: "audio"})
+			idx += count - 1
+			continue
+		}
+		if idx+1 < len(tokens) {
+			next := strings.Trim(tokens[idx+1], "-_.()[]{}【】")
+			if idx+2 < len(tokens) {
+				third := strings.Trim(tokens[idx+2], "-_.()[]{}【】")
+				if reason, ok := classifyTriple(token, next, third); ok {
+					removed = append(removed, RemovedToken{Value: token + " " + next + " " + third, Reason: reason})
+					idx += 2
+					continue
+				}
+			}
+			if reason, ok := classifyPair(token, next); ok {
+				removed = append(removed, RemovedToken{Value: token + " " + next, Reason: reason})
+				idx++
+				continue
+			}
+		}
+		if reason, ok := classifyToken(token); ok {
+			removed = append(removed, RemovedToken{Value: token, Reason: reason})
+			continue
+		}
+		if looksLikeReleaseGroupToken(token) || looksLikeShortReleaseToken(token) {
+			removed = append(removed, RemovedToken{Value: token, Reason: "release_group"})
+		}
+	}
+	return removed
+}
+
+func classifyAudioTokenSequence(tokens []string, start int) (int, bool) {
+	max := 5
+	if remaining := len(tokens) - start; remaining < max {
+		max = remaining
+	}
+	for count := max; count > 0; count-- {
+		combined := normalizedTokenWindow(tokens, start, count)
+		if audioCodecChannelPattern.MatchString(combined) {
+			return count, true
+		}
+	}
+	return 0, false
+}
+
+func normalizedTokenWindow(tokens []string, start int, count int) string {
+	var builder strings.Builder
+	for _, token := range cleanTokenWindow(tokens, start, count) {
+		builder.WriteString(normalizeToken(token))
+	}
+	return builder.String()
+}
+
+func cleanTokenWindow(tokens []string, start int, count int) []string {
+	window := make([]string, 0, count)
+	for idx := start; idx < len(tokens) && idx < start+count; idx++ {
+		window = append(window, strings.Trim(tokens[idx], "-_.()[]{}【】"))
+	}
+	return window
 }
 
 func classifyTriple(left, middle, right string) (string, bool) {
@@ -332,7 +507,10 @@ func classifyToken(input string) (string, bool) {
 	if _, ok := map[string]struct{}{"nf": {}, "netflix": {}, "amzn": {}, "amazon": {}, "dsnp": {}, "disney": {}, "hmax": {}, "max": {}, "hulu": {}, "atvp": {}}[normalized]; ok {
 		return "platform", true
 	}
-	if _, ok := map[string]struct{}{"atmos": {}, "dts": {}, "dtshd": {}, "truehd": {}, "aac": {}, "aac20": {}, "aac51": {}, "ddp": {}, "ddp5": {}, "ddp51": {}, "ddp71": {}, "ac3": {}, "eac3": {}, "51": {}, "71": {}}[normalized]; ok {
+	if _, ok := map[string]struct{}{"atmos": {}, "dts": {}, "dtshd": {}, "hdma5": {}, "hdma7": {}, "hdma51": {}, "hdma71": {}, "truehd": {}, "truehd5": {}, "truehd7": {}, "truehd51": {}, "truehd71": {}, "aac": {}, "aac20": {}, "aac51": {}, "ddp": {}, "ddp5": {}, "ddp51": {}, "ddp71": {}, "ac3": {}, "eac3": {}, "51": {}, "71": {}}[normalized]; ok {
+		return "audio", true
+	}
+	if _, ok := map[string]struct{}{"ma5": {}, "ma7": {}, "ma51": {}, "ma71": {}}[normalized]; ok {
 		return "audio", true
 	}
 	if _, ok := map[string]struct{}{"flac": {}, "opus": {}, "pcm": {}, "lpcm": {}}[normalized]; ok {
@@ -385,6 +563,9 @@ func stripTrailingReleaseGroups(tokens []string) ([]string, []string) {
 	var removed []string
 	for len(kept) > 0 {
 		candidate := strings.TrimSpace(kept[len(kept)-1])
+		if len(kept) == 1 && hasMixedCaseLetters(candidate) {
+			break
+		}
 		if !looksLikeReleaseGroupToken(candidate) {
 			break
 		}
@@ -428,6 +609,20 @@ func upperRuneCount(input string) int {
 	return count
 }
 
+func hasMixedCaseLetters(input string) bool {
+	hasUpper := false
+	hasLower := false
+	for _, r := range input {
+		if r >= 'A' && r <= 'Z' {
+			hasUpper = true
+		}
+		if r >= 'a' && r <= 'z' {
+			hasLower = true
+		}
+	}
+	return hasUpper && hasLower
+}
+
 func looksLikeShortReleaseToken(input string) bool {
 	trimmed := strings.TrimSpace(input)
 	if len(trimmed) < 2 || len(trimmed) > 4 || containsNonASCII(trimmed) {
@@ -439,6 +634,15 @@ func looksLikeShortReleaseToken(input string) bool {
 		}
 	}
 	return true
+}
+
+func looksLikeAudioTailToken(input string, previous string) bool {
+	trimmed := strings.TrimSpace(input)
+	prev := normalizeToken(previous)
+	if trimmed != "1" || prev == "" {
+		return false
+	}
+	return strings.HasPrefix(prev, "ma") || strings.HasPrefix(prev, "hdma") || prev == "dts" || prev == "hd" || prev == "ddp" || prev == "dd" || prev == "aac" || prev == "eac3" || prev == "truehd"
 }
 
 func containsNonASCII(input string) bool {
@@ -456,4 +660,42 @@ func unusableTitle(input string) bool {
 		return true
 	}
 	return len([]rune(trimmed)) < 2
+}
+
+func suppressMovieWorkToken(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	if movieWorkQualityPattern.MatchString(trimmed) || movieWorkAudioPattern.MatchString(lower) {
+		return true
+	}
+	if reason, ok := classifyToken(trimmed); ok {
+		switch reason {
+		case "quality", "hdr", "video_codec", "source", "platform", "audio", "subtitle", "frame_rate", "release_group":
+			return true
+		}
+	}
+	if strings.HasPrefix(lower, "ma") && len(lower) > 2 {
+		if _, err := fmt.Sscanf(lower, "ma%d", new(int)); err == nil {
+			return true
+		}
+	}
+	if _, err := fmt.Sscanf(lower, "%dx%d", new(int), new(int)); err == nil {
+		return true
+	}
+	return false
+}
+
+func movieWorkAudioTailToken(token string, previous string) bool {
+	lower := strings.ToLower(strings.TrimSpace(token))
+	prev := strings.ToLower(strings.TrimSpace(previous))
+	if lower == "" || prev == "" {
+		return false
+	}
+	if _, err := fmt.Sscanf(lower, "%d", new(int)); err != nil {
+		return false
+	}
+	return strings.HasPrefix(prev, "ma") || prev == "dts" || prev == "hd" || prev == "ddp" || prev == "dd" || prev == "aac" || prev == "eac3"
 }
