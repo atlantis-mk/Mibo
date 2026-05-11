@@ -28,6 +28,6 @@ jobs:
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-          REGOLO_API_KEY: ${{ secrets.REGOLO_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: regolo-ai/gpt-oss-120b
+          model: opencode/mimo-v2-pro-free
