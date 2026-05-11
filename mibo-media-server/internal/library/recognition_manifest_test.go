@@ -204,6 +204,196 @@ func TestRecognitionManifestSeasonFolderLeadingNumericBuildsSeriesSeasonEpisodeI
 	}
 }
 
+func TestRecognitionManifestSingleMovieFolderBuildsMovieAndResource(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	file := database.InventoryFile{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Movie (2024)/Movie.2024.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", []database.InventoryFile{file}); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, []database.InventoryFile{file}, "/library/Movie (2024)")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+
+	movieKey := recognition.MovieWorkKey(recognition.MovieWorkInput{Title: "Movie", Year: intPtrForReduction(2024)})
+	foundMovie := false
+	foundResource := false
+	for _, candidate := range graph.Candidates {
+		if candidate.CandidateKey == movieKey && candidate.CandidateType == recognition.CandidateTypeWork && candidate.CandidateRole == recognition.WorkKindMovie {
+			foundMovie = true
+		}
+		if candidate.CandidateType == recognition.CandidateTypePlayableResource && candidate.ParentCandidateKey == movieKey {
+			foundResource = true
+		}
+	}
+	if !foundMovie || !foundResource {
+		t.Fatalf("expected single movie folder to build movie/resource candidates, got %#v", graph.Candidates)
+	}
+}
+
+func TestRecognitionManifestMovieVersionFolderBuildsOneMovieWithVariants(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Movie/Movie.2024.1080p.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Movie/Movie.2024.2160p.Directors.Cut.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/Movie")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+
+	movieCandidates := 0
+	variantCandidates := 0
+	editionCandidates := 0
+	for _, candidate := range graph.Candidates {
+		switch candidate.CandidateType {
+		case recognition.CandidateTypeWork:
+			if candidate.CandidateRole == recognition.WorkKindMovie {
+				movieCandidates++
+			}
+		case recognition.CandidateTypeVariant:
+			variantCandidates++
+		case recognition.CandidateTypeEdition:
+			editionCandidates++
+		}
+	}
+	if movieCandidates != 1 || variantCandidates < 2 || editionCandidates < 1 {
+		t.Fatalf("expected one movie plus grouped variants/edition, got movie=%d variant=%d edition=%d candidates=%#v", movieCandidates, variantCandidates, editionCandidates, graph.Candidates)
+	}
+}
+
+func TestRecognitionManifestIndependentMovieCollectionBuildsSeparateMovies(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Collection/A/A.2024.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Collection/B/B.2025.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/Collection")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+
+	movieKeys := map[string]struct{}{}
+	for _, candidate := range graph.Candidates {
+		if candidate.CandidateType == recognition.CandidateTypeWork && candidate.CandidateRole == recognition.WorkKindMovie {
+			movieKeys[candidate.CandidateKey] = struct{}{}
+		}
+	}
+	if len(movieKeys) != 2 {
+		t.Fatalf("expected two independent movie work candidates, got %#v", graph.Candidates)
+	}
+}
+
+func TestRecognitionManifestTrailerAndSampleBecomeSupplementals(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Movie/Movie.2024.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Movie/trailer.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 3, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Movie/sample.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/Movie")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+
+	roles := map[string]bool{"trailer": false, "sample": false}
+	for _, candidate := range graph.Candidates {
+		if candidate.CandidateType == recognition.CandidateTypeSupplemental {
+			roles[candidate.CandidateRole] = true
+		}
+	}
+	if !roles["trailer"] || !roles["sample"] {
+		t.Fatalf("expected trailer and sample supplemental candidates, got %#v", graph.Candidates)
+	}
+}
+
 func TestApplyRecognitionFallbackPosterWritesPerMetadataItem(t *testing.T) {
 	t.Parallel()
 
