@@ -33,11 +33,14 @@ type ManifestScope struct {
 }
 
 type ManifestGraph struct {
-	Manifest   database.RecognitionManifest
-	Candidates []database.RecognitionCandidate
-	Evidence   []database.RecognitionEvidence
-	Decisions  []database.RecognitionDecision
-	Conflicts  []database.RecognitionConflict
+	Manifest       database.RecognitionManifest
+	GraphNodes     []database.MediaGraphNode
+	GraphEdges     []database.MediaGraphEdge
+	GroupDecisions []database.MediaGraphClassification
+	Candidates     []database.RecognitionCandidate
+	Evidence       []database.RecognitionEvidence
+	Decisions      []database.RecognitionDecision
+	Conflicts      []database.RecognitionConflict
 }
 
 func (r *Repository) UpsertManifest(ctx context.Context, scope ManifestScope) (database.RecognitionManifest, error) {
@@ -95,6 +98,15 @@ func (r *Repository) LoadManifestGraph(ctx context.Context, manifestID uint) (Ma
 	if err := r.db.WithContext(ctx).Where("manifest_id = ?", manifestID).Order("id asc").Find(&graph.Candidates).Error; err != nil {
 		return graph, err
 	}
+	if err := r.db.WithContext(ctx).Where("manifest_id = ?", manifestID).Order("id asc").Find(&graph.GraphNodes).Error; err != nil {
+		return graph, err
+	}
+	if err := r.db.WithContext(ctx).Where("manifest_id = ?", manifestID).Order("id asc").Find(&graph.GraphEdges).Error; err != nil {
+		return graph, err
+	}
+	if err := r.db.WithContext(ctx).Where("manifest_id = ?", manifestID).Order("id asc").Find(&graph.GroupDecisions).Error; err != nil {
+		return graph, err
+	}
 	if err := r.db.WithContext(ctx).Where("manifest_id = ?", manifestID).Order("id asc").Find(&graph.Evidence).Error; err != nil {
 		return graph, err
 	}
@@ -117,6 +129,39 @@ func (r *Repository) SaveCandidates(ctx context.Context, candidates []database.R
 			"candidate_type", "candidate_role", "parent_candidate_key", "target_metadata_id", "target_resource_id", "primary_inventory_id", "canonical_key", "variant_key", "edition_key", "resource_shape", "review_state", "confidence", "evidence_json", "alternatives_json", "affected_files_json", "materialized_at", "superseded_at", "updated_at",
 		}),
 	}).CreateInBatches(&candidates, 100).Error
+}
+
+func (r *Repository) SaveMediaGraph(ctx context.Context, manifestID uint, nodes []database.MediaGraphNode, edges []database.MediaGraphEdge, classifications []database.MediaGraphClassification) error {
+	if manifestID == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.MediaGraphClassification{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.MediaGraphEdge{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.MediaGraphNode{}).Error; err != nil {
+			return err
+		}
+		if len(nodes) > 0 {
+			if err := tx.CreateInBatches(&nodes, 100).Error; err != nil {
+				return err
+			}
+		}
+		if len(edges) > 0 {
+			if err := tx.CreateInBatches(&edges, 100).Error; err != nil {
+				return err
+			}
+		}
+		if len(classifications) > 0 {
+			if err := tx.CreateInBatches(&classifications, 100).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *Repository) SaveEvidence(ctx context.Context, evidence []database.RecognitionEvidence) error {

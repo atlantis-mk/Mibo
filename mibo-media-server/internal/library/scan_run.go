@@ -7,15 +7,12 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/atlan/mibo-media-server/internal/catalog"
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/storageindex"
-	"github.com/atlan/mibo-media-server/internal/titleclean"
 	"gorm.io/gorm"
 )
 
@@ -645,6 +642,9 @@ func (s *Service) bulkUpsertDiscoveredInventoryFiles(ctx context.Context, provid
 	if err := s.ensureInventoryFileSignals(ctx, library.ID, provider.Name(), filesForSignals); err != nil {
 		return nil, err
 	}
+	if err := s.ensureInventorySidecarSignals(ctx, provider, library, filesForSignals); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -669,6 +669,56 @@ func (s *Service) ensureInventoryFileSignals(ctx context.Context, libraryID uint
 		missing = append(missing, inventoryFileSignalInput{File: file, Model: extractFilenameSignalModel(file.StoragePath)})
 	}
 	return saveInventoryFileSignals(ctx, s.db, scope, missing)
+}
+
+func (s *Service) ensureInventorySidecarSignals(ctx context.Context, provider storage.Provider, library database.Library, files []database.InventoryFile) error {
+	if len(files) == 0 || provider == nil {
+		return nil
+	}
+	groupedByDir := make(map[string][]database.InventoryFile)
+	for _, file := range files {
+		if file.ID == 0 || file.Status != inventory.FileStatusAvailable || file.ContentClass != SourceContentClassVideo || !isVideoFile(file.StoragePath) {
+			continue
+		}
+		dirPath := path.Dir(strings.TrimSpace(file.StoragePath))
+		groupedByDir[dirPath] = append(groupedByDir[dirPath], file)
+	}
+	inputs := make([]inventorySidecarSignalInput, 0)
+	for dirPath, dirFiles := range groupedByDir {
+		snapshot, err := s.collectDirectorySnapshot(ctx, provider, dirPath, false)
+		if err != nil {
+			return err
+		}
+		for _, file := range dirFiles {
+			for _, match := range snapshot.Sidecars.matchesForVideo(strings.TrimSpace(file.StoragePath)) {
+				sidecarInput := inventorySidecarSignalInput{
+					File:              file,
+					SidecarPath:       strings.TrimSpace(match.object.Path),
+					Extension:         strings.TrimSpace(match.extension),
+					AssociationSource: strings.TrimSpace(match.associationSource),
+					ParseStatus:       "missing",
+				}
+				content, readErr := readSidecarMetadataContent(ctx, provider, match.object)
+				if readErr != nil {
+					sidecarInput.ParseStatus = "read_error"
+					sidecarInput.ParseError = readErr.Error()
+					inputs = append(inputs, sidecarInput)
+					continue
+				}
+				parsed, parseErr := parseSidecarMetadata(strings.TrimSpace(match.extension), content)
+				if parseErr != nil {
+					sidecarInput.ParseStatus = "parse_error"
+					sidecarInput.ParseError = parseErr.Error()
+					inputs = append(inputs, sidecarInput)
+					continue
+				}
+				sidecarInput.ParseStatus = "parsed"
+				sidecarInput.Hint = parsed
+				inputs = append(inputs, sidecarInput)
+			}
+		}
+	}
+	return saveInventorySidecarSignals(ctx, s.db, library.ID, provider.Name(), inputs)
 }
 
 func (s *Service) preloadDiscoveredInventoryFilesByStableIdentity(ctx context.Context, libraryID uint, storageProvider string, candidates []discoveredInventoryCandidate) (map[string]discoveredStableIdentityBinding, error) {
@@ -773,15 +823,6 @@ func (s *Service) queuePostScanEnrichment(ctx context.Context, libraryID uint, r
 	return nil
 }
 
-func catalogScanArtifactNeedsClassificationValidation(artifact catalogScanArtifact) bool {
-	for _, decision := range artifact.Decisions {
-		if decision.Status == scanDecisionStatusProvisional || decision.Status == scanDecisionStatusReviewRequired {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Service) filteredScanSnapshot(ctx context.Context, provider storage.Provider, library database.Library, snapshot scanDirectorySnapshot, exclusionRules []database.ScanExclusionRule, scanPolicy database.LibraryScanPolicy) (scanDirectorySnapshot, error) {
 	filtered := snapshot
 	filtered.Objects = make([]storage.Object, 0, len(snapshot.Objects))
@@ -846,148 +887,12 @@ func scanPolicySkipReason(object storage.Object, policy database.LibraryScanPoli
 	return ""
 }
 
-func artifactAllowsFolderMetadata(dirPath string, artifact catalogScanArtifact) bool {
-	if artifact.ItemType == catalog.ItemTypeEpisode {
-		return strings.TrimSpace(artifact.SeriesPath) != "" && strings.TrimSpace(artifact.SeasonPath) != ""
-	}
-	return artifact.ItemType == catalog.ItemTypeMovie && strings.TrimSpace(artifact.ItemPath) == strings.TrimSpace(dirPath)
-}
-
 func (s *Service) collectDirectorySnapshot(ctx context.Context, provider storage.Provider, dirPath string, refresh bool) (scanDirectorySnapshot, error) {
 	objects, err := s.listAllDirectoryObjects(ctx, provider, dirPath, refresh)
 	if err != nil {
 		return scanDirectorySnapshot{}, fmt.Errorf("list directory %s: %w", dirPath, err)
 	}
 	return scanDirectorySnapshot{Path: dirPath, Objects: objects, Sidecars: buildSidecarIndex(provider.Name(), objects)}, nil
-}
-
-func scanDecisionFromAttachmentRole(sourcePath string, artifact catalogScanArtifact) scanDecision {
-	extraType := videoFileRoleSignal(sourcePath)
-	if strings.TrimSpace(extraType) == "" {
-		return scanDecision{}
-	}
-	confidence := 0.9
-	role := scanDecisionRoleExtra
-	switch extraType {
-	case "trailer":
-		role = scanDecisionRoleTrailer
-	case "sample":
-		role = scanDecisionRoleSample
-	}
-	return scanDecision{
-		Type:          scanDecisionAssetLink,
-		TargetKind:    artifact.ItemType,
-		TargetKey:     artifact.ItemPath,
-		Role:          role,
-		CandidateType: scanDecisionCandidateAttachment,
-		Status:        scanDecisionStatusConfirmedFast,
-		Confidence:    &confidence,
-		Evidence: []scanDecisionEvidence{{
-			Kind:   "filename_role",
-			Source: "path",
-			Value:  extraType,
-		}},
-		Reason:    "video filename or path indicates an attachment role",
-		CreatedAt: time.Now().UTC(),
-	}
-}
-
-func catalogScanArtifactFromObject(storageProvider string, libraryType string, libraryRoot string, object storage.Object, classified classifiedMedia) (catalogScanArtifact, []string) {
-	artifact := catalogScanArtifact{
-		SourcePath:           object.Path,
-		Title:                classified.Title,
-		OriginalTitle:        classified.OriginalTitle,
-		SeriesTitle:          classified.SeriesTitle,
-		Year:                 classified.Year,
-		Tags:                 append([]string(nil), classified.Tags...),
-		SeasonNumber:         classified.SeasonNumber,
-		StorageProvider:      strings.TrimSpace(storageProvider),
-		StableIdentityKey:    strings.TrimSpace(object.StableIdentity),
-		ProviderName:         strings.TrimSpace(object.Provider),
-		HashesJSON:           encodeHashInfo(object.HashInfo),
-		ThumbnailURL:         strings.TrimSpace(object.ThumbnailURL),
-		ObjectType:           strings.TrimSpace(object.ObjectType),
-		ProviderMeta:         object.SanitizedProviderMeta(),
-		SizeBytes:            object.Size,
-		ModifiedAt:           object.Modified,
-		Container:            strings.TrimPrefix(strings.ToLower(path.Ext(object.Path)), "."),
-		NormalizationVersion: classified.NormalizationVersion,
-		RemovedTokens:        append([]titleclean.RemovedToken(nil), classified.RemovedTokens...),
-		FilenameSignals:      classified.FilenameSignals,
-	}
-
-	if classified.Type == "episode" {
-		if linkRole := movieExtraLinkRole(classified.SourcePath); strings.TrimSpace(linkRole) != "" {
-			artifact.ItemType = catalog.ItemTypeMovie
-			artifact.ItemPath = movieCatalogItemPath(libraryType, libraryRoot, classified.SourcePath, classified.Title)
-			artifact.PreferredLinkRole = linkRole
-			return artifact, catalogScanItemPaths(artifact)
-		}
-		artifact.ItemType = catalog.ItemTypeEpisode
-		artifact.SeriesPath = canonicalSeriesPath(classified.SeriesTitle)
-		if classified.SeasonNumber != nil {
-			artifact.SeasonPath = fmt.Sprintf("%s/season-%02d", artifact.SeriesPath, *classified.SeasonNumber)
-		}
-		episodeNumbers := append([]int(nil), classified.EpisodeNumbers...)
-		if len(episodeNumbers) == 0 && classified.EpisodeNumber != nil {
-			episodeNumbers = append(episodeNumbers, *classified.EpisodeNumber)
-		}
-		for _, episodeNumber := range episodeNumbers {
-			itemPath := canonicalEpisodeItemPath(artifact.SeasonPath, episodeNumber)
-			artifact.EpisodeSlots = append(artifact.EpisodeSlots, catalogEpisodeSlot{EpisodeNumber: episodeNumber, ItemPath: itemPath})
-		}
-		return artifact, catalogScanItemPaths(artifact)
-	}
-
-	artifact.ItemType = catalog.ItemTypeMovie
-	artifact.ItemPath = movieCatalogItemPath(libraryType, libraryRoot, classified.SourcePath, classified.Title)
-	artifact.PreferredLinkRole = movieExtraLinkRole(classified.SourcePath)
-	return artifact, catalogScanItemPaths(artifact)
-}
-
-func movieCatalogItemPath(libraryType string, libraryRoot string, sourcePath string, title string) string {
-	if !isMovieLibraryType(libraryType) && !isMixedLibraryType(libraryType) {
-		return sourcePath
-	}
-	segments := relativePathSegments(libraryRoot, sourcePath)
-	parentTitle := cleanTitle(path.Base(path.Dir(sourcePath)))
-	extraType := extraTypeSignal(strings.TrimSuffix(path.Base(sourcePath), path.Ext(sourcePath)))
-	if len(segments) >= 2 && (strings.EqualFold(strings.TrimSpace(parentTitle), strings.TrimSpace(title)) || extraType != "") {
-		return path.Dir(sourcePath)
-	}
-	return sourcePath
-}
-
-func movieExtraLinkRole(sourcePath string) string {
-	switch extraTypeSignal(strings.TrimSuffix(path.Base(sourcePath), path.Ext(sourcePath))) {
-	case "trailer":
-		return database.ResourceLinkRoleTrailer
-	case "sample":
-		return database.ResourceLinkRoleSample
-	case "behind_the_scenes", "featurette", "preview", "interview", "deleted_scene":
-		return database.ResourceLinkRoleExtra
-	default:
-		return ""
-	}
-}
-
-func catalogScanItemPaths(artifact catalogScanArtifact) []string {
-	if artifact.ItemType == catalog.ItemTypeEpisode {
-		itemPaths := make([]string, 0, len(artifact.EpisodeSlots)+2)
-		if artifact.SeriesPath != "" {
-			itemPaths = append(itemPaths, artifact.SeriesPath)
-		}
-		if artifact.SeasonPath != "" {
-			itemPaths = append(itemPaths, artifact.SeasonPath)
-		}
-		for _, slot := range artifact.EpisodeSlots {
-			if slot.ItemPath != "" {
-				itemPaths = append(itemPaths, slot.ItemPath)
-			}
-		}
-		return itemPaths
-	}
-	return []string{artifact.ItemPath}
 }
 
 func encodeHashInfo(hashInfo map[string]string) string {

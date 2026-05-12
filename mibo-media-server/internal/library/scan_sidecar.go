@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/atlan/mibo-media-server/internal/catalog"
-	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
@@ -103,122 +101,6 @@ func isFolderLevelMetadataName(base string, ext string) bool {
 	}
 }
 
-func (s *Service) applyCatalogScanSidecars(ctx context.Context, provider storage.Provider, artifact catalogScanArtifact, matches []sidecarMatch, subtitlePolicy database.LibrarySubtitlePolicy) catalogScanArtifact {
-	for _, match := range matches {
-		sidecar := catalogScanSidecar{Path: strings.TrimSpace(match.object.Path), Extension: match.extension, AssociationSource: match.associationSource, SizeBytes: match.object.Size, ModifiedAt: match.object.Modified, StableIdentityKey: strings.TrimSpace(match.object.StableIdentity)}
-		switch match.extension {
-		case ".srt", ".ass":
-			if !subtitlePolicy.ExternalSidecarsEnabled {
-				continue
-			}
-			artifact.SubtitleSidecars = append(artifact.SubtitleSidecars, sidecar)
-		case ".nfo", ".json":
-			metadata := catalogScanMetadataSidecar{catalogScanSidecar: sidecar, ParseStatus: "skipped"}
-			if match.object.Size > maxSidecarMetadataBytes {
-				artifact.MetadataSidecars = append(artifact.MetadataSidecars, metadata)
-				continue
-			}
-			content, err := readSidecarMetadataContent(ctx, provider, match.object)
-			if err != nil {
-				metadata.ParseStatus = "unreadable"
-			} else if hints, externalIDs, err := parseSidecarMetadata(match.extension, content); err != nil {
-				metadata.ParseStatus = "malformed"
-			} else {
-				metadata.ParseStatus = "parsed"
-				metadata.Hints = hints
-				metadata.ExternalIDs = externalIDs
-				artifact.ExternalIDs = appendCatalogScanExternalIDs(artifact.ExternalIDs, catalogScanExternalIDsFromMap(artifact.ItemType, externalIDs)...)
-				artifact = applySidecarMetadataHints(artifact, hints)
-			}
-			artifact.MetadataSidecars = append(artifact.MetadataSidecars, metadata)
-		}
-	}
-	return artifact
-}
-
-func catalogScanExternalIDsFromMap(itemType string, externalIDs map[string]string) []catalogScanExternalID {
-	if len(externalIDs) == 0 {
-		return nil
-	}
-	providerType := catalogScanProviderType(itemType)
-	confidence := 1.0
-	result := make([]catalogScanExternalID, 0, len(externalIDs))
-	for provider, value := range externalIDs {
-		provider = strings.ToLower(strings.TrimSpace(provider))
-		value = strings.TrimSpace(value)
-		if provider == "" || value == "" {
-			continue
-		}
-		externalID := value
-		currentProviderType := providerType
-		switch provider {
-		case "tmdb":
-			if currentProviderType == "" {
-				continue
-			}
-			if !strings.Contains(value, ":") {
-				externalID = currentProviderType + ":" + value
-			}
-		case "metatube":
-			if !strings.HasPrefix(value, "metatube:") {
-				continue
-			}
-			currentProviderType = "movie"
-		default:
-			continue
-		}
-		result = append(result, catalogScanExternalID{Provider: provider, ProviderType: currentProviderType, ExternalID: externalID, Confidence: &confidence})
-	}
-	return result
-}
-
-func appendCatalogScanExternalIDs(existing []catalogScanExternalID, values ...catalogScanExternalID) []catalogScanExternalID {
-	seen := make(map[string]struct{}, len(existing)+len(values))
-	for _, value := range existing {
-		key := catalogScanExternalIDKey(value)
-		if key != "" {
-			seen[key] = struct{}{}
-		}
-	}
-	for _, value := range values {
-		key := catalogScanExternalIDKey(value)
-		if key == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		existing = append(existing, value)
-	}
-	return existing
-}
-
-func catalogScanExternalIDKey(value catalogScanExternalID) string {
-	provider := strings.TrimSpace(value.Provider)
-	providerType := strings.TrimSpace(value.ProviderType)
-	externalID := strings.TrimSpace(value.ExternalID)
-	if provider == "" || providerType == "" || externalID == "" {
-		return ""
-	}
-	return provider + "\x00" + providerType + "\x00" + externalID
-}
-
-func catalogScanProviderType(itemType string) string {
-	switch strings.TrimSpace(itemType) {
-	case catalog.ItemTypeMovie:
-		return "movie"
-	case catalog.ItemTypeSeries:
-		return "tv"
-	case catalog.ItemTypeSeason:
-		return "tv_season"
-	case catalog.ItemTypeEpisode:
-		return "tv_episode"
-	default:
-		return ""
-	}
-}
-
 func readSidecarMetadataContent(ctx context.Context, provider storage.Provider, object storage.Object) ([]byte, error) {
 	if object.Size > maxSidecarMetadataBytes {
 		return nil, fmt.Errorf("sidecar metadata exceeds %d bytes", maxSidecarMetadataBytes)
@@ -279,30 +161,43 @@ func readBounded(reader io.Reader) ([]byte, error) {
 	return content, nil
 }
 
-func parseSidecarMetadata(ext string, content []byte) (catalogScanMetadataHints, map[string]string, error) {
+type parsedSidecarMetadata struct {
+	Title         string
+	OriginalTitle string
+	Year          *int
+	MediaType     string
+	SeriesTitle   string
+	SeasonNumber  *int
+	EpisodeNumber *int
+	ExternalIDs   map[string]string
+	Fields        map[string]any
+}
+
+func parseSidecarMetadata(ext string, content []byte) (parsedSidecarMetadata, error) {
 	switch ext {
 	case ".json":
 		return parseJSONSidecarMetadata(content)
 	case ".nfo":
 		return parseNFOSidecarMetadata(content)
 	default:
-		return catalogScanMetadataHints{}, nil, fmt.Errorf("unsupported metadata sidecar extension %s", ext)
+		return parsedSidecarMetadata{}, fmt.Errorf("unsupported metadata sidecar extension %s", ext)
 	}
 }
 
-func parseJSONSidecarMetadata(content []byte) (catalogScanMetadataHints, map[string]string, error) {
+func parseJSONSidecarMetadata(content []byte) (parsedSidecarMetadata, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(content, &raw); err != nil {
-		return catalogScanMetadataHints{}, nil, err
+		return parsedSidecarMetadata{}, err
 	}
-	return hintsFromMap(raw), externalIDsFromMap(raw), nil
+	return parsedSidecarMetadataFromMap(raw), nil
 }
 
-func parseNFOSidecarMetadata(content []byte) (catalogScanMetadataHints, map[string]string, error) {
+func parseNFOSidecarMetadata(content []byte) (parsedSidecarMetadata, error) {
 	decoder := xml.NewDecoder(strings.NewReader(string(content)))
 	values := make(map[string]any)
 	externalIDs := make(map[string]string)
 	var current string
+	sawStructuredElement := false
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
@@ -314,6 +209,9 @@ func parseNFOSidecarMetadata(content []byte) (catalogScanMetadataHints, map[stri
 		switch value := token.(type) {
 		case xml.StartElement:
 			current = strings.ToLower(strings.TrimSpace(value.Name.Local))
+			if current != "" && current != "movie" && current != "tvshow" && current != "episodedetails" && current != "season" {
+				sawStructuredElement = true
+			}
 		case xml.CharData:
 			text := strings.TrimSpace(string(value))
 			if current == "" || text == "" {
@@ -329,16 +227,21 @@ func parseNFOSidecarMetadata(content []byte) (catalogScanMetadataHints, map[stri
 			current = ""
 		}
 	}
+	if !sawStructuredElement {
+		return parseTextNFOSidecarMetadata(content)
+	}
 	if value := stringFromAny(values["tmdbid"]); value != "" {
 		externalIDs["tmdb"] = value
 	}
 	if value := stringFromAny(values["imdbid"]); value != "" {
 		externalIDs["imdb"] = value
 	}
-	return hintsFromMap(values), externalIDs, nil
+	parsed := parsedSidecarMetadataFromMap(values)
+	parsed.ExternalIDs = externalIDs
+	return parsed, nil
 }
 
-func parseTextNFOSidecarMetadata(content []byte) (catalogScanMetadataHints, map[string]string, error) {
+func parseTextNFOSidecarMetadata(content []byte) (parsedSidecarMetadata, error) {
 	values := make(map[string]any)
 	for _, line := range strings.Split(string(content), "\n") {
 		key, value, ok := strings.Cut(line, ":")
@@ -352,15 +255,15 @@ func parseTextNFOSidecarMetadata(content []byte) (catalogScanMetadataHints, map[
 		}
 	}
 	if len(values) == 0 {
-		return catalogScanMetadataHints{}, nil, fmt.Errorf("nfo sidecar has no parseable metadata")
+		return parsedSidecarMetadata{}, fmt.Errorf("nfo sidecar has no parseable metadata")
 	}
-	return hintsFromMap(values), externalIDsFromMap(values), nil
+	return parsedSidecarMetadataFromMap(values), nil
 }
 
-func hintsFromMap(raw map[string]any) catalogScanMetadataHints {
+func parsedSidecarMetadataFromMap(raw map[string]any) parsedSidecarMetadata {
 	season := intFromAny(firstValue(raw, "season_number", "seasonnumber", "season", "parent_index_number"))
 	episode := intFromAny(firstValue(raw, "episode_number", "episodenumber", "episode", "index_number", "episodeNumber"))
-	return catalogScanMetadataHints{
+	return parsedSidecarMetadata{
 		Title:         stringFromAny(firstValue(raw, "title", "name")),
 		OriginalTitle: stringFromAny(firstValue(raw, "original_title", "originaltitle", "originalName", "original_name")),
 		Year:          intFromAny(firstValue(raw, "year", "release_year")),
@@ -368,6 +271,8 @@ func hintsFromMap(raw map[string]any) catalogScanMetadataHints {
 		SeriesTitle:   stringFromAny(firstValue(raw, "series_title", "seriestitle", "showtitle", "show_title", "tvshowtitle")),
 		SeasonNumber:  season,
 		EpisodeNumber: episode,
+		ExternalIDs:   externalIDsFromMap(raw),
+		Fields:        raw,
 	}
 }
 
@@ -442,44 +347,4 @@ func intFromAny(value any) *int {
 		}
 	}
 	return nil
-}
-
-func applySidecarMetadataHints(artifact catalogScanArtifact, hints catalogScanMetadataHints) catalogScanArtifact {
-	if strings.TrimSpace(hints.Title) != "" {
-		artifact.Title = strings.TrimSpace(hints.Title)
-	}
-	if strings.TrimSpace(hints.OriginalTitle) != "" {
-		artifact.OriginalTitle = strings.TrimSpace(hints.OriginalTitle)
-	}
-	if hints.Year != nil {
-		artifact.Year = hints.Year
-	}
-	if shouldTreatSidecarAsEpisode(hints) {
-		artifact.ItemType = catalog.ItemTypeEpisode
-		if strings.TrimSpace(hints.SeriesTitle) != "" {
-			artifact.SeriesTitle = strings.TrimSpace(hints.SeriesTitle)
-		}
-		if hints.SeasonNumber != nil {
-			artifact.SeasonNumber = hints.SeasonNumber
-		}
-		if strings.TrimSpace(artifact.SeriesTitle) != "" {
-			artifact.SeriesPath = canonicalSeriesPath(artifact.SeriesTitle)
-		}
-		if artifact.SeriesPath != "" && artifact.SeasonNumber != nil {
-			artifact.SeasonPath = fmt.Sprintf("%s/season-%02d", artifact.SeriesPath, *artifact.SeasonNumber)
-		}
-		if artifact.SeasonPath != "" && hints.EpisodeNumber != nil {
-			artifact.EpisodeSlots = []catalogEpisodeSlot{{EpisodeNumber: *hints.EpisodeNumber, ItemPath: canonicalEpisodeItemPath(artifact.SeasonPath, *hints.EpisodeNumber)}}
-		}
-		return artifact
-	}
-	if strings.TrimSpace(hints.MediaType) == catalog.ItemTypeMovie {
-		artifact.ItemType = catalog.ItemTypeMovie
-	}
-	return artifact
-}
-
-func shouldTreatSidecarAsEpisode(hints catalogScanMetadataHints) bool {
-	mediaType := strings.ToLower(strings.TrimSpace(hints.MediaType))
-	return mediaType == catalog.ItemTypeEpisode || (strings.TrimSpace(hints.SeriesTitle) != "" && hints.SeasonNumber != nil && hints.EpisodeNumber != nil)
 }

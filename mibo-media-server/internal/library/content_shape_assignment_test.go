@@ -165,52 +165,6 @@ func TestContentShapePersistedReviewDecisionNotDuplicatedOnReuse(t *testing.T) {
 	}
 }
 
-func TestContentShapeReviewPlaceholderClassifiesAsMovie(t *testing.T) {
-	t.Parallel()
-
-	plan := contentShapeDirectoryPlan{Shape: contentShapeUnknownReview, Confidence: 0.51, ReviewState: "review_required", SeriesTitle: "Ambiguous"}
-	object := storage.Object{Path: "/library/Ambiguous/001.mkv"}
-	classified, planned := classifiedMediaFromContentShapePlan(plan, object, newFilenameTokenProfileCache())
-	if !planned {
-		t.Fatal("expected review-required plan to continue with movie classification")
-	}
-	if classified.Type != "movie" {
-		t.Fatalf("expected movie classification, got %#v", classified)
-	}
-	if classified.Title == "" || classified.SourcePath != object.Path {
-		t.Fatalf("expected populated placeholder classification, got %#v", classified)
-	}
-}
-
-func TestContentShapeEmptyPlanSkipsClassification(t *testing.T) {
-	t.Parallel()
-
-	classified, planned := classifiedMediaFromContentShapePlan(contentShapeDirectoryPlan{}, storage.Object{Path: "/library/Show/Show.One.S01E01.mkv"}, newFilenameTokenProfileCache())
-	if planned {
-		t.Fatalf("expected empty plan to skip content-shape classification, got %#v", classified)
-	}
-	if classified.Type != "" {
-		t.Fatalf("expected empty classified media for empty plan, got %#v", classified)
-	}
-}
-
-func TestContentShapeLowConfidencePlaceholderClassifiesAsMovie(t *testing.T) {
-	t.Parallel()
-
-	plan := contentShapeDirectoryPlan{Shape: contentShapeMovieCollection, Confidence: 0.5, ReviewState: "auto", MovieWorkKey: "ambiguous-collection"}
-	object := storage.Object{Path: "/library/Ambiguous/Heat.1995.mkv"}
-	classified, planned := classifiedMediaFromContentShapePlan(plan, object, newFilenameTokenProfileCache())
-	if !planned {
-		t.Fatal("expected low-confidence plan to continue with movie classification")
-	}
-	if classified.Type != "movie" {
-		t.Fatalf("expected movie classification, got %#v", classified)
-	}
-	if classified.Title == "" {
-		t.Fatalf("expected placeholder title, got %#v", classified)
-	}
-}
-
 func TestContentShapePlanReuseRejectsDeletedOrConflictingDeltas(t *testing.T) {
 	t.Parallel()
 
@@ -307,9 +261,8 @@ func TestContentShapeFlatEpisodeAssignmentsRemainDistinctWhenReused(t *testing.T
 	if *alpha.EpisodeNumber == *beta.EpisodeNumber {
 		t.Fatalf("expected distinct episode numbers from directory-level assignments, alpha=%#v beta=%#v", alpha, beta)
 	}
-	alphaClassified, ok := classifiedMediaFromContentShapeAssignment(plan, alpha, storage.Object{Path: alpha.StoragePath}, state.tokenProfileCache)
-	if !ok || alphaClassified.Type != "episode" || alphaClassified.EpisodeNumber == nil || *alphaClassified.EpisodeNumber != *alpha.EpisodeNumber {
-		t.Fatalf("expected episode classification from reused assignment, got %#v ok=%t", alphaClassified, ok)
+	if alpha.TargetKey == "" || beta.TargetKey == "" {
+		t.Fatalf("expected stable episode target keys from reused assignments, alpha=%#v beta=%#v", alpha, beta)
 	}
 }
 

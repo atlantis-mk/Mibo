@@ -85,3 +85,31 @@ func TestListLibraryItemsIncludesDiscoveredInventoryEntries(t *testing.T) {
 		t.Fatalf("expected discovered entry to remain pre-metadata and organizing, got %#v", discovered)
 	}
 }
+
+func TestListLibraryItemsIncludesReviewRequiredInventoryEntries(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	svc := NewService(db)
+	file := database.InventoryFile{LibraryID: 7, StorageProvider: "local", StoragePath: "/library/Ambiguous.001.mkv", ContentClass: "video", Status: "available", ScanState: "review_required"}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+
+	items, err := svc.ListLibraryItems(ctx, 7, "", "movie", 20)
+	if err != nil {
+		t.Fatalf("list library items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one review-required entry, got %#v", items)
+	}
+	entry := items[0]
+	if entry.SourceKind != "inventory_file" || entry.InventoryFileID == nil || *entry.InventoryFileID != file.ID {
+		t.Fatalf("expected review-required inventory entry, got %#v", entry)
+	}
+	if !entry.Organizing || entry.OrganizingSummary == nil || entry.MaturityState != "review_required" {
+		t.Fatalf("expected review-required organizing summary, got %#v", entry)
+	}
+}

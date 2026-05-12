@@ -83,12 +83,16 @@ func (m *Materializer) MaterializeResources(ctx context.Context, graph ManifestG
 				return result, err
 			}
 		}
-		if parentMetadataID := metadataByKey[strings.TrimSpace(candidate.ParentCandidateKey)]; parentMetadataID != 0 {
+		targetMetadataIDs := m.resourceTargetMetadataIDs(candidate, metadataByKey)
+		for segmentIndex, parentMetadataID := range targetMetadataIDs {
+			if parentMetadataID == 0 {
+				continue
+			}
 			confidence := 0.95
 			if candidate.Confidence != nil {
 				confidence = *candidate.Confidence
 			}
-			if _, err := inventorySvc.LinkResourceToMetadata(ctx, inventory.LinkResourceMetadataInput{ResourceID: resource.ID, MetadataItemID: parentMetadataID, Role: resourceLinkRole(candidate), SegmentIndex: segmentIndex(candidate), Confidence: &confidence, EvidenceJSON: resolverLinkEvidence(candidate), Source: "recognition_resolver", ReviewState: database.ReviewStateAccepted}); err != nil {
+			if _, err := inventorySvc.LinkResourceToMetadata(ctx, inventory.LinkResourceMetadataInput{ResourceID: resource.ID, MetadataItemID: parentMetadataID, Role: resourceLinkRole(candidate), SegmentIndex: segmentIndex, Confidence: &confidence, EvidenceJSON: resolverLinkEvidence(candidate), Source: "recognition_resolver", ReviewState: database.ReviewStateAccepted}); err != nil {
 				return result, err
 			}
 		}
@@ -125,13 +129,6 @@ func resourceLinkRole(candidate database.RecognitionCandidate) string {
 	return database.ResourceLinkRolePrimary
 }
 
-func segmentIndex(candidate database.RecognitionCandidate) int {
-	if strings.TrimSpace(candidate.ResourceShape) == database.ResourceShapeMultiEpisode {
-		return 1
-	}
-	return 0
-}
-
 func editionLabel(candidate database.RecognitionCandidate) string {
 	return strings.TrimPrefix(strings.TrimSpace(candidate.EditionKey), CandidateTypeEdition+":")
 }
@@ -147,6 +144,39 @@ func resolverResourceSummary(candidate database.RecognitionCandidate) string {
 
 func resolverLinkEvidence(candidate database.RecognitionCandidate) string {
 	return mustJSON(map[string]any{"candidate_key": candidate.CandidateKey, "canonical_key": candidate.CanonicalKey, "parent_candidate_key": candidate.ParentCandidateKey, "variant_key": candidate.VariantKey, "edition_key": candidate.EditionKey, "resource_shape": candidate.ResourceShape, "role": candidate.CandidateRole, "evidence": candidate.EvidenceJSON})
+}
+
+func (m *Materializer) resourceTargetMetadataIDs(candidate database.RecognitionCandidate, metadataByKey map[string]uint) map[int]uint {
+	targets := make(map[int]uint)
+	if strings.TrimSpace(candidate.ResourceShape) != database.ResourceShapeMultiEpisode {
+		parentKey := strings.TrimSpace(candidate.ParentCandidateKey)
+		if parentKey != "" {
+			if metadataID := metadataByKey[parentKey]; metadataID != 0 {
+				targets[0] = metadataID
+			}
+		}
+		return targets
+	}
+	var payload struct {
+		EpisodeKeys []string `json:"episode_keys"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(candidate.EvidenceJSON)), &payload); err != nil {
+		return targets
+	}
+	for idx, episodeKey := range payload.EpisodeKeys {
+		if metadataID := metadataByKey[strings.TrimSpace(episodeKey)]; metadataID != 0 {
+			targets[idx+1] = metadataID
+		}
+	}
+	if len(targets) == 0 {
+		parentKey := strings.TrimSpace(candidate.ParentCandidateKey)
+		if parentKey != "" {
+			if metadataID := metadataByKey[parentKey]; metadataID != 0 {
+				targets[1] = metadataID
+			}
+		}
+	}
+	return targets
 }
 
 func (m *Materializer) metadataByCandidateKey(ctx context.Context, candidates []database.RecognitionCandidate) (map[string]uint, error) {

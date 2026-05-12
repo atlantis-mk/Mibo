@@ -42,6 +42,10 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 		return database.RecognitionManifest{}, err
 	}
 	pathTreeEvidence := recognitionPathTreeContextEvidence(files, library.RootPath, indexedSignals)
+	sidecarHints, sidecarsByFileID, err := s.recognitionSidecarInputs(ctx, library, files)
+	if err != nil {
+		return database.RecognitionManifest{}, err
+	}
 	if decision, ok := directoryReductionDecisionForFiles(files, indexedSignals); ok {
 		scopePath = firstNonEmptyString(directoryReductionScopePath(decision, scopePath), scopePath)
 		if err := saveDirectoryReductionDecision(ctx, s.db, library.ID, decision); err != nil {
@@ -53,8 +57,16 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 		contentShapeEvidence,
 		pathTreeEvidence,
 	)
-	input := recognition.ManifestBuildInput{Scope: recognition.ManifestScope{LibraryID: library.ID, MediaSourceID: library.MediaSourceID, StorageProvider: storageProvider, RootPath: rootPath, ScopePath: scopePath, ClassifierVersion: settings.ClassifierVersion}, Files: files, FileSignals: indexedSignals, ContextEvidence: contextEvidence, ExcludedFileIDs: directoryReductionExcludedFileIDs(files, indexedSignals)}
-	output := recognition.BuildManifestFromInventory(input)
+	input := recognition.GraphConstructInput{
+		Scope:            recognition.ManifestScope{LibraryID: library.ID, MediaSourceID: library.MediaSourceID, StorageProvider: storageProvider, RootPath: rootPath, ScopePath: scopePath, ClassifierVersion: settings.ClassifierVersion},
+		Files:            files,
+		FileSignals:      indexedSignals,
+		SidecarsByFileID: sidecarsByFileID,
+		SidecarHints:     sidecarHints,
+		ContextEvidence:  contextEvidence,
+		ExcludedFileIDs:  directoryReductionExcludedFileIDs(files, indexedSignals),
+	}
+	output := recognition.ConstructGraphFromInventory(input)
 	repo := recognition.NewRepository(s.db)
 	manifest, err := repo.UpsertManifest(ctx, output.ManifestScope)
 	if err != nil {
@@ -65,6 +77,18 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 	}
 	for idx := range output.Evidence {
 		output.Evidence[idx].ManifestID = manifest.ID
+	}
+	for idx := range output.MediaGraphNodes {
+		output.MediaGraphNodes[idx].ManifestID = manifest.ID
+	}
+	for idx := range output.MediaGraphEdges {
+		output.MediaGraphEdges[idx].ManifestID = manifest.ID
+	}
+	for idx := range output.MediaGraphClassifications {
+		output.MediaGraphClassifications[idx].ManifestID = manifest.ID
+	}
+	if err := repo.SaveMediaGraph(ctx, manifest.ID, output.MediaGraphNodes, output.MediaGraphEdges, output.MediaGraphClassifications); err != nil {
+		return database.RecognitionManifest{}, err
 	}
 	if err := repo.SaveCandidates(ctx, output.Candidates); err != nil {
 		return database.RecognitionManifest{}, err
@@ -93,6 +117,62 @@ func mergeRecognitionContextEvidence(groups ...map[uint][]recognition.ContextEvi
 	}
 	if len(merged) == 0 {
 		return nil
+	}
+	return merged
+}
+
+func (s *Service) recognitionSidecarInputs(ctx context.Context, library database.Library, files []database.InventoryFile) (map[uint][]recognition.SidecarHint, map[uint][]database.InventoryFile, error) {
+	if len(files) == 0 || s.db == nil {
+		return nil, nil, nil
+	}
+	rowsByFileID, err := loadInventorySidecarSignals(ctx, s.db, library.ID, strings.TrimSpace(files[0].StorageProvider), files)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rowsByFileID) == 0 {
+		return nil, nil, nil
+	}
+	hintsByFileID := make(map[uint][]recognition.SidecarHint)
+	sidecarsByFileID := make(map[uint][]database.InventoryFile)
+	for _, file := range files {
+		if file.ID == 0 {
+			continue
+		}
+		rows := rowsByFileID[file.ID]
+		if len(rows) == 0 {
+			continue
+		}
+		hintsByFileID[file.ID] = sidecarHintsFromSignals(rows)
+		for _, row := range rows {
+			sidecarsByFileID[file.ID] = append(sidecarsByFileID[file.ID], database.InventoryFile{
+				LibraryID:       library.ID,
+				MediaSourceID:   library.MediaSourceID,
+				StorageProvider: strings.TrimSpace(file.StorageProvider),
+				StoragePath:     strings.TrimSpace(row.SidecarPath),
+				ContentClass:    classifySourceObject(row.SidecarPath),
+				Status:          inventory.FileStatusAvailable,
+			})
+		}
+	}
+	if len(hintsByFileID) == 0 {
+		hintsByFileID = nil
+	}
+	if len(sidecarsByFileID) == 0 {
+		sidecarsByFileID = nil
+	}
+	return hintsByFileID, sidecarsByFileID, nil
+}
+
+func mergeMaps(base map[string]any, extras map[string]any) map[string]any {
+	if len(base) == 0 && len(extras) == 0 {
+		return nil
+	}
+	merged := make(map[string]any, len(base)+len(extras))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range extras {
+		merged[key] = value
 	}
 	return merged
 }
@@ -192,6 +272,12 @@ func recognitionContentShapePlanShape(assignments map[string]contentShapeFileAss
 }
 
 func recognitionContentShapeAssignmentForModel(libraryRoot string, storagePath string, model filenameSignalModel) contentShapeFileAssignment {
+	if strings.TrimSpace(model.PathHints.SeriesTitle) == "" {
+		model.PathHints.SeriesTitle = tvSeriesTitleFromPath(libraryRoot, storagePath)
+	}
+	if model.PathHints.SeasonNumber == nil {
+		model.PathHints.SeasonNumber = tvSeasonFromPath(libraryRoot, storagePath)
+	}
 	seriesTitle := contentShapeEpisodeSeriesTitle(contentShapeDirectoryPlan{}, storage.Object{Path: storagePath}, model)
 	seasonNumber := firstNonNilInt(model.Identity.SeasonNumber, model.PathHints.SeasonNumber, tvSeasonFromPath(libraryRoot, storagePath))
 	episodeNumber := firstNonNilInt(model.Identity.EpisodeNumber, parseEpisodeNumberFromTitle(strings.TrimSuffix(path.Base(storagePath), path.Ext(storagePath)), seriesTitle))

@@ -4,13 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
-	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 func generateContentShapeAssignmentsFromPersistedRule(planRecord database.ContentShapePlan, snapshot scanDirectorySnapshot, tokenCache *filenameTokenProfileCache) []contentShapeFileAssignment {
@@ -223,47 +221,6 @@ func contentShapeVisibleVideoPaths(snapshot scanDirectorySnapshot) []string {
 	return paths
 }
 
-func classifiedMediaFromContentShapeAssignment(plan contentShapeDirectoryPlan, assignment contentShapeFileAssignment, object storage.Object, tokenCache *filenameTokenProfileCache) (classifiedMedia, bool) {
-	model := filenameTokenProfileForPath(tokenCache, object.Path)
-	normalized := titleclean.Normalize(titleclean.NormalizeInput{RawTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))})
-	if assignment.AssignmentType == contentShapeAssignmentSkip {
-		return classifiedMedia{}, false
-	}
-	if (plan.Confidence < contentShapeHighConfidenceThreshold || plan.ReviewState == "review_required") && assignment.AssignmentType != contentShapeAssignmentEpisode {
-		title := contentShapeMovieTitle(plan, assignment, object, model)
-		if strings.TrimSpace(title) == "" {
-			title = strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))
-		}
-		return classifiedMedia{Type: "movie", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), Year: model.Identity.Year, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags, FilenameSignals: model}, true
-	}
-	switch assignment.AssignmentType {
-	case contentShapeAssignmentEpisode:
-		if assignment.EpisodeNumber == nil {
-			return classifiedMedia{}, false
-		}
-		seasonNumber := assignment.SeasonNumber
-		if seasonNumber == nil {
-			defaultSeason := 1
-			seasonNumber = &defaultSeason
-		}
-		seriesTitle := firstNonEmptyString(assignment.SeriesTitle, plan.SeriesTitle, cleanTitle(path.Base(path.Dir(object.Path))))
-		if strings.TrimSpace(seriesTitle) == "" {
-			return classifiedMedia{}, false
-		}
-		episodeNumber := *assignment.EpisodeNumber
-		title, episodeNumbers := contentShapeEpisodeTitleAndNumbers(seriesTitle, *seasonNumber, episodeNumber, model)
-		return classifiedMedia{Type: "episode", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), SeriesTitle: seriesTitle, SeasonNumber: seasonNumber, EpisodeNumber: &episodeNumber, EpisodeNumbers: episodeNumbers, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags, FilenameSignals: model}, true
-	case contentShapeAssignmentMovie, contentShapeAssignmentVersion, contentShapeAssignmentAttachment, contentShapeAssignmentReview:
-		title := contentShapeMovieTitle(plan, assignment, object, model)
-		if strings.TrimSpace(title) == "" {
-			title = strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))
-		}
-		return classifiedMedia{Type: "movie", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), Year: model.Identity.Year, SourcePath: object.Path, Status: "ready", NormalizationVersion: normalized.NormalizationVersion, RemovedTokens: normalized.RemovedTokens, Tags: normalized.Tags, FilenameSignals: model}, true
-	default:
-		return classifiedMediaFromContentShapePlan(plan, object, tokenCache)
-	}
-}
-
 func visibleVideoObjects(objects []storage.Object) []storage.Object {
 	videos := make([]storage.Object, 0, len(objects))
 	for _, object := range objects {
@@ -298,86 +255,6 @@ func movieAssignmentTarget(plan contentShapeDirectoryPlan, model filenameSignalM
 		return fmt.Sprintf("%s:%d", title, *model.Identity.Year)
 	}
 	return title
-}
-
-func classifiedMediaFromContentShapePlan(plan contentShapeDirectoryPlan, object storage.Object, tokenCache *filenameTokenProfileCache) (classifiedMedia, bool) {
-	if strings.TrimSpace(plan.Shape) == "" {
-		return classifiedMedia{}, false
-	}
-	model := filenameTokenProfileForPath(tokenCache, object.Path)
-	if plan.Confidence < contentShapeHighConfidenceThreshold || plan.ReviewState == "review_required" {
-		title := contentShapeMovieTitle(plan, contentShapeFileAssignment{}, object, model)
-		if strings.TrimSpace(title) == "" {
-			title = strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))
-		}
-		return classifiedMedia{Type: "movie", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), Year: model.Identity.Year, SourcePath: object.Path, Status: "ready", FilenameSignals: model}, true
-	}
-	if plan.Shape == contentShapeMovieVersionsFolder || plan.Shape == contentShapeMovieCollection {
-		title := contentShapeMovieTitle(plan, contentShapeFileAssignment{}, object, model)
-		return classifiedMedia{Type: "movie", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), Year: model.Identity.Year, SourcePath: object.Path, Status: "ready", FilenameSignals: model}, strings.TrimSpace(title) != ""
-	}
-	if plan.Shape == contentShapeAttachmentGroup {
-		title := firstNonEmptyString(plan.SeriesTitle, cleanTitle(plan.MovieWorkKey), cleanTitle(path.Base(path.Dir(object.Path))))
-		if strings.TrimSpace(title) == "" {
-			return classifiedMedia{}, false
-		}
-		return classifiedMedia{Type: "movie", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), SourcePath: object.Path, Status: "ready", FilenameSignals: model}, true
-	}
-	if plan.Shape != contentShapeEpisodePack && plan.Shape != contentShapeSeasonFolder && plan.Shape != contentShapeFlatEpisodeFolder && plan.Shape != contentShapeAbsoluteEpisodePack {
-		return classifiedMedia{}, false
-	}
-	assignment := contentShapeAssignmentForObject(plan, object, tokenCache)
-	if assignment.AssignmentType != contentShapeAssignmentEpisode || assignment.EpisodeNumber == nil {
-		return classifiedMedia{}, false
-	}
-	seasonNumber := assignment.SeasonNumber
-	if seasonNumber == nil {
-		defaultSeason := 1
-		seasonNumber = &defaultSeason
-	}
-	seriesTitle := firstNonEmptyString(assignment.SeriesTitle, plan.SeriesTitle, cleanTitle(path.Base(path.Dir(object.Path))))
-	if strings.TrimSpace(seriesTitle) == "" {
-		return classifiedMedia{}, false
-	}
-	episodeNumber := *assignment.EpisodeNumber
-	title, episodeNumbers := contentShapeEpisodeTitleAndNumbers(seriesTitle, *seasonNumber, episodeNumber, model)
-	return classifiedMedia{Type: "episode", Title: title, OriginalTitle: strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path)), SeriesTitle: seriesTitle, SeasonNumber: seasonNumber, EpisodeNumber: &episodeNumber, EpisodeNumbers: episodeNumbers, SourcePath: object.Path, Status: "ready", FilenameSignals: model}, true
-}
-
-func contentShapeMovieTitle(plan contentShapeDirectoryPlan, assignment contentShapeFileAssignment, object storage.Object, model filenameSignalModel) string {
-	rawTitle := strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))
-	if strings.TrimSpace(model.ReleaseHints.GenericNoise) != "" || isGenericMediaName(rawTitle) || !filenameHasKeptTitleToken(model.TitleTokens) || shortNumericMediaNamePattern.MatchString(strings.TrimSpace(rawTitle)) || segmentedMediaNamePattern.MatchString(strings.TrimSpace(rawTitle)) {
-		if parent := cleanTitle(path.Base(path.Dir(object.Path))); strings.TrimSpace(parent) != "" {
-			return parent
-		}
-	}
-	return firstNonEmptyString(model.Identity.TitleCandidate, assignment.SeriesTitle, plan.SeriesTitle, cleanTitle(plan.MovieWorkKey), cleanTitle(path.Base(path.Dir(object.Path))))
-}
-
-var (
-	shortNumericMediaNamePattern = regexp.MustCompile(`^\d{1,2}$`)
-	segmentedMediaNamePattern    = regexp.MustCompile(`(?i)^(?:cd|disc|disk|part)[\s._-]*\d{1,2}$`)
-)
-
-func filenameHasKeptTitleToken(tokens []filenameTitleToken) bool {
-	for _, token := range tokens {
-		if token.Kept {
-			return true
-		}
-	}
-	return false
-}
-
-func contentShapeEpisodeTitleAndNumbers(seriesTitle string, seasonNumber int, episodeNumber int, model filenameSignalModel) (string, []int) {
-	episodeNumbers := []int{episodeNumber}
-	if len(model.Identity.EpisodeNumbers) > 0 && model.Identity.EpisodeNumber != nil && *model.Identity.EpisodeNumber == episodeNumber {
-		episodeNumbers = append([]int(nil), model.Identity.EpisodeNumbers...)
-	}
-	title := fmt.Sprintf("%s S%02dE%02d", seriesTitle, seasonNumber, episodeNumber)
-	if len(episodeNumbers) > 1 {
-		title = fmt.Sprintf("%s S%02dE%02d-E%02d", seriesTitle, seasonNumber, episodeNumbers[0], episodeNumbers[len(episodeNumbers)-1])
-	}
-	return title, episodeNumbers
 }
 
 func contentShapeAssignmentForObject(plan contentShapeDirectoryPlan, object storage.Object, tokenCache *filenameTokenProfileCache) contentShapeFileAssignment {

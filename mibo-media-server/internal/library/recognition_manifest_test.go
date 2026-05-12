@@ -2,11 +2,15 @@ package library
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/atlan/mibo-media-server/internal/config"
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/inventory"
+	"github.com/atlan/mibo-media-server/internal/providers"
 	"github.com/atlan/mibo-media-server/internal/recognition"
 )
 
@@ -204,6 +208,274 @@ func TestRecognitionManifestSeasonFolderLeadingNumericBuildsSeriesSeasonEpisodeI
 	}
 }
 
+func TestRecognitionManifestSeasonFolderLeadingNumericResourcesPointToEpisodes(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "ep-1", StoragePath: "/library/Show/Season 1/01.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "ep-2", StoragePath: "/library/Show/Season 1/02.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/Show/Season 1")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	result, err := svc.resolveRecognitionManifest(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if len(result.ResourceIDs) != 2 {
+		t.Fatalf("expected two materialized resources, got %#v", result)
+	}
+	var episodeItems []database.MetadataItem
+	if err := db.WithContext(ctx).Where("item_type = ?", database.MetadataItemTypeEpisode).Order("index_number asc").Find(&episodeItems).Error; err != nil {
+		t.Fatalf("load episode items: %v", err)
+	}
+	if len(episodeItems) != 2 {
+		t.Fatalf("expected two episode items, got %#v", episodeItems)
+	}
+	var links []database.ResourceMetadataLink
+	if err := db.WithContext(ctx).Order("resource_id asc, metadata_item_id asc").Find(&links).Error; err != nil {
+		t.Fatalf("load resource links: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected one primary link per episode resource, got %#v", links)
+	}
+	episodeIDs := map[uint]struct{}{episodeItems[0].ID: {}, episodeItems[1].ID: {}}
+	for _, link := range links {
+		if _, ok := episodeIDs[link.MetadataItemID]; !ok {
+			t.Fatalf("expected resource link to episode metadata, got %#v with episodes %#v", links, episodeItems)
+		}
+	}
+}
+
+func TestPersistRecognitionManifestForFilesReadsSidecarHints(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	showDir := filepath.Join(root, "Show", "Season 1")
+	if err := os.MkdirAll(showDir, 0o755); err != nil {
+		t.Fatalf("mkdir show dir: %v", err)
+	}
+	videoPath := filepath.Join(showDir, "01.mkv")
+	sidecarPath := filepath.Join(showDir, "01.nfo")
+	if err := os.WriteFile(videoPath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+	if err := os.WriteFile(sidecarPath, []byte("series_title: Show\ntitle: Episode 1\nseason_number: 1\nepisode_number: 1\ntmdb: 123\n"), 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+	cfg := config.Config{}
+	cfg.Local.RootPath = root
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(cfg, db, providers.NewRegistry(cfg), nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: root}
+	source := database.MediaSource{ID: 1, Name: "Local", Provider: "local", StorageRef: root, RootPath: root}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	file := database.InventoryFile{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "ep-1", StoragePath: videoPath, Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", []database.InventoryFile{file}); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	provider, err := svc.storageRegistry().BuildForSource(source)
+	if err != nil {
+		t.Fatalf("build provider: %v", err)
+	}
+	if err := svc.ensureInventorySidecarSignals(ctx, provider, libraryRecord, []database.InventoryFile{file}); err != nil {
+		t.Fatalf("ensure sidecar signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, []database.InventoryFile{file}, showDir)
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+	seenTMDB := false
+	seenSeriesTitle := false
+	for _, evidence := range graph.Evidence {
+		if evidence.EvidenceKey == "external_id:tmdb" && evidence.EvidenceValue == "123" {
+			seenTMDB = true
+		}
+		if evidence.EvidenceKey == "series_title" && evidence.EvidenceValue == "Show" {
+			seenSeriesTitle = true
+		}
+	}
+	if !seenTMDB || !seenSeriesTitle {
+		t.Fatalf("expected sidecar hint evidence in graph, got %#v", graph.Evidence)
+	}
+}
+
+func TestEnsureInventorySidecarSignalsPersistsParsedSidecars(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	showDir := filepath.Join(root, "Show", "Season 1")
+	if err := os.MkdirAll(showDir, 0o755); err != nil {
+		t.Fatalf("mkdir show dir: %v", err)
+	}
+	videoPath := filepath.Join(showDir, "01.mkv")
+	sidecarPath := filepath.Join(showDir, "01.nfo")
+	if err := os.WriteFile(videoPath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+	if err := os.WriteFile(sidecarPath, []byte("series_title: Show\ntitle: Episode 1\nseason_number: 1\nepisode_number: 1\ntmdb: 123\n"), 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+	cfg := config.Config{}
+	cfg.Local.RootPath = root
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(cfg, db, providers.NewRegistry(cfg), nil)
+	source := database.MediaSource{ID: 1, Name: "Local", Provider: "local", StorageRef: root, RootPath: root}
+	libraryRecord := database.Library{ID: 1, MediaSourceID: source.ID, RootPath: root}
+	if err := db.WithContext(ctx).Create(&source).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	file := database.InventoryFile{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "ep-1", StoragePath: videoPath, Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	provider, err := svc.storageRegistry().BuildForSource(source)
+	if err != nil {
+		t.Fatalf("build provider: %v", err)
+	}
+	if err := svc.ensureInventorySidecarSignals(ctx, provider, libraryRecord, []database.InventoryFile{file}); err != nil {
+		t.Fatalf("ensure sidecar signals: %v", err)
+	}
+	var rows []database.InventorySidecarSignal
+	if err := db.WithContext(ctx).Where("inventory_file_id = ?", file.ID).Find(&rows).Error; err != nil {
+		t.Fatalf("load sidecar signals: %v", err)
+	}
+	if len(rows) != 1 || rows[0].SidecarPath != sidecarPath || rows[0].SeriesTitle != "Show" || rows[0].ParseStatus != "parsed" {
+		t.Fatalf("unexpected sidecar signals: %#v", rows)
+	}
+}
+
+func TestPersistRecognitionManifestForFilesPersistsMediaGraphRows(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "ep-1", StoragePath: "/library/Show/Season 1/01.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "ep-2", StoragePath: "/library/Show/Season 1/02.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/Show/Season 1")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	var nodes []database.MediaGraphNode
+	if err := db.WithContext(ctx).Where("manifest_id = ?", manifest.ID).Find(&nodes).Error; err != nil {
+		t.Fatalf("load graph nodes: %v", err)
+	}
+	var classifications []database.MediaGraphClassification
+	if err := db.WithContext(ctx).Where("manifest_id = ?", manifest.ID).Find(&classifications).Error; err != nil {
+		t.Fatalf("load graph classifications: %v", err)
+	}
+	if len(nodes) == 0 || len(classifications) == 0 {
+		t.Fatalf("expected persisted media graph rows, got nodes=%#v classifications=%#v", nodes, classifications)
+	}
+}
+
+func TestPersistRecognitionManifestPersistsSidecarAttachmentGraphRows(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	video := database.InventoryFile{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "movie", StoragePath: "/library/Movie/Movie.2024.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"}
+	sidecar := database.InventoryFile{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StableIdentityKey: "poster", StoragePath: "/library/Movie/poster.jpg", Container: "jpg", ContentClass: SourceContentClassImage, Status: "available"}
+	for _, file := range []database.InventoryFile{video, sidecar} {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", []database.InventoryFile{video}); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, []database.InventoryFile{video}, "/library/Movie")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	if err := saveInventorySidecarSignals(ctx, db, libraryRecord.ID, "local", []inventorySidecarSignalInput{{File: video, SidecarPath: sidecar.StoragePath, Extension: ".jpg", AssociationSource: "basename", ParseStatus: "parsed"}}); err != nil {
+		t.Fatalf("save sidecar signal: %v", err)
+	}
+	manifest, err = svc.persistRecognitionManifestForFiles(ctx, libraryRecord, []database.InventoryFile{video}, "/library/Movie")
+	if err != nil {
+		t.Fatalf("persist manifest with sidecar: %v", err)
+	}
+	var nodes []database.MediaGraphNode
+	if err := db.WithContext(ctx).Where("manifest_id = ? AND node_kind = ?", manifest.ID, "attachment").Find(&nodes).Error; err != nil {
+		t.Fatalf("load attachment nodes: %v", err)
+	}
+	foundPoster := false
+	for _, node := range nodes {
+		if strings.Contains(node.PayloadJSON, `"role":"poster"`) {
+			foundPoster = true
+		}
+	}
+	if !foundPoster {
+		t.Fatalf("expected poster attachment graph node, got %#v", nodes)
+	}
+	var playableCount int64
+	if err := db.WithContext(ctx).Model(&database.RecognitionCandidate{}).Where("manifest_id = ? AND candidate_type = ? AND primary_inventory_id = ?", manifest.ID, recognition.CandidateTypePlayableResource, sidecar.ID).Count(&playableCount).Error; err != nil {
+		t.Fatalf("count sidecar playable candidates: %v", err)
+	}
+	if playableCount != 0 {
+		t.Fatalf("did not expect sidecar attachment to materialize as playable resource")
+	}
+}
+
 func TestRecognitionManifestSingleMovieFolderBuildsMovieAndResource(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -391,6 +663,115 @@ func TestRecognitionManifestTrailerAndSampleBecomeSupplementals(t *testing.T) {
 	}
 	if !roles["trailer"] || !roles["sample"] {
 		t.Fatalf("expected trailer and sample supplemental candidates, got %#v", graph.Candidates)
+	}
+}
+
+func TestRecognitionManifestExplicitEpisodePatternsBuildSeriesHierarchy(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/Show/Season 1/Show.S01E02.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/灵笼/第一季/第03集.mp4", Container: "mp4", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 3, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/灵笼/第一季/第04集.mp4", Container: "mp4", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, []database.InventoryFile{files[0]}, "/library/Show/Season 1")
+	if err != nil {
+		t.Fatalf("persist show manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load show graph: %v", err)
+	}
+	wantEpisodeKey := recognition.EpisodeKey(recognition.EpisodeInput{SeriesTitle: "Show", SeasonNumber: 1, EpisodeNumber: 2})
+	found := false
+	for _, candidate := range graph.Candidates {
+		if candidate.CandidateKey == wantEpisodeKey && candidate.CandidateType == recognition.CandidateTypeEpisode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected explicit S01E02 episode candidate, got %#v", graph.Candidates)
+	}
+
+	_ = files[1]
+	_ = files[2]
+}
+
+func TestRecognitionResolveMarksAmbiguousInventoryFileReviewRequired(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	file := database.InventoryFile{
+		ID:              1,
+		LibraryID:       libraryRecord.ID,
+		MediaSourceID:   libraryRecord.MediaSourceID,
+		StorageProvider: "local",
+		StoragePath:     "/library/Ambiguous/001.mkv",
+		Container:       "mkv",
+		ContentClass:    SourceContentClassVideo,
+		Status:          "available",
+		ScanState:       inventory.FileScanStateDiscovered,
+	}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", []database.InventoryFile{file}); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, []database.InventoryFile{file}, "/library/Ambiguous")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+	if err := repo.SaveDecisions(ctx, []database.RecognitionDecision{{
+		ManifestID:   manifest.ID,
+		CandidateID:  &graph.Candidates[0].ID,
+		DecisionType: "resolver_outcome",
+		Outcome:      recognition.DecisionOutcomeReviewRequired,
+		TargetKind:   graph.Candidates[0].CandidateType,
+		TargetKey:    graph.Candidates[0].CandidateKey,
+	}}); err != nil {
+		t.Fatalf("save review decision: %v", err)
+	}
+	if err := svc.markReviewRequiredInventoryFromManifest(ctx, manifest.ID); err != nil {
+		t.Fatalf("mark review required: %v", err)
+	}
+	var refreshed database.InventoryFile
+	if err := db.WithContext(ctx).First(&refreshed, file.ID).Error; err != nil {
+		t.Fatalf("load refreshed file: %v", err)
+	}
+	if refreshed.ScanState != inventory.FileScanStateReviewRequired {
+		t.Fatalf("expected scan_state review_required, got %#v", refreshed)
 	}
 }
 

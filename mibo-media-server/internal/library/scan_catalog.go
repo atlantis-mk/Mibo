@@ -2,9 +2,6 @@ package library
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"path"
 	"strings"
 	"time"
 	"unicode"
@@ -168,72 +165,6 @@ func applyInventoryFileStableIdentityReuseUpdate(ctx context.Context, db *gorm.D
 		Updates(updates).Error
 }
 
-func buildCatalogScanEvidencePayload(artifact catalogScanArtifact, episodeNumbers []int) string {
-	payload := map[string]any{
-		"storage_path":        strings.TrimSpace(artifact.SourcePath),
-		"stable_identity_key": strings.TrimSpace(artifact.StableIdentityKey),
-		"provider_name":       strings.TrimSpace(artifact.ProviderName),
-		"hashes_json":         strings.TrimSpace(artifact.HashesJSON),
-		"detected_title":      strings.TrimSpace(artifact.Title),
-	}
-	if strings.TrimSpace(artifact.ObjectType) != "" {
-		payload["object_type"] = strings.TrimSpace(artifact.ObjectType)
-	}
-	if len(artifact.ProviderMeta) > 0 {
-		payload["provider_metadata"] = artifact.ProviderMeta
-	}
-	if strings.TrimSpace(artifact.NormalizationVersion) != "" {
-		payload["normalization_version"] = strings.TrimSpace(artifact.NormalizationVersion)
-	}
-	if len(artifact.RemovedTokens) > 0 {
-		payload["removed_tokens"] = artifact.RemovedTokens
-	}
-	if hints := filenameReleaseHintsPayload(artifact.FilenameSignals.ReleaseHints); len(hints) > 0 {
-		payload["filename_release_hints"] = hints
-	}
-	if evidence := filenameEvidencePayload(artifact.FilenameSignals.Evidence); len(evidence) > 0 {
-		payload["filename_signal_evidence"] = evidence
-	}
-	if tags := uniqueCatalogScanTags(artifact.Tags); len(tags) > 0 {
-		payload["hashtag_tags"] = tags
-	}
-	if len(artifact.SubtitleSidecars) > 0 {
-		payload["subtitle_sidecars"] = sidecarEvidencePayload(artifact.SubtitleSidecars)
-	}
-	if len(artifact.MetadataSidecars) > 0 {
-		payload["metadata_sidecars"] = metadataSidecarEvidencePayload(artifact.MetadataSidecars)
-	}
-	if len(artifact.ExternalIDs) > 0 {
-		payload["external_ids"] = externalIDEvidencePayload(artifact.ExternalIDs)
-	}
-	if len(artifact.Decisions) > 0 {
-		payload["resolver_decisions"] = resolverDecisionEvidencePayload(artifact.Decisions)
-	}
-	if len(artifact.ContentShapeProfile) > 0 {
-		payload["content_shape_profile"] = artifact.ContentShapeProfile
-	}
-	if len(artifact.ContentShapePlan) > 0 {
-		payload["content_shape_plan"] = artifact.ContentShapePlan
-	}
-	if len(artifact.ContentShapeAssignment) > 0 {
-		payload["content_shape_assignment"] = artifact.ContentShapeAssignment
-	}
-	if strings.TrimSpace(artifact.SeriesTitle) != "" {
-		payload["series_title"] = strings.TrimSpace(artifact.SeriesTitle)
-	}
-	if artifact.SeasonNumber != nil {
-		payload["season_number"] = *artifact.SeasonNumber
-	}
-	if len(episodeNumbers) > 0 {
-		payload["episode_numbers"] = episodeNumbers
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "{}"
-	}
-	return string(encoded)
-}
-
 func filenameReleaseHintsPayload(hints filenameReleaseHints) map[string]any {
 	payload := make(map[string]any)
 	if strings.TrimSpace(hints.Quality) != "" {
@@ -276,51 +207,6 @@ func filenameEvidencePayload(evidence []filenameEvidenceSummary) []map[string]an
 		}
 		if item["kind"] == "" || item["source"] == "" || item["value"] == "" {
 			continue
-		}
-		items = append(items, item)
-	}
-	return items
-}
-
-func externalIDEvidencePayload(externalIDs []catalogScanExternalID) []map[string]any {
-	items := make([]map[string]any, 0, len(externalIDs))
-	for _, externalID := range externalIDs {
-		items = append(items, map[string]any{
-			"provider":      strings.TrimSpace(externalID.Provider),
-			"provider_type": strings.TrimSpace(externalID.ProviderType),
-			"external_id":   strings.TrimSpace(externalID.ExternalID),
-		})
-	}
-	return items
-}
-
-func sidecarEvidencePayload(sidecars []catalogScanSidecar) []map[string]any {
-	items := make([]map[string]any, 0, len(sidecars))
-	for _, sidecar := range sidecars {
-		item := map[string]any{
-			"path":               strings.TrimSpace(sidecar.Path),
-			"extension":          strings.TrimSpace(sidecar.Extension),
-			"association_source": strings.TrimSpace(sidecar.AssociationSource),
-		}
-		items = append(items, item)
-	}
-	return items
-}
-
-func metadataSidecarEvidencePayload(sidecars []catalogScanMetadataSidecar) []map[string]any {
-	items := make([]map[string]any, 0, len(sidecars))
-	for _, sidecar := range sidecars {
-		item := map[string]any{
-			"path":               strings.TrimSpace(sidecar.Path),
-			"extension":          strings.TrimSpace(sidecar.Extension),
-			"association_source": strings.TrimSpace(sidecar.AssociationSource),
-			"parse_status":       strings.TrimSpace(sidecar.ParseStatus),
-		}
-		if hints := metadataHintsPayload(sidecar.Hints); len(hints) > 0 {
-			item["hints"] = hints
-		}
-		if len(sidecar.ExternalIDs) > 0 {
-			item["external_ids"] = sidecar.ExternalIDs
 		}
 		items = append(items, item)
 	}
@@ -402,50 +288,6 @@ func resolverDecisionEvidenceItemsPayload(evidence []scanDecisionEvidence) []map
 	return items
 }
 
-func metadataHintsPayload(hints catalogScanMetadataHints) map[string]any {
-	payload := make(map[string]any)
-	if strings.TrimSpace(hints.Title) != "" {
-		payload["title"] = strings.TrimSpace(hints.Title)
-	}
-	if strings.TrimSpace(hints.OriginalTitle) != "" {
-		payload["original_title"] = strings.TrimSpace(hints.OriginalTitle)
-	}
-	if hints.Year != nil {
-		payload["year"] = *hints.Year
-	}
-	if strings.TrimSpace(hints.MediaType) != "" {
-		payload["media_type"] = strings.TrimSpace(hints.MediaType)
-	}
-	if strings.TrimSpace(hints.SeriesTitle) != "" {
-		payload["series_title"] = strings.TrimSpace(hints.SeriesTitle)
-	}
-	if hints.SeasonNumber != nil {
-		payload["season_number"] = *hints.SeasonNumber
-	}
-	if hints.EpisodeNumber != nil {
-		payload["episode_number"] = *hints.EpisodeNumber
-	}
-	return payload
-}
-
-func defaultCatalogTitle(title string, fallbackPath string) string {
-	if strings.TrimSpace(title) != "" {
-		return strings.TrimSpace(title)
-	}
-	base := strings.TrimSuffix(path.Base(strings.TrimSpace(fallbackPath)), path.Ext(strings.TrimSpace(fallbackPath)))
-	if strings.TrimSpace(base) != "" && base != "." && base != "/" {
-		return cleanTitle(base)
-	}
-	return strings.TrimSpace(fallbackPath)
-}
-
-func defaultCatalogSortKey(sortKey string, fallback string) string {
-	if strings.TrimSpace(sortKey) != "" {
-		return strings.TrimSpace(sortKey)
-	}
-	return defaultCatalogTitle(fallback, fallback)
-}
-
 func canonicalSeriesPath(seriesTitle string) string {
 	cleaned := strings.TrimSpace(cleanTitle(seriesTitle))
 	if cleaned == "" {
@@ -470,10 +312,6 @@ func canonicalSeriesPath(seriesTitle string) string {
 		return "series"
 	}
 	return normalized
-}
-
-func canonicalEpisodeItemPath(seasonPath string, episodeNumber int) string {
-	return fmt.Sprintf("%s/episode-%04d", seasonPath, episodeNumber)
 }
 
 func applyScopedPathFilter(query *gorm.DB, column string, rootPath string) *gorm.DB {

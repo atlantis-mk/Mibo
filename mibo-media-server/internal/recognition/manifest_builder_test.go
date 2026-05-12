@@ -1,6 +1,7 @@
 package recognition
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/atlan/mibo-media-server/internal/database"
@@ -8,7 +9,9 @@ import (
 
 func TestBuildManifestFromInventoryCreatesPlayableResourceCandidates(t *testing.T) {
 	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Movie.2024.mkv", StableIdentityKey: "stable-movie", ContentClass: "video", Status: "available", HashesJSON: `{"md5":"same"}`}
-	output := BuildManifestFromInventory(ManifestBuildInput{Scope: ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library", ClassifierVersion: "test"}, Files: []database.InventoryFile{file}})
+	year := 2024
+	signal := database.InventoryFileSignal{InventoryFileID: &file.ID, TitleCandidate: "Movie", Year: &year}
+	output := BuildManifestFromInventory(ManifestBuildInput{Scope: ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library", ClassifierVersion: "test"}, Files: []database.InventoryFile{file}, FileSignals: map[uint]database.InventoryFileSignal{1: signal}})
 	if output.ManifestScope.ManifestKey == "" || output.ManifestScope.Fingerprint == "" {
 		t.Fatalf("expected manifest scope keys, got %#v", output.ManifestScope)
 	}
@@ -21,6 +24,74 @@ func TestBuildManifestFromInventoryCreatesPlayableResourceCandidates(t *testing.
 	}
 	if len(output.Evidence) < 3 {
 		t.Fatalf("expected inventory evidence, got %#v", output.Evidence)
+	}
+}
+
+func TestConstructGraphFromInventoryReturnsManifestCandidatesAndEvidence(t *testing.T) {
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Movie.2024.mkv", StableIdentityKey: "stable-movie", ContentClass: "video", Status: "available"}
+	year := 2024
+	signal := database.InventoryFileSignal{InventoryFileID: &file.ID, TitleCandidate: "Movie", Year: &year}
+	output := ConstructGraphFromInventory(GraphConstructInput{Scope: ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library", ClassifierVersion: "test"}, Files: []database.InventoryFile{file}, FileSignals: map[uint]database.InventoryFileSignal{1: signal}})
+	if output.ManifestScope.ManifestKey == "" {
+		t.Fatalf("expected graph constructor manifest scope, got %#v", output.ManifestScope)
+	}
+	if len(output.Candidates) == 0 || len(output.Evidence) == 0 {
+		t.Fatalf("expected graph constructor output candidates/evidence, got %#v", output)
+	}
+}
+
+func TestConstructGraphFromInventoryKeepsWeakMovieSignalInReview(t *testing.T) {
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Movie.mkv", StableIdentityKey: "weak-movie", ContentClass: "video", Status: "available"}
+	output := ConstructGraphFromInventory(GraphConstructInput{Scope: ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library", ClassifierVersion: "test"}, Files: []database.InventoryFile{file}})
+	for _, candidate := range output.Candidates {
+		if candidate.CandidateType == CandidateTypeWork && candidate.CandidateRole == WorkKindMovie {
+			t.Fatalf("did not expect weak movie signal to materialize work candidate, got %#v", output.Candidates)
+		}
+	}
+	seenReview := false
+	for _, classification := range output.MediaGraphClassifications {
+		if classification.GroupKind == mediaGroupKindMoviePackage && classification.ReviewState == database.ReviewStateNeedsReview {
+			seenReview = true
+		}
+	}
+	if !seenReview {
+		t.Fatalf("expected weak movie package review classification, got %#v", output.MediaGraphClassifications)
+	}
+	if len(output.Evidence) == 0 {
+		t.Fatalf("expected weak signal evidence to be retained")
+	}
+}
+
+func TestConstructGraphFromInventoryAcceptsEpisodeRunGroup(t *testing.T) {
+	season := 1
+	episodeOne := 1
+	episodeTwo := 2
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Season 1/01.mkv", StableIdentityKey: "ep-1", ContentClass: "video", Status: "available"},
+		{ID: 2, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Season 1/02.mkv", StableIdentityKey: "ep-2", ContentClass: "video", Status: "available"},
+	}
+	signals := map[uint]database.InventoryFileSignal{
+		1: {InventoryFileID: &files[0].ID, TitleCandidate: "Show", SeasonNumber: &season, EpisodeNumber: &episodeOne},
+		2: {InventoryFileID: &files[1].ID, TitleCandidate: "Show", SeasonNumber: &season, EpisodeNumber: &episodeTwo},
+	}
+	output := ConstructGraphFromInventory(GraphConstructInput{Scope: ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library/Show/Season 1", ClassifierVersion: "test"}, Files: files, FileSignals: signals})
+	seenAcceptedRun := false
+	for _, classification := range output.MediaGraphClassifications {
+		if classification.GroupKind == mediaGroupKindEpisodeRun && classification.ReviewState == database.ReviewStateAccepted {
+			seenAcceptedRun = true
+		}
+	}
+	if !seenAcceptedRun {
+		t.Fatalf("expected accepted episode run classification, got %#v", output.MediaGraphClassifications)
+	}
+	resource, ok := candidateByType(output.Candidates, CandidateTypePlayableResource)
+	if !ok || resource.ParentCandidateKey != EpisodeKey(EpisodeInput{SeriesTitle: "Show", SeasonNumber: 1, EpisodeNumber: 1}) {
+		t.Fatalf("expected resource linked to accepted episode, got %#v", output.Candidates)
+	}
+	for _, candidate := range output.Candidates {
+		if candidate.CandidateType == CandidateTypeWork && candidate.CandidateRole == WorkKindMovie {
+			t.Fatalf("did not expect episode run to materialize movie candidate, got %#v", output.Candidates)
+		}
 	}
 }
 
@@ -234,6 +305,54 @@ func TestBuildManifestFromInventoryUsesEpisodeIdentityContextToCreateSeriesSeaso
 	}
 	if !seenSeries || !seenSeason || !seenEpisode {
 		t.Fatalf("expected series/season/episode candidates, got %#v", output.Candidates)
+	}
+}
+
+func TestBuildManifestFromInventoryParentsSingleEpisodeResourceToEpisode(t *testing.T) {
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Season 1/01.mkv", StableIdentityKey: "ep-1", Container: "mkv", ContentClass: "video", Status: "available"}
+	season := 1
+	episode := 1
+	signal := database.InventoryFileSignal{InventoryFileID: &file.ID, TitleCandidate: "Show", SeasonNumber: &season, EpisodeNumber: &episode}
+	output := BuildManifestFromInventory(ManifestBuildInput{
+		Scope:       ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library/Show/Season 1", ClassifierVersion: "test"},
+		Files:       []database.InventoryFile{file},
+		FileSignals: map[uint]database.InventoryFileSignal{1: signal},
+	})
+	resource, ok := candidateByType(output.Candidates, CandidateTypePlayableResource)
+	if !ok {
+		t.Fatalf("expected playable resource candidate, got %#v", output.Candidates)
+	}
+	wantEpisodeKey := EpisodeKey(EpisodeInput{SeriesTitle: "Show", SeasonNumber: 1, EpisodeNumber: 1})
+	if resource.ParentCandidateKey != wantEpisodeKey || resource.CanonicalKey != wantEpisodeKey {
+		t.Fatalf("expected resource parent/canonical key %q, got %#v", wantEpisodeKey, resource)
+	}
+}
+
+func TestBuildManifestFromInventoryMarksMultiEpisodeResourceWithEpisodeKeys(t *testing.T) {
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Show.S01E01-E02.mkv", StableIdentityKey: "multi-ep", Container: "mkv", ContentClass: "video", Status: "available"}
+	season := 1
+	episode := 1
+	signal := database.InventoryFileSignal{
+		InventoryFileID:    &file.ID,
+		TitleCandidate:     "Show",
+		SeasonNumber:       &season,
+		EpisodeNumber:      &episode,
+		EpisodeNumbersJSON: `[1,2]`,
+	}
+	output := BuildManifestFromInventory(ManifestBuildInput{
+		Scope:       ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library/Show", ClassifierVersion: "test"},
+		Files:       []database.InventoryFile{file},
+		FileSignals: map[uint]database.InventoryFileSignal{1: signal},
+	})
+	resource, ok := candidateByType(output.Candidates, CandidateTypePlayableResource)
+	if !ok {
+		t.Fatalf("expected playable resource candidate, got %#v", output.Candidates)
+	}
+	if resource.ResourceShape != ResourceKindMultiEpisode {
+		t.Fatalf("expected multi-episode resource shape, got %#v", resource)
+	}
+	if !strings.Contains(resource.EvidenceJSON, `"episode_keys"`) {
+		t.Fatalf("expected episode_keys in resource evidence, got %#v", resource)
 	}
 }
 

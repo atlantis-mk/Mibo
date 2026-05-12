@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -247,6 +248,69 @@ func TestMaterializedPlaybackStillResolvesAfterProjectionRefresh(t *testing.T) {
 	}
 	if !source.Playable || source.MetadataItemID != item.ID || source.URL == "" {
 		t.Fatalf("unexpected playback source after projection refresh: %#v", source)
+	}
+}
+
+func TestScanWorkflowCompletesWithoutRunningMetadataMatchOrProbe(t *testing.T) {
+	ctx, db, svc := newWorkflowScanHarness(t)
+	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "TV", LibraryTypeAuto)
+	showPath := filepath.Join(libraryRecord.RootPath, "Show", "Season 1", "01.mkv")
+	mustWriteFixtureFile(t, showPath)
+
+	svc.SetMetadataMatchExecutor(func(ctx context.Context, metadataItemID uint, libraryID uint) error {
+		return fmt.Errorf("metadata match should not be required for scan completion")
+	})
+	svc.SetInventoryProbeExecutor(func(ctx context.Context, fileID uint) error {
+		return fmt.Errorf("inventory probe should not be required for scan completion")
+	})
+
+	run, _, err := svc.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryRecord.ID, Reason: WorkflowReasonManualScan, Priority: 10})
+	if err != nil {
+		t.Fatalf("queue workflow: %v", err)
+	}
+	var scanTask database.WorkflowTask
+	if err := db.WithContext(ctx).
+		Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeScanLibraryPath).
+		First(&scanTask).Error; err != nil {
+		t.Fatalf("load scan task: %v", err)
+	}
+	if err := svc.RunWorkflowScanLibraryPath(ctx, scanTask); err != nil {
+		t.Fatalf("run scan task: %v", err)
+	}
+	if err := runQueuedRecognitionResolveTasks(ctx, db, svc, run.ID); err != nil {
+		t.Fatalf("run recognition resolve tasks: %v", err)
+	}
+
+	var projectionTask database.WorkflowTask
+	if err := db.WithContext(ctx).
+		Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeRefreshProjection).
+		First(&projectionTask).Error; err != nil {
+		t.Fatalf("load projection task: %v", err)
+	}
+	if err := svc.RunWorkflowCatalogProjectionRefresh(ctx, projectionTask); err != nil {
+		t.Fatalf("run projection task: %v", err)
+	}
+
+	var seriesCount int64
+	if err := db.WithContext(ctx).Model(&database.MetadataItem{}).Where("item_type = ?", database.MetadataItemTypeSeries).Count(&seriesCount).Error; err != nil {
+		t.Fatalf("count series items: %v", err)
+	}
+	if seriesCount == 0 {
+		t.Fatalf("expected scan/resolve/projection to publish series metadata before metadata match")
+	}
+	var matchTasks int64
+	if err := db.WithContext(ctx).Model(&database.WorkflowTask{}).Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeMatchMetadata).Count(&matchTasks).Error; err != nil {
+		t.Fatalf("count match tasks: %v", err)
+	}
+	if matchTasks == 0 {
+		t.Fatalf("expected metadata match tasks to be queued as follow-up work")
+	}
+	var probeTasks int64
+	if err := db.WithContext(ctx).Model(&database.WorkflowTask{}).Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeProbeInventory).Count(&probeTasks).Error; err != nil {
+		t.Fatalf("count probe tasks: %v", err)
+	}
+	if probeTasks == 0 {
+		t.Fatalf("expected probe tasks to be queued as follow-up work")
 	}
 }
 

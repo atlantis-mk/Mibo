@@ -131,3 +131,7 @@ func classifyFastDecisionStatus(confidence float64, alternatives []scanDecisionA
 	}
 	return scanDecisionStatusProvisional
 }
+
+func floatPtr(value float64) *float64 {
+	return &value
+}

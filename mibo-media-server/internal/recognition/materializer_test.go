@@ -222,3 +222,103 @@ func TestMaterializeMetadataCreatesSeriesSeasonEpisodeHierarchy(t *testing.T) {
 		t.Fatalf("expected episode numbering S01E01, got %#v", gotEpisode)
 	}
 }
+
+func TestMaterializeResourcesLinksMultiEpisodeFileToAllEpisodeSlots(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Show.S01E01-E02.mkv", ContentClass: "video", Status: "available"}
+	if err := db.Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	materializer := NewMaterializer(db)
+	series := database.RecognitionCandidate{ID: 1, CandidateKey: "work:series:show", CandidateType: CandidateTypeWork, CandidateRole: WorkKindSeries, CanonicalKey: "work:series:show", EvidenceJSON: `{"title":"Show"}`}
+	season := database.RecognitionCandidate{ID: 2, CandidateKey: "work:season:work:series:show:s01", CandidateType: CandidateTypeWork, CandidateRole: WorkKindSeason, ParentCandidateKey: series.CandidateKey, CanonicalKey: "work:season:work:series:show:s01", EvidenceJSON: `{"title":"Show","season_number":1}`}
+	episodeOne := database.RecognitionCandidate{ID: 3, CandidateKey: "episode:work:season:work:series:show:s01:e01", CandidateType: CandidateTypeEpisode, CandidateRole: WorkKindEpisode, ParentCandidateKey: season.CandidateKey, CanonicalKey: "episode:work:season:work:series:show:s01:e01", EvidenceJSON: `{"title":"Show","season_number":1,"episode_number":1}`}
+	episodeTwo := database.RecognitionCandidate{ID: 4, CandidateKey: "episode:work:season:work:series:show:s01:e02", CandidateType: CandidateTypeEpisode, CandidateRole: WorkKindEpisode, ParentCandidateKey: season.CandidateKey, CanonicalKey: "episode:work:season:work:series:show:s01:e02", EvidenceJSON: `{"title":"Show","season_number":1,"episode_number":2}`}
+	resource := database.RecognitionCandidate{
+		ID:                 5,
+		CandidateKey:       "playable_resource:local:path:/library/Show/Show.S01E01-E02.mkv",
+		CandidateType:      CandidateTypePlayableResource,
+		ParentCandidateKey: episodeOne.CandidateKey,
+		PrimaryInventoryID: &file.ID,
+		ResourceShape:      ResourceKindMultiEpisode,
+		EvidenceJSON:       `{"episode_keys":["episode:work:season:work:series:show:s01:e01","episode:work:season:work:series:show:s01:e02"]}`,
+	}
+	graph := ManifestGraph{
+		Manifest:   database.RecognitionManifest{ID: 1, LibraryID: 1},
+		Candidates: []database.RecognitionCandidate{series, season, episodeOne, episodeTwo, resource},
+	}
+	decisions := []database.RecognitionDecision{
+		{CandidateID: &series.ID, TargetKind: series.CandidateType, TargetKey: series.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &season.ID, TargetKind: season.CandidateType, TargetKey: season.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &episodeOne.ID, TargetKind: episodeOne.CandidateType, TargetKey: episodeOne.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &episodeTwo.ID, TargetKind: episodeTwo.CandidateType, TargetKey: episodeTwo.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &resource.ID, TargetKind: resource.CandidateType, TargetKey: resource.CandidateKey, Outcome: DecisionOutcomeAccepted},
+	}
+	if _, err := materializer.MaterializeMetadata(ctx, graph, decisions); err != nil {
+		t.Fatalf("materialize metadata: %v", err)
+	}
+	if _, err := materializer.MaterializeResources(ctx, graph, decisions); err != nil {
+		t.Fatalf("materialize resources: %v", err)
+	}
+	var links []database.ResourceMetadataLink
+	if err := db.WithContext(ctx).Order("segment_index asc").Find(&links).Error; err != nil {
+		t.Fatalf("load resource metadata links: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected one resource linked to two episode slots, got %#v", links)
+	}
+	if links[0].SegmentIndex != 1 || links[1].SegmentIndex != 2 {
+		t.Fatalf("expected segment ordering 1/2 for multi-episode links, got %#v", links)
+	}
+}
+
+func TestMaterializeResourcesLinksSingleEpisodeFileToEpisodeMetadata(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Season 1/01.mkv", ContentClass: "video", Status: "available"}
+	if err := db.Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	materializer := NewMaterializer(db)
+	series := database.RecognitionCandidate{ID: 1, CandidateKey: "work:series:show", CandidateType: CandidateTypeWork, CandidateRole: WorkKindSeries, CanonicalKey: "work:series:show", EvidenceJSON: `{"title":"Show"}`}
+	season := database.RecognitionCandidate{ID: 2, CandidateKey: "work:season:work:series:show:s01", CandidateType: CandidateTypeWork, CandidateRole: WorkKindSeason, ParentCandidateKey: series.CandidateKey, CanonicalKey: "work:season:work:series:show:s01", EvidenceJSON: `{"title":"Show","season_number":1}`}
+	episode := database.RecognitionCandidate{ID: 3, CandidateKey: "episode:work:season:work:series:show:s01:e01", CandidateType: CandidateTypeEpisode, CandidateRole: WorkKindEpisode, ParentCandidateKey: season.CandidateKey, CanonicalKey: "episode:work:season:work:series:show:s01:e01", EvidenceJSON: `{"title":"Show","season_number":1,"episode_number":1}`}
+	resource := database.RecognitionCandidate{ID: 4, CandidateKey: "playable_resource:local:stable:ep-1", CandidateType: CandidateTypePlayableResource, ParentCandidateKey: episode.CandidateKey, CanonicalKey: episode.CandidateKey, PrimaryInventoryID: &file.ID, ResourceShape: ResourceKindSingleFile, EvidenceJSON: `{"source":"test"}`}
+	graph := ManifestGraph{
+		Manifest:   database.RecognitionManifest{ID: 1, LibraryID: 1},
+		Candidates: []database.RecognitionCandidate{series, season, episode, resource},
+	}
+	decisions := []database.RecognitionDecision{
+		{CandidateID: &series.ID, TargetKind: series.CandidateType, TargetKey: series.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &season.ID, TargetKind: season.CandidateType, TargetKey: season.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &episode.ID, TargetKind: episode.CandidateType, TargetKey: episode.CandidateKey, Outcome: DecisionOutcomeAccepted},
+		{CandidateID: &resource.ID, TargetKind: resource.CandidateType, TargetKey: resource.CandidateKey, Outcome: DecisionOutcomeAccepted},
+	}
+	if _, err := materializer.MaterializeMetadata(ctx, graph, decisions); err != nil {
+		t.Fatalf("materialize metadata: %v", err)
+	}
+	if _, err := materializer.MaterializeResources(ctx, graph, decisions); err != nil {
+		t.Fatalf("materialize resources: %v", err)
+	}
+	var links []database.ResourceMetadataLink
+	if err := db.WithContext(ctx).Order("id asc").Find(&links).Error; err != nil {
+		t.Fatalf("load links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected one resource metadata link, got %#v", links)
+	}
+	var episodeItem database.MetadataItem
+	if err := db.WithContext(ctx).Where("item_type = ?", database.MetadataItemTypeEpisode).First(&episodeItem).Error; err != nil {
+		t.Fatalf("load episode metadata: %v", err)
+	}
+	if links[0].MetadataItemID != episodeItem.ID || links[0].SegmentIndex != 0 {
+		t.Fatalf("expected single episode resource linked to episode metadata, got link=%#v episode=%#v", links[0], episodeItem)
+	}
+}

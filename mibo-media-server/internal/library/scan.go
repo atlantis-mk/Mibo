@@ -8,7 +8,6 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
-	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
 
 var (
@@ -53,97 +52,6 @@ const (
 
 	fallbackDurationToleranceSeconds = 2.0
 )
-
-type classifiedMedia struct {
-	Type                 string
-	Title                string
-	OriginalTitle        string
-	SeriesTitle          string
-	Year                 *int
-	Tags                 []string
-	SeasonNumber         *int
-	EpisodeNumber        *int
-	EpisodeNumbers       []int
-	SourcePath           string
-	Status               string
-	NormalizationVersion string
-	RemovedTokens        []titleclean.RemovedToken
-	FilenameSignals      filenameSignalModel
-}
-
-type catalogEpisodeSlot struct {
-	EpisodeNumber int
-	ItemPath      string
-}
-
-type catalogScanArtifact struct {
-	ItemType               string
-	ItemPath               string
-	SourcePath             string
-	SeriesPath             string
-	SeasonPath             string
-	Title                  string
-	OriginalTitle          string
-	SeriesTitle            string
-	Year                   *int
-	Tags                   []string
-	SeasonNumber           *int
-	EpisodeSlots           []catalogEpisodeSlot
-	StorageProvider        string
-	StableIdentityKey      string
-	ProviderName           string
-	HashesJSON             string
-	ThumbnailURL           string
-	ObjectType             string
-	ProviderMeta           map[string]string
-	SizeBytes              int64
-	ModifiedAt             *time.Time
-	Container              string
-	PreferredLinkRole      string
-	NormalizationVersion   string
-	RemovedTokens          []titleclean.RemovedToken
-	FilenameSignals        filenameSignalModel
-	SubtitleSidecars       []catalogScanSidecar
-	MetadataSidecars       []catalogScanMetadataSidecar
-	ExternalIDs            []catalogScanExternalID
-	Decisions              []scanDecision
-	ContentShapeProfile    map[string]any
-	ContentShapePlan       map[string]any
-	ContentShapeAssignment map[string]any
-}
-
-type catalogScanExternalID struct {
-	Provider     string
-	ProviderType string
-	ExternalID   string
-	Confidence   *float64
-}
-
-type catalogScanSidecar struct {
-	Path              string
-	Extension         string
-	AssociationSource string
-	SizeBytes         int64
-	ModifiedAt        *time.Time
-	StableIdentityKey string
-}
-
-type catalogScanMetadataSidecar struct {
-	catalogScanSidecar
-	ParseStatus string
-	Hints       catalogScanMetadataHints
-	ExternalIDs map[string]string
-}
-
-type catalogScanMetadataHints struct {
-	Title         string
-	OriginalTitle string
-	Year          *int
-	MediaType     string
-	SeriesTitle   string
-	SeasonNumber  *int
-	EpisodeNumber *int
-}
 
 type SyncResult struct {
 	DirectoriesScanned           int            `json:"directories_scanned"`

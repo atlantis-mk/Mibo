@@ -128,6 +128,48 @@ func TestRunWorkflowScanLibraryPathQueuesRecognitionResolveTasksBeforeProjection
 	}
 }
 
+func TestRunWorkflowScanLibraryPathUsesRecognitionResolverForTVHierarchy(t *testing.T) {
+	ctx, db, svc := newWorkflowScanHarness(t)
+	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "TV", LibraryTypeAuto)
+	mustWriteFixtureFile(t, filepath.Join(libraryRecord.RootPath, "Show", "Season 1", "01.mkv"))
+	mustWriteFixtureFile(t, filepath.Join(libraryRecord.RootPath, "Show", "Season 1", "02.mkv"))
+
+	run, _, err := svc.QueueLibraryWorkflow(ctx, QueueWorkflowInput{LibraryID: libraryRecord.ID, Reason: WorkflowReasonManualScan, Priority: 10})
+	if err != nil {
+		t.Fatalf("queue workflow: %v", err)
+	}
+	var task database.WorkflowTask
+	if err := db.WithContext(ctx).Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeScanLibraryPath).First(&task).Error; err != nil {
+		t.Fatalf("load scan task: %v", err)
+	}
+	if err := svc.RunWorkflowScanLibraryPath(ctx, task); err != nil {
+		t.Fatalf("run workflow scan task: %v", err)
+	}
+
+	var resolveTask database.WorkflowTask
+	if err := db.WithContext(ctx).Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeResolveRecognition).First(&resolveTask).Error; err != nil {
+		t.Fatalf("load resolve task: %v", err)
+	}
+	if err := svc.RunWorkflowRecognitionResolve(ctx, resolveTask); err != nil {
+		t.Fatalf("run workflow recognition resolve task: %v", err)
+	}
+
+	var counts []struct {
+		ItemType string
+		Count    int64
+	}
+	if err := db.WithContext(ctx).Model(&database.MetadataItem{}).Select("item_type, count(*) as count").Group("item_type").Scan(&counts).Error; err != nil {
+		t.Fatalf("count metadata items by type: %v", err)
+	}
+	byType := map[string]int64{}
+	for _, row := range counts {
+		byType[row.ItemType] = row.Count
+	}
+	if byType[database.MetadataItemTypeSeries] == 0 || byType[database.MetadataItemTypeSeason] == 0 || byType[database.MetadataItemTypeEpisode] < 2 {
+		t.Fatalf("expected recognition resolver to materialize series/season/episodes, got %#v", byType)
+	}
+}
+
 func TestRunWorkflowScanLibraryPathAcceptsScopedSubdirectory(t *testing.T) {
 	ctx, db, svc := newWorkflowScanHarness(t)
 	libraryRecord := createWorkflowScanLibrary(t, ctx, svc, "Movies", LibraryTypeAuto)
@@ -303,8 +345,8 @@ func TestQueueWorkflowPostScanTasksIsIdempotent(t *testing.T) {
 	if counts[workflow.TaskTypeResolveRecognition] != 1 {
 		t.Fatalf("expected one resolve recognition task, got %d", counts[workflow.TaskTypeResolveRecognition])
 	}
-	if counts[workflow.TaskTypeMatchMetadata] != 1 {
-		t.Fatalf("expected one metadata match task, got %d from tasks %#v", counts[workflow.TaskTypeMatchMetadata], tasks)
+	if counts[workflow.TaskTypeMatchMetadata] != 0 {
+		t.Fatalf("expected post-scan queueing not to add metadata match tasks directly, got %d from tasks %#v", counts[workflow.TaskTypeMatchMetadata], tasks)
 	}
 	if counts[workflow.TaskTypeProbeInventory] != 1 {
 		t.Fatalf("expected one inventory probe task, got %d", counts[workflow.TaskTypeProbeInventory])

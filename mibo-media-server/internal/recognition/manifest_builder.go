@@ -78,72 +78,11 @@ type ManifestBuildOutput struct {
 
 func BuildManifestFromInventory(input ManifestBuildInput) ManifestBuildOutput {
 	scope := input.Scope
-	if strings.TrimSpace(scope.ManifestKey) == "" {
-		scope.ManifestKey = ManifestKey(Scope{StorageProvider: scope.StorageProvider, RootPath: scope.RootPath, ScopePath: scope.ScopePath}, scope.ClassifierVersion)
-	}
-	if strings.TrimSpace(scope.Fingerprint) == "" {
-		scope.Fingerprint = inventoryManifestFingerprint(input.Files)
-	}
 	if scope.ObservedAt.IsZero() {
 		scope.ObservedAt = time.Now().UTC()
 	}
-
-	output := ManifestBuildOutput{ManifestScope: scope}
-	for _, file := range input.Files {
-		if !eligibleInventoryFile(file) {
-			continue
-		}
-		resourceKey := PlayableResourceKey(ResourceInput{StorageProvider: file.StorageProvider, StoragePath: file.StoragePath, StableIdentityKey: file.StableIdentityKey})
-		if resourceKey == "" {
-			continue
-		}
-		grouped := groupedCandidatesForFile(file, input.FileSignals[file.ID], input.SidecarHints[file.ID], input.ContextEvidence[file.ID], resourceKey)
-		parentKey := firstParentCandidateKey(grouped)
-		variantKey := firstCandidateTraitKey(grouped, CandidateTypeVariant)
-		editionKey := firstCandidateTraitKey(grouped, CandidateTypeEdition)
-		confidence := 0.6
-		candidate := database.RecognitionCandidate{
-			CandidateKey:       resourceKey,
-			CandidateType:      CandidateTypePlayableResource,
-			CandidateRole:      "source",
-			ParentCandidateKey: parentKey,
-			PrimaryInventoryID: uintPtr(file.ID),
-			CanonicalKey:       parentKey,
-			VariantKey:         variantKey,
-			EditionKey:         editionKey,
-			ResourceShape:      ResourceKindSingleFile,
-			ReviewState:        database.ReviewStatePending,
-			Confidence:         &confidence,
-			AffectedFilesJSON:  mustJSON([]string{strings.TrimSpace(file.StoragePath)}),
-			EvidenceJSON:       mustJSON(map[string]any{"storage_path": strings.TrimSpace(file.StoragePath), "storage_provider": strings.TrimSpace(file.StorageProvider), "stable_identity_key": strings.TrimSpace(file.StableIdentityKey), "hashes_json": strings.TrimSpace(file.HashesJSON)}),
-		}
-		if reason := strings.TrimSpace(input.ExcludedFileIDs[file.ID]); reason != "" {
-			candidate.ReviewState = database.ReviewStateRejected
-			candidate.CandidateRole = "excluded"
-		}
-		output.Candidates = append(output.Candidates, candidate)
-		output.Evidence = append(output.Evidence, inventoryEvidence(file, resourceKey)...)
-		for _, resourceFile := range input.ResourceFiles[file.ID] {
-			output.Evidence = append(output.Evidence, database.RecognitionEvidence{CandidateID: nil, InventoryFileID: &file.ID, EvidenceKind: evidenceKindLinkedResource, EvidenceSource: evidenceSourceResource, EvidenceKey: resourceKey, EvidenceValue: mustJSON(resourceFile), Strength: "strong"})
-		}
-		if signal, ok := input.FileSignals[file.ID]; ok {
-			output.Evidence = append(output.Evidence, signalEvidence(file.ID, resourceKey, signal)...)
-		}
-		for _, sidecar := range input.SidecarsByFileID[file.ID] {
-			output.Evidence = append(output.Evidence, database.RecognitionEvidence{CandidateID: nil, InventoryFileID: &file.ID, EvidenceKind: evidenceKindSidecar, EvidenceSource: evidenceSourceSidecar, EvidenceKey: resourceKey, EvidenceValue: strings.TrimSpace(sidecar.StoragePath), Strength: "medium", PayloadJSON: mustJSON(sidecar)})
-		}
-		for _, hint := range input.SidecarHints[file.ID] {
-			output.Evidence = append(output.Evidence, sidecarHintEvidence(file.ID, resourceKey, hint)...)
-		}
-		for _, contextEvidence := range input.ContextEvidence[file.ID] {
-			output.Evidence = append(output.Evidence, directoryContextEvidence(file.ID, resourceKey, contextEvidence)...)
-		}
-		if reason := strings.TrimSpace(input.ExcludedFileIDs[file.ID]); reason != "" {
-			output.Evidence = append(output.Evidence, database.RecognitionEvidence{CandidateID: nil, InventoryFileID: &file.ID, EvidenceKind: evidenceKindScanExclusion, EvidenceSource: evidenceSourceExclusion, EvidenceKey: resourceKey, EvidenceValue: reason, Strength: "strong"})
-		}
-		output.Candidates = append(output.Candidates, grouped...)
-	}
-	return output
+	input.Scope = scope
+	return constructManifestOutput(input)
 }
 
 func groupedCandidatesForFile(file database.InventoryFile, signal database.InventoryFileSignal, sidecarHints []SidecarHint, contextEvidence []ContextEvidence, resourceKey string) []database.RecognitionCandidate {
@@ -155,6 +94,7 @@ func groupedCandidatesForFile(file database.InventoryFile, signal database.Inven
 	hasEpisodeContext := contextSeriesKey != "" || contextSeasonKey != "" || contextEpisodeParentKey(contextParentKey) != ""
 	contextVariantKey := firstContextVariantKey(contextEvidence)
 	contextEditionKey := firstContextEditionKey(contextEvidence)
+	episodeKeys := episodeCandidateKeys(signal, sidecarHints, contextParentKey)
 	if movieKey := firstNonEmptyString(contextMovieParentKey(contextEvidence), movieCandidateKeyWithoutEpisodeContext(hasEpisodeContext, file, signal, sidecarHints)); movieKey != "" {
 		confidence := 0.75
 		candidates = append(candidates, database.RecognitionCandidate{CandidateKey: movieKey, CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, PrimaryInventoryID: primaryFileID, CanonicalKey: movieKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, EvidenceJSON: candidateTitleEvidence(signal.TitleCandidate, signal.Year, sidecarHints), AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
@@ -165,7 +105,8 @@ func groupedCandidatesForFile(file database.InventoryFile, signal database.Inven
 			candidates = append(candidates, database.RecognitionCandidate{CandidateKey: joinKey(editionKey, resourceKey), CandidateType: CandidateTypeEdition, ParentCandidateKey: movieKey, PrimaryInventoryID: primaryFileID, CanonicalKey: movieKey, EditionKey: editionKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
 		}
 	}
-	if episodeKey := firstNonEmptyString(contextEpisodeParentKey(contextParentKey), episodeCandidateKey(signal, sidecarHints)); episodeKey != "" {
+	if len(episodeKeys) > 0 {
+		episodeKey := episodeKeys[0]
 		confidence := 0.82
 		if seriesKey := firstNonEmptyString(contextSeriesKey, seriesCandidateKeyFromEpisodeKey(episodeKey)); seriesKey != "" {
 			candidates = append(candidates, database.RecognitionCandidate{CandidateKey: seriesKey, CandidateType: CandidateTypeWork, CandidateRole: WorkKindSeries, PrimaryInventoryID: primaryFileID, CanonicalKey: seriesKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, EvidenceJSON: candidateSeriesEvidence(signal, sidecarHints), AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
@@ -173,7 +114,9 @@ func groupedCandidatesForFile(file database.InventoryFile, signal database.Inven
 		if seasonKey := firstNonEmptyString(contextSeasonKey, seasonCandidateKeyFromEpisodeKey(episodeKey)); seasonKey != "" {
 			candidates = append(candidates, database.RecognitionCandidate{CandidateKey: seasonKey, CandidateType: CandidateTypeWork, CandidateRole: WorkKindSeason, ParentCandidateKey: firstNonEmptyString(contextSeriesKey, seriesCandidateKeyFromEpisodeKey(episodeKey)), PrimaryInventoryID: primaryFileID, CanonicalKey: seasonKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, EvidenceJSON: candidateSeriesEvidence(signal, sidecarHints), AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
 		}
-		candidates = append(candidates, database.RecognitionCandidate{CandidateKey: episodeKey, CandidateType: CandidateTypeEpisode, CandidateRole: WorkKindEpisode, PrimaryInventoryID: primaryFileID, CanonicalKey: episodeKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, EvidenceJSON: candidateTitleEvidence(signal.TitleCandidate, signal.Year, sidecarHints), AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
+		for _, episodeKey := range episodeKeys {
+			candidates = append(candidates, database.RecognitionCandidate{CandidateKey: episodeKey, CandidateType: CandidateTypeEpisode, CandidateRole: WorkKindEpisode, ParentCandidateKey: firstNonEmptyString(contextSeasonKey, seasonCandidateKeyFromEpisodeKey(episodeKey)), PrimaryInventoryID: primaryFileID, CanonicalKey: episodeKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, EvidenceJSON: candidateTitleEvidence(signal.TitleCandidate, signal.Year, sidecarHints), AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
+		}
 		if variantKey := firstNonEmptyString(contextVariantKey, variantCandidateKey(file, signal)); variantKey != "" {
 			candidates = append(candidates, database.RecognitionCandidate{CandidateKey: joinKey(variantKey, resourceKey), CandidateType: CandidateTypeVariant, ParentCandidateKey: episodeKey, PrimaryInventoryID: primaryFileID, CanonicalKey: episodeKey, VariantKey: variantKey, ReviewState: database.ReviewStatePending, Confidence: &confidence, AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
 		}
@@ -203,6 +146,22 @@ func groupedCandidatesForFile(file database.InventoryFile, signal database.Inven
 	if hashKey := duplicateBinaryCandidateKey(file); hashKey != "" {
 		confidence := 0.98
 		candidates = append(candidates, database.RecognitionCandidate{CandidateKey: hashKey, CandidateType: CandidateTypeDuplicateBinary, CandidateRole: "same_binary", PrimaryInventoryID: primaryFileID, ReviewState: database.ReviewStatePending, Confidence: &confidence, AffectedFilesJSON: mustJSON([]string{file.StoragePath})})
+	}
+	if len(episodeKeys) > 1 {
+		for idx := range candidates {
+			if candidates[idx].CandidateType == CandidateTypePlayableResource && strings.TrimSpace(candidates[idx].CandidateKey) == resourceKey {
+				candidates[idx].ParentCandidateKey = episodeKeys[0]
+				candidates[idx].CanonicalKey = episodeKeys[0]
+				candidates[idx].ResourceShape = ResourceKindMultiEpisode
+				candidates[idx].EvidenceJSON = mustJSON(map[string]any{
+					"storage_path":     strings.TrimSpace(file.StoragePath),
+					"storage_provider": strings.TrimSpace(file.StorageProvider),
+					"stable_identity":  strings.TrimSpace(file.StableIdentityKey),
+					"episode_keys":     episodeKeys,
+				})
+				break
+			}
+		}
 	}
 	return candidates
 }
@@ -268,6 +227,60 @@ func episodeCandidateKey(signal database.InventoryFileSignal, sidecarHints []Sid
 		return ""
 	}
 	return EpisodeKey(EpisodeInput{SeriesTitle: signal.TitleCandidate, SeasonNumber: *signal.SeasonNumber, EpisodeNumber: *signal.EpisodeNumber})
+}
+
+func episodeCandidateKeys(signal database.InventoryFileSignal, sidecarHints []SidecarHint, contextParentKey string) []string {
+	if key := contextEpisodeParentKey(contextParentKey); key != "" {
+		return []string{key}
+	}
+	for _, hint := range sidecarHints {
+		if strings.TrimSpace(hint.SeriesTitle) == "" || hint.SeasonNumber == nil {
+			continue
+		}
+		if hint.EpisodeNumber != nil {
+			return []string{EpisodeKey(EpisodeInput{SeriesTitle: hint.SeriesTitle, SeasonNumber: *hint.SeasonNumber, EpisodeNumber: *hint.EpisodeNumber})}
+		}
+	}
+	if strings.TrimSpace(signal.TitleCandidate) == "" || signal.SeasonNumber == nil {
+		return nil
+	}
+	episodeNumbers := inventorySignalEpisodeNumbers(signal)
+	if len(episodeNumbers) > 0 {
+		keys := make([]string, 0, len(episodeNumbers))
+		seen := make(map[string]struct{}, len(episodeNumbers))
+		for _, episodeNumber := range episodeNumbers {
+			if episodeNumber <= 0 {
+				continue
+			}
+			key := EpisodeKey(EpisodeInput{SeriesTitle: signal.TitleCandidate, SeasonNumber: *signal.SeasonNumber, EpisodeNumber: episodeNumber})
+			if strings.TrimSpace(key) == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+		if len(keys) > 0 {
+			return keys
+		}
+	}
+	if signal.EpisodeNumber != nil {
+		return []string{EpisodeKey(EpisodeInput{SeriesTitle: signal.TitleCandidate, SeasonNumber: *signal.SeasonNumber, EpisodeNumber: *signal.EpisodeNumber})}
+	}
+	return nil
+}
+
+func inventorySignalEpisodeNumbers(signal database.InventoryFileSignal) []int {
+	if strings.TrimSpace(signal.EpisodeNumbersJSON) == "" {
+		return nil
+	}
+	var numbers []int
+	if err := json.Unmarshal([]byte(strings.TrimSpace(signal.EpisodeNumbersJSON)), &numbers); err != nil {
+		return nil
+	}
+	return numbers
 }
 
 func variantCandidateKey(file database.InventoryFile, signal database.InventoryFileSignal) string {
@@ -433,8 +446,8 @@ func seriesCandidateKeyFromEpisodeKey(episodeKey string) string {
 		return ""
 	}
 	for idx := 1; idx < len(parts)-1; idx++ {
-		if parts[idx] == WorkKindSeries {
-			return joinKey(parts[1 : idx+2]...)
+		if parts[idx] == CandidateTypeWork && idx+2 < len(parts) && parts[idx+1] == WorkKindSeries {
+			return joinKey(parts[idx : idx+3]...)
 		}
 	}
 	return ""
