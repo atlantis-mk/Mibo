@@ -308,6 +308,26 @@ func TestBuildManifestFromInventoryUsesEpisodeIdentityContextToCreateSeriesSeaso
 	}
 }
 
+func TestBuildManifestFromInventoryEmitsSeriesTitleEvidenceForSeriesCandidates(t *testing.T) {
+	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Season 1/01.mkv", Container: "mkv", ContentClass: "video", Status: "available"}
+	episode := 1
+	signal := database.InventoryFileSignal{InventoryFileID: &file.ID, TitleCandidate: "Show", SeasonNumber: &[]int{1}[0], EpisodeNumber: &episode}
+	output := BuildManifestFromInventory(ManifestBuildInput{
+		Scope:       ManifestScope{LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library/Show/Season 1", ClassifierVersion: "test"},
+		Files:       []database.InventoryFile{file},
+		FileSignals: map[uint]database.InventoryFileSignal{1: signal},
+	})
+	for _, candidate := range output.Candidates {
+		if candidate.CandidateType == CandidateTypeWork && candidate.CandidateRole == WorkKindSeries {
+			if !strings.Contains(candidate.EvidenceJSON, `"series_title"`) {
+				t.Fatalf("expected series candidate evidence to include series_title, got %#v", candidate)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected series candidate, got %#v", output.Candidates)
+}
+
 func TestBuildManifestFromInventoryParentsSingleEpisodeResourceToEpisode(t *testing.T) {
 	file := database.InventoryFile{ID: 1, LibraryID: 1, StorageProvider: "local", StoragePath: "/library/Show/Season 1/01.mkv", StableIdentityKey: "ep-1", Container: "mkv", ContentClass: "video", Status: "available"}
 	season := 1

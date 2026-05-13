@@ -123,12 +123,49 @@ func (s *Service) RebuildLibraryMetadataProjections(ctx context.Context, library
 		Pluck("metadata_item_id", &metadataIDs).Error; err != nil {
 		return err
 	}
+	var err error
+	metadataIDs, err = s.expandMetadataProjectionIDsWithAncestors(ctx, metadataIDs)
+	if err != nil {
+		return err
+	}
 	for _, metadataItemID := range metadataIDs {
 		if _, err := s.RebuildLibraryMetadataProjection(ctx, libraryID, metadataItemID); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Service) expandMetadataProjectionIDsWithAncestors(ctx context.Context, metadataIDs []uint) ([]uint, error) {
+	seen := make(map[uint]struct{}, len(metadataIDs))
+	ordered := make([]uint, 0, len(metadataIDs)*3)
+	var appendID func(uint) error
+	appendID = func(metadataID uint) error {
+		if metadataID == 0 {
+			return nil
+		}
+		if _, ok := seen[metadataID]; ok {
+			return nil
+		}
+		seen[metadataID] = struct{}{}
+		ordered = append(ordered, metadataID)
+		ancestors, err := s.metadataAncestorIDs(ctx, metadataID)
+		if err != nil {
+			return err
+		}
+		for _, ancestorID := range ancestors {
+			if err := appendID(ancestorID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, metadataID := range metadataIDs {
+		if err := appendID(metadataID); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
 }
 
 func buildLibraryMetadataProjection(ctx context.Context, tx *gorm.DB, libraryID uint, metadataItemID uint) (database.LibraryMetadataProjection, error) {

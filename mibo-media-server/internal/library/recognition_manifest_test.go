@@ -88,6 +88,39 @@ func TestPersistRecognitionManifestForFilesUsesDirectoryReductionScopePath(t *te
 	}
 }
 
+func TestPersistRecognitionManifestForFilesPersistsKernelCandidatesAndEvidence(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	library := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	file := database.InventoryFile{ID: 1, LibraryID: library.ID, StorageProvider: "local", StoragePath: "/library/Movie A (2024)/Movie A.2024.mkv", StableIdentityKey: "local:movie-a", ContentClass: SourceContentClassVideo, Status: "available"}
+	if err := db.Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, library, []database.InventoryFile{file}, library.RootPath)
+	if err != nil {
+		t.Fatalf("persist recognition manifest: %v", err)
+	}
+	var candidates []database.RecognitionCandidate
+	if err := db.Where("manifest_id = ?", manifest.ID).Find(&candidates).Error; err != nil {
+		t.Fatalf("load candidates: %v", err)
+	}
+	var evidence []database.RecognitionEvidence
+	if err := db.Where("manifest_id = ?", manifest.ID).Find(&evidence).Error; err != nil {
+		t.Fatalf("load evidence: %v", err)
+	}
+	if len(candidates) == 0 || len(evidence) == 0 {
+		t.Fatalf("expected kernel candidates and evidence, candidates=%#v evidence=%#v", candidates, evidence)
+	}
+}
+
 func TestPersistRecognitionManifestForFilesPromotesScopePathForMovieCollection(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -460,12 +493,12 @@ func TestPersistRecognitionManifestPersistsSidecarAttachmentGraphRows(t *testing
 	}
 	foundPoster := false
 	for _, node := range nodes {
-		if strings.Contains(node.PayloadJSON, `"role":"poster"`) {
+		if strings.Contains(node.PayloadJSON, `"role":"poster"`) && node.InventoryFileID != nil && *node.InventoryFileID == sidecar.ID {
 			foundPoster = true
 		}
 	}
 	if !foundPoster {
-		t.Fatalf("expected poster attachment graph node, got %#v", nodes)
+		t.Fatalf("expected poster attachment graph node with inventory file id %d, got %#v", sidecar.ID, nodes)
 	}
 	var playableCount int64
 	if err := db.WithContext(ctx).Model(&database.RecognitionCandidate{}).Where("manifest_id = ? AND candidate_type = ? AND primary_inventory_id = ?", manifest.ID, recognition.CandidateTypePlayableResource, sidecar.ID).Count(&playableCount).Error; err != nil {

@@ -118,6 +118,59 @@ func TestRebuildMetadataItemProjectionsRefreshesEpisodeAncestors(t *testing.T) {
 	}
 }
 
+func TestRebuildLibraryMetadataProjectionsIncludesEpisodeAncestors(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	svc := NewService(db)
+	series := database.MetadataItem{ItemType: database.MetadataItemTypeSeries, ContentForm: database.MetadataContentFormStandard, Title: "Show", SortTitle: "Show", SortKey: "work:series:show", GovernanceStatus: database.ReviewStateAccepted}
+	if err := db.WithContext(ctx).Create(&series).Error; err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	seasonNumber := 1
+	season := database.MetadataItem{ItemType: database.MetadataItemTypeSeason, ContentForm: database.MetadataContentFormStandard, ParentID: &series.ID, RootID: &series.ID, Title: "Season 1", SortTitle: "Show S01", SortKey: "work:season:work:series:show:s01", IndexNumber: &seasonNumber, GovernanceStatus: database.ReviewStateAccepted}
+	if err := db.WithContext(ctx).Create(&season).Error; err != nil {
+		t.Fatalf("create season: %v", err)
+	}
+	episodeNumber := 1
+	episode := database.MetadataItem{ItemType: database.MetadataItemTypeEpisode, ContentForm: database.MetadataContentFormStandard, ParentID: &season.ID, RootID: &series.ID, ParentIndexNumber: &seasonNumber, IndexNumber: &episodeNumber, Title: "Episode 1", SortTitle: "Episode 1", SortKey: "episode:work:season:work:series:show:s01:e01", GovernanceStatus: database.ReviewStateAccepted}
+	if err := db.WithContext(ctx).Create(&episode).Error; err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+	resource := database.Resource{StableResourceKey: "resource:episode", ResourceType: database.ResourceTypePlayable, ResourceShape: database.ResourceShapeSingleFile, Status: "available"}
+	if err := db.WithContext(ctx).Create(&resource).Error; err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+	seen := time.Now().UTC()
+	if err := db.WithContext(ctx).Create(&database.ResourceLibraryLink{ResourceID: resource.ID, LibraryID: 7, Status: "available", FirstSeenAt: seen, LastSeenAt: seen}).Error; err != nil {
+		t.Fatalf("create library link: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.ResourceMetadataLink{ResourceID: resource.ID, MetadataItemID: episode.ID, Role: database.ResourceLinkRolePrimary}).Error; err != nil {
+		t.Fatalf("create metadata link: %v", err)
+	}
+
+	if err := svc.RebuildLibraryMetadataProjections(ctx, 7); err != nil {
+		t.Fatalf("rebuild library projections: %v", err)
+	}
+
+	var projections []database.LibraryMetadataProjection
+	if err := db.WithContext(ctx).Where("library_id = ?", 7).Order("item_type asc").Find(&projections).Error; err != nil {
+		t.Fatalf("load projections: %v", err)
+	}
+	if len(projections) != 3 {
+		t.Fatalf("expected episode plus season and series projections, got %#v", projections)
+	}
+	var seriesProjection database.LibraryMetadataProjection
+	if err := db.WithContext(ctx).Where("library_id = ? AND metadata_item_id = ?", 7, series.ID).First(&seriesProjection).Error; err != nil {
+		t.Fatalf("load series projection: %v", err)
+	}
+	if seriesProjection.AvailabilityStatus != database.ProjectionAvailabilityAvailable || seriesProjection.AvailableCount != 1 {
+		t.Fatalf("expected available series projection from episode rollup, got %#v", seriesProjection)
+	}
+}
+
 func TestRebuildResourceMetadataProjectionsRefreshesAffectedPairs(t *testing.T) {
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {

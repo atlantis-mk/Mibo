@@ -151,6 +151,9 @@ func (s *Service) ApplyStorageEventRefresh(ctx context.Context, job database.Job
 	if err != nil {
 		return err
 	}
+	if payload.LibraryID != 0 && strings.TrimSpace(payload.RootPath) == "" && strings.TrimSpace(payload.Reason) == library.WorkflowReasonTargetedRefresh {
+		return nil
+	}
 	if payload.LibraryID == 0 {
 		return fmt.Errorf("listener refresh payload missing library_id")
 	}

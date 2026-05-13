@@ -180,9 +180,17 @@ func (s *Service) hasActiveScanWorkflow(ctx context.Context, libraryID uint) boo
 	if s.db == nil || libraryID == 0 {
 		return false
 	}
+	var record database.Library
+	if err := s.db.WithContext(ctx).Select("id", "status").First(&record, libraryID).Error; err != nil {
+		return false
+	}
+	reasons := []string{WorkflowReasonManualScan, WorkflowReasonScheduledScan, WorkflowReasonStorageRefresh}
+	if strings.TrimSpace(record.Status) != "active" {
+		reasons = append(reasons, WorkflowReasonCreateLibrary)
+	}
 	var count int64
 	err := s.db.WithContext(ctx).Model(&database.WorkflowRun{}).
-		Where("library_id = ? AND status IN ? AND reason IN ?", libraryID, []string{workflow.RunStatusQueued, workflow.RunStatusRunning}, []string{WorkflowReasonCreateLibrary, WorkflowReasonManualScan, WorkflowReasonTargetedRefresh, WorkflowReasonScheduledScan, WorkflowReasonStorageRefresh}).
+		Where("library_id = ? AND status IN ? AND reason IN ?", libraryID, []string{workflow.RunStatusQueued, workflow.RunStatusRunning}, reasons).
 		Count(&count).Error
 	return err == nil && count > 0
 }

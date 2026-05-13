@@ -126,6 +126,13 @@ func TestRunWorkflowScanLibraryPathQueuesRecognitionResolveTasksBeforeProjection
 	if projectionTasks != 1 {
 		t.Fatalf("expected one projection task after resolve, got %d", projectionTasks)
 	}
+	var projectionTask database.WorkflowTask
+	if err := db.WithContext(ctx).Where("run_id = ? AND task_type = ?", run.ID, workflow.TaskTypeRefreshProjection).First(&projectionTask).Error; err != nil {
+		t.Fatalf("load projection task: %v", err)
+	}
+	if projectionTask.ID <= resolveTask.ID {
+		t.Fatalf("expected projection task to be queued after recognition resolve: resolve=%#v projection=%#v", resolveTask, projectionTask)
+	}
 }
 
 func TestRunWorkflowScanLibraryPathUsesRecognitionResolverForTVHierarchy(t *testing.T) {

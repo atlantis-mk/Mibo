@@ -37,6 +37,9 @@ type ResolveResult struct {
 
 func (r *Resolver) Resolve(graph ManifestGraph) ResolveResult {
 	result := ResolveResult{Conflicts: detectBlockingConflicts(graph)}
+	manualAccepted := make([]database.RecognitionCandidate, 0)
+	manualCandidateKeys := make(map[string]struct{})
+	remaining := make([]database.RecognitionCandidate, 0, len(graph.Candidates))
 	for _, candidate := range graph.Candidates {
 		if conflict, ok := blockingConflictForCandidate(candidate, result.Conflicts); ok {
 			result.Decisions = append(result.Decisions, database.RecognitionDecision{ManifestID: graph.Manifest.ID, CandidateID: uintPtr(candidate.ID), DecisionType: "resolver_conflict", Outcome: DecisionOutcomeBlockedConflict, TargetKind: candidate.CandidateType, TargetKey: candidate.CandidateKey, Confidence: candidate.Confidence, Reason: conflict.Reason, ConflictsJSON: mustJSON(conflict)})
@@ -48,15 +51,51 @@ func (r *Resolver) Resolve(graph ManifestGraph) ResolveResult {
 				result.Conflicts = append(result.Conflicts, conflict)
 			}
 			result.Decisions = append(result.Decisions, decision)
+			manualCandidateKeys[candidate.CandidateKey] = struct{}{}
+			if decision.Outcome == DecisionOutcomeAccepted {
+				manualAccepted = append(manualAccepted, candidate)
+			}
 			continue
 		}
-		if accepted, reason := acceptedByLocalGate(candidate, graph.Evidence); accepted {
-			result.Decisions = append(result.Decisions, decisionFromGate(graph.Manifest.ID, candidate, reason, DecisionOutcomeAccepted))
-			continue
-		}
-		result.Decisions = append(result.Decisions, fallbackDecision(graph.Manifest.ID, candidate))
+		remaining = append(remaining, candidate)
 	}
+	constraints := ApplyHardConstraints(remaining, graph.Evidence)
+	allowMovieCollectionLeadingEpisodes(remaining, graph.Evidence, constraints)
+	inferenceCandidates := append([]database.RecognitionCandidate(nil), manualAccepted...)
+	inferenceCandidates = append(inferenceCandidates, remaining...)
+	inference := InferConsistentCandidateGraph(inferenceCandidates, constraints)
+	scores := ScoreCandidates(inference.AcceptedCandidates, graph.Evidence)
+	applyCandidateConfidence(scores, inference.AcceptedCandidates)
+	kernelResult := BuildKernelDecisions(graph.Manifest, inference, constraints, scores)
+	for _, decision := range kernelResult.Decisions {
+		if _, ok := manualCandidateKeys[decision.TargetKey]; ok {
+			continue
+		}
+		result.Decisions = append(result.Decisions, decision)
+	}
+	result.Conflicts = append(result.Conflicts, kernelResult.Conflicts...)
 	return result
+}
+
+func allowMovieCollectionLeadingEpisodes(candidates []database.RecognitionCandidate, evidence []database.RecognitionEvidence, constraints ConstraintResult) {
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.CandidateType) != CandidateTypeWork || strings.TrimSpace(candidate.CandidateRole) != WorkKindMovie {
+			continue
+		}
+		if !hasDirectoryReductionAssignment(candidate, evidence, "movie_collection") || !hasWeakLeadingEpisodeEvidence(candidate, evidence) || !movieCollectionEvidenceAllowsMovie(candidate, evidence) {
+			continue
+		}
+		delete(constraints.RejectedCandidates, strings.TrimSpace(candidate.CandidateKey))
+	}
+}
+
+func applyCandidateConfidence(scores map[string]float64, candidates []database.RecognitionCandidate) {
+	for _, candidate := range candidates {
+		if candidate.Confidence == nil || *candidate.Confidence <= scores[candidate.CandidateKey] {
+			continue
+		}
+		scores[candidate.CandidateKey] = *candidate.Confidence
+	}
 }
 
 func fallbackDecision(manifestID uint, candidate database.RecognitionCandidate) database.RecognitionDecision {

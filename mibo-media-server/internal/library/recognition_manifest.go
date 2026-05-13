@@ -57,6 +57,7 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 		contentShapeEvidence,
 		pathTreeEvidence,
 	)
+	excludedFileIDs := directoryReductionExcludedFileIDs(files, indexedSignals)
 	input := recognition.GraphConstructInput{
 		Scope:            recognition.ManifestScope{LibraryID: library.ID, MediaSourceID: library.MediaSourceID, StorageProvider: storageProvider, RootPath: rootPath, ScopePath: scopePath, ClassifierVersion: settings.ClassifierVersion},
 		Files:            files,
@@ -64,7 +65,7 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 		SidecarsByFileID: sidecarsByFileID,
 		SidecarHints:     sidecarHints,
 		ContextEvidence:  contextEvidence,
-		ExcludedFileIDs:  directoryReductionExcludedFileIDs(files, indexedSignals),
+		ExcludedFileIDs:  excludedFileIDs,
 	}
 	output := recognition.ConstructGraphFromInventory(input)
 	repo := recognition.NewRepository(s.db)
@@ -144,14 +145,20 @@ func (s *Service) recognitionSidecarInputs(ctx context.Context, library database
 		}
 		hintsByFileID[file.ID] = sidecarHintsFromSignals(rows)
 		for _, row := range rows {
-			sidecarsByFileID[file.ID] = append(sidecarsByFileID[file.ID], database.InventoryFile{
+			sidecarFile := database.InventoryFile{
 				LibraryID:       library.ID,
 				MediaSourceID:   library.MediaSourceID,
 				StorageProvider: strings.TrimSpace(file.StorageProvider),
 				StoragePath:     strings.TrimSpace(row.SidecarPath),
 				ContentClass:    classifySourceObject(row.SidecarPath),
 				Status:          inventory.FileStatusAvailable,
-			})
+			}
+			if existing, ok, err := loadInventoryFileByStoragePath(ctx, s.db, library.ID, strings.TrimSpace(file.StorageProvider), row.SidecarPath); err != nil {
+				return nil, nil, err
+			} else if ok {
+				sidecarFile = existing
+			}
+			sidecarsByFileID[file.ID] = append(sidecarsByFileID[file.ID], sidecarFile)
 		}
 	}
 	if len(hintsByFileID) == 0 {
@@ -161,6 +168,25 @@ func (s *Service) recognitionSidecarInputs(ctx context.Context, library database
 		sidecarsByFileID = nil
 	}
 	return hintsByFileID, sidecarsByFileID, nil
+}
+
+func loadInventoryFileByStoragePath(ctx context.Context, db *gorm.DB, libraryID uint, storageProvider string, storagePath string) (database.InventoryFile, bool, error) {
+	if db == nil || libraryID == 0 || strings.TrimSpace(storagePath) == "" {
+		return database.InventoryFile{}, false, nil
+	}
+	provider := strings.TrimSpace(storageProvider)
+	if provider == "" {
+		provider = "local"
+	}
+	var file database.InventoryFile
+	err := db.WithContext(ctx).Where("library_id = ? AND storage_provider = ? AND storage_path = ?", libraryID, provider, strings.TrimSpace(storagePath)).First(&file).Error
+	if err == nil {
+		return file, true, nil
+	}
+	if err == gorm.ErrRecordNotFound {
+		return database.InventoryFile{}, false, nil
+	}
+	return database.InventoryFile{}, false, err
 }
 
 func mergeMaps(base map[string]any, extras map[string]any) map[string]any {
@@ -438,10 +464,7 @@ func (s *Service) resolveRecognitionManifest(ctx context.Context, manifestID uin
 	}
 	resolver := recognition.NewResolver(rules)
 	resolved := resolver.Resolve(graph)
-	if err := repo.SaveConflicts(ctx, resolved.Conflicts); err != nil {
-		return result, err
-	}
-	if err := repo.SaveDecisions(ctx, resolved.Decisions); err != nil {
+	if err := repo.ReplaceDecisionsAndConflicts(ctx, graph.Manifest.ID, resolved.Decisions, resolved.Conflicts); err != nil {
 		return result, err
 	}
 	materializer := recognition.NewMaterializer(s.db)

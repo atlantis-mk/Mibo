@@ -42,6 +42,34 @@ func TestMaterializeMetadataCreatesMovieOnce(t *testing.T) {
 	}
 }
 
+func TestMaterializeMetadataSeparatesMovieWorkByManifestScopePath(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	materializer := NewMaterializer(db)
+	left := database.RecognitionCandidate{ID: 1, CandidateKey: "work:movie:movie-a:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie-a:2024"}
+	right := database.RecognitionCandidate{ID: 2, CandidateKey: "work:movie:movie-a:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie-a:2024"}
+	leftGraph := ManifestGraph{Manifest: database.RecognitionManifest{ID: 1, LibraryID: 1, ScopePath: "/library/Movie A/Disc 1"}, Candidates: []database.RecognitionCandidate{left}}
+	rightGraph := ManifestGraph{Manifest: database.RecognitionManifest{ID: 2, LibraryID: 1, ScopePath: "/library/Movie A/Disc 2"}, Candidates: []database.RecognitionCandidate{right}}
+	leftDecision := database.RecognitionDecision{CandidateID: &left.ID, TargetKind: left.CandidateType, TargetKey: left.CandidateKey, Outcome: DecisionOutcomeAccepted}
+	rightDecision := database.RecognitionDecision{CandidateID: &right.ID, TargetKind: right.CandidateType, TargetKey: right.CandidateKey, Outcome: DecisionOutcomeAccepted}
+	if _, err := materializer.MaterializeMetadata(ctx, leftGraph, []database.RecognitionDecision{leftDecision}); err != nil {
+		t.Fatalf("materialize left: %v", err)
+	}
+	if _, err := materializer.MaterializeMetadata(ctx, rightGraph, []database.RecognitionDecision{rightDecision}); err != nil {
+		t.Fatalf("materialize right: %v", err)
+	}
+	var count int64
+	if err := db.Model(&database.MetadataItem{}).Where("item_type = ?", database.MetadataItemTypeMovie).Count(&count).Error; err != nil {
+		t.Fatalf("count movie metadata: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected separate movie rows per scope path, got %d", count)
+	}
+}
+
 func TestMaterializeResourcesCreatesResourceAndLinks(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})

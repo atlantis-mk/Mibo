@@ -204,6 +204,31 @@ func (r *Repository) SaveConflicts(ctx context.Context, conflicts []database.Rec
 	return r.db.WithContext(ctx).CreateInBatches(&conflicts, 100).Error
 }
 
+func (r *Repository) ReplaceDecisionsAndConflicts(ctx context.Context, manifestID uint, decisions []database.RecognitionDecision, conflicts []database.RecognitionConflict) error {
+	if manifestID == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.RecognitionDecision{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.RecognitionConflict{}).Error; err != nil {
+			return err
+		}
+		if len(conflicts) > 0 {
+			if err := tx.CreateInBatches(&conflicts, 100).Error; err != nil {
+				return err
+			}
+		}
+		if len(decisions) > 0 {
+			if err := tx.CreateInBatches(&decisions, 100).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (r *Repository) SupersedeManifest(ctx context.Context, manifestID uint, at time.Time) error {
 	if manifestID == 0 {
 		return nil

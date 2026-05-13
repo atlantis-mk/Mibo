@@ -32,6 +32,7 @@ func (m *Materializer) MaterializeMetadata(ctx context.Context, graph ManifestGr
 	for _, candidate := range graph.Candidates {
 		candidatesByKey[strings.TrimSpace(candidate.CandidateKey)] = candidate
 	}
+	scopePath := strings.TrimSpace(graph.Manifest.ScopePath)
 	for _, decision := range decisions {
 		if decision.Outcome != DecisionOutcomeAccepted || decision.TargetKind != CandidateTypeWork && decision.TargetKind != CandidateTypeEpisode {
 			continue
@@ -40,7 +41,7 @@ func (m *Materializer) MaterializeMetadata(ctx context.Context, graph ManifestGr
 		if !ok {
 			continue
 		}
-		item, err := m.upsertMetadataForCandidate(ctx, candidate, candidatesByKey)
+		item, err := m.upsertMetadataForCandidate(ctx, scopePath, candidate, candidatesByKey)
 		if err != nil {
 			return result, err
 		}
@@ -58,7 +59,7 @@ func (m *Materializer) MaterializeResources(ctx context.Context, graph ManifestG
 	for _, candidate := range graph.Candidates {
 		candidatesByKey[strings.TrimSpace(candidate.CandidateKey)] = candidate
 	}
-	metadataByKey, err := m.metadataByCandidateKey(ctx, graph.Candidates)
+	metadataByKey, err := m.metadataByCandidateKey(ctx, graph.Manifest.ScopePath, graph.Candidates)
 	if err != nil {
 		return result, err
 	}
@@ -179,7 +180,7 @@ func (m *Materializer) resourceTargetMetadataIDs(candidate database.RecognitionC
 	return targets
 }
 
-func (m *Materializer) metadataByCandidateKey(ctx context.Context, candidates []database.RecognitionCandidate) (map[string]uint, error) {
+func (m *Materializer) metadataByCandidateKey(ctx context.Context, scopePath string, candidates []database.RecognitionCandidate) (map[string]uint, error) {
 	result := make(map[string]uint)
 	for _, candidate := range candidates {
 		if candidate.CandidateType != CandidateTypeWork && candidate.CandidateType != CandidateTypeEpisode {
@@ -190,7 +191,8 @@ func (m *Materializer) metadataByCandidateKey(ctx context.Context, candidates []
 			continue
 		}
 		var item database.MetadataItem
-		err := m.db.WithContext(ctx).Where("item_type = ? AND sort_key = ? AND deleted_at IS NULL", itemType, strings.TrimSpace(candidate.CanonicalKey)).First(&item).Error
+		query := m.db.WithContext(ctx).Where("item_type = ? AND sort_key = ? AND deleted_at IS NULL", itemType, candidateMetadataSortKey(scopePath, candidate, candidate.CanonicalKey))
+		err := query.First(&item).Error
 		if err == gorm.ErrRecordNotFound {
 			continue
 		}
@@ -202,7 +204,7 @@ func (m *Materializer) metadataByCandidateKey(ctx context.Context, candidates []
 	return result, nil
 }
 
-func (m *Materializer) upsertMetadataForCandidate(ctx context.Context, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) (database.MetadataItem, error) {
+func (m *Materializer) upsertMetadataForCandidate(ctx context.Context, scopePath string, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) (database.MetadataItem, error) {
 	itemType := metadataItemTypeForCandidate(candidate)
 	if itemType == "" {
 		return database.MetadataItem{}, nil
@@ -211,12 +213,13 @@ func (m *Materializer) upsertMetadataForCandidate(ctx context.Context, candidate
 	if title == "" {
 		title = strings.TrimSpace(candidate.CanonicalKey)
 	}
-	sortKey := strings.TrimSpace(candidate.CanonicalKey)
+	sortKey := candidateMetadataSortKey(scopePath, candidate, candidate.CanonicalKey)
 	if sortKey == "" {
 		sortKey = title
 	}
 	var item database.MetadataItem
-	err := m.db.WithContext(ctx).Where("item_type = ? AND sort_key = ? AND deleted_at IS NULL", itemType, sortKey).First(&item).Error
+	query := m.db.WithContext(ctx).Where("item_type = ? AND sort_key = ? AND deleted_at IS NULL", itemType, sortKey)
+	err := query.First(&item).Error
 	if err == nil {
 		if err := m.updateMetadataHierarchy(ctx, &item, candidate, candidatesByKey); err != nil {
 			return database.MetadataItem{}, err
@@ -265,6 +268,17 @@ func (m *Materializer) populateMetadataHierarchy(ctx context.Context, item *data
 	return nil
 }
 
+func candidateMetadataSortKey(scopePath string, candidate database.RecognitionCandidate, fallback string) string {
+	sortKey := strings.TrimSpace(fallback)
+	if sortKey == "" {
+		return ""
+	}
+	if trimmedScope := strings.TrimSpace(scopePath); trimmedScope != "" {
+		return trimmedScope + "\x00" + sortKey
+	}
+	return sortKey
+}
+
 func (m *Materializer) updateMetadataHierarchy(ctx context.Context, item *database.MetadataItem, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) error {
 	if item == nil || item.ID == 0 {
 		return nil
@@ -290,7 +304,7 @@ func (m *Materializer) parentAndRootIDsForCandidate(ctx context.Context, candida
 	if strings.TrimSpace(candidate.CandidateKey) == "" {
 		return nil, nil, nil
 	}
-	parentItem, err := m.upsertMetadataForCandidate(ctx, candidate, candidatesByKey)
+	parentItem, err := m.upsertMetadataForCandidate(ctx, "", candidate, candidatesByKey)
 	if err != nil {
 		return nil, nil, err
 	}

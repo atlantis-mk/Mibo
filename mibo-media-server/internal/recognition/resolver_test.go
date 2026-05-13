@@ -35,11 +35,23 @@ func TestResolverIgnoresNonMatchingRulePayload(t *testing.T) {
 func TestResolverAcceptsMovieWorkByTitleYearGate(t *testing.T) {
 	fileID := uint(7)
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie:2024", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
 	resolver := NewResolver(nil)
 	result := resolver.Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
-	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted || result.Decisions[0].DecisionType != "resolver_gate" {
-		t.Fatalf("expected accepted gate decision, got %#v", result.Decisions)
+	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted || result.Decisions[0].DecisionType != "kernel_decision" {
+		t.Fatalf("expected accepted kernel decision, got %#v", result.Decisions)
+	}
+}
+
+func TestResolverUsesKernelDecisionWhenNoManualRuleMatches(t *testing.T) {
+	fileID := uint(7)
+	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie:2024", PrimaryInventoryID: &fileID}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
+
+	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
+
+	if len(result.Decisions) != 1 || result.Decisions[0].DecisionType != "kernel_decision" || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
+		t.Fatalf("expected accepted kernel decision, got %#v", result.Decisions)
 	}
 }
 
@@ -50,15 +62,15 @@ func TestResolverAcceptsHighConfidenceMovieWorkByTitleGate(t *testing.T) {
 	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}}
 	resolver := NewResolver(nil)
 	result := resolver.Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
-	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted || result.Decisions[0].DecisionType != "resolver_gate" {
-		t.Fatalf("expected accepted title gate decision, got %#v", result.Decisions)
+	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted || result.Decisions[0].DecisionType != "kernel_decision" {
+		t.Fatalf("expected accepted kernel decision, got %#v", result.Decisions)
 	}
 }
 
 func TestResolverAcceptsEpisodeByTupleGate(t *testing.T) {
 	fileID := uint(7)
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "episode:show:s01:e02", CandidateType: CandidateTypeEpisode, CanonicalKey: "episode:show:s01:e02", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "season_number", EvidenceValue: "1"}, {InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "2"}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "season_number", EvidenceValue: "1"}, {InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "2"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeSeries}}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
 	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted episode gate, got %#v", result.Decisions)
@@ -72,6 +84,8 @@ func TestResolverAcceptsSeriesAndSeasonByDirectoryContextGates(t *testing.T) {
 	evidence := []database.RecognitionEvidence{
 		{InventoryFileID: &fileID, EvidenceSource: "content_shape", EvidenceKey: "series_title", EvidenceValue: "Show"},
 		{InventoryFileID: &fileID, EvidenceSource: "content_shape", EvidenceKey: "season_number", EvidenceValue: "1"},
+		{InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "1"},
+		{InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeSeries},
 	}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{series, season}, Evidence: evidence})
 	if len(result.Decisions) != 2 {
@@ -87,7 +101,7 @@ func TestResolverAcceptsSeriesAndSeasonByDirectoryContextGates(t *testing.T) {
 func TestResolverAcceptsMovieWorkByDirectoryReductionGate(t *testing.T) {
 	fileID := uint(7)
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie:2024", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "movie_multi_version"}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "movie_multi_version"}, {InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
 	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted movie by directory reduction, got %#v", result.Decisions)
@@ -97,7 +111,7 @@ func TestResolverAcceptsMovieWorkByDirectoryReductionGate(t *testing.T) {
 func TestResolverAcceptsEpisodeByDirectoryReductionGate(t *testing.T) {
 	fileID := uint(7)
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "episode:show:s01:e02", CandidateType: CandidateTypeEpisode, CanonicalKey: "episode:show:s01:e02", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "episode_multi_version"}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "episode_multi_version"}, {InventoryFileID: &fileID, EvidenceKey: "season_number", EvidenceValue: "1"}, {InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "2"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeSeries}}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
 	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted episode by directory reduction, got %#v", result.Decisions)
@@ -107,7 +121,7 @@ func TestResolverAcceptsEpisodeByDirectoryReductionGate(t *testing.T) {
 func TestResolverAcceptsMovieWorkBySingleWorkIdentityGate(t *testing.T) {
 	fileID := uint(7)
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie:2024", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "single_work_identity"}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "single_work_identity"}, {InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
 	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted movie by single work identity, got %#v", result.Decisions)
@@ -119,6 +133,8 @@ func TestResolverAcceptsMovieWorkByMovieCollectionGate(t *testing.T) {
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "work:movie:movie", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:movie", PrimaryInventoryID: &fileID}
 	evidence := []database.RecognitionEvidence{
 		{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"},
+		{InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"},
+		{InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie},
 		{InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "1"},
 		{InventoryFileID: &fileID, EvidenceKey: "episode_source", EvidenceValue: "leading_numeric"},
 		{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "movie_collection"},
@@ -136,6 +152,7 @@ func TestResolverRejectsMovieCollectionGateWithSeasonEvidence(t *testing.T) {
 		{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Show"},
 		{InventoryFileID: &fileID, EvidenceKey: "season_number", EvidenceValue: "1"},
 		{InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "2"},
+		{InventoryFileID: &fileID, EvidenceKey: "episode_source", EvidenceValue: "leading_numeric"},
 		{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "movie_collection"},
 	}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
@@ -144,10 +161,30 @@ func TestResolverRejectsMovieCollectionGateWithSeasonEvidence(t *testing.T) {
 	}
 }
 
+func TestResolverKeepsChildrenUnderManualAcceptedParent(t *testing.T) {
+	fileID := uint(7)
+	work := database.RecognitionCandidate{ID: 1, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, PrimaryInventoryID: &fileID}
+	resource := database.RecognitionCandidate{ID: 2, CandidateKey: "playable_resource:local:path:/library/Movie.mkv", CandidateType: CandidateTypePlayableResource, ParentCandidateKey: work.CandidateKey, PrimaryInventoryID: &fileID}
+	rules := []database.RecognitionRule{{ID: 1, RuleKey: "accept-work", CandidateType: CandidateTypeWork, Action: RuleActionAccept, Priority: 1, Enabled: true, PayloadJSON: work.CandidateKey}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
+
+	result := NewResolver(rules).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{work, resource}, Evidence: evidence})
+
+	if len(result.Decisions) != 2 {
+		t.Fatalf("expected manual parent and kernel child decisions, got %#v", result.Decisions)
+	}
+	if result.Decisions[0].DecisionType != "resolver_rule" || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
+		t.Fatalf("expected manual parent accepted, got %#v", result.Decisions)
+	}
+	if result.Decisions[1].TargetKey != resource.CandidateKey || result.Decisions[1].Outcome != DecisionOutcomeAccepted {
+		t.Fatalf("expected child accepted under manual parent, got %#v", result.Decisions)
+	}
+}
+
 func TestResolverAcceptsEpisodeBySingleEpisodeIdentityGate(t *testing.T) {
 	fileID := uint(7)
 	candidate := database.RecognitionCandidate{ID: 10, CandidateKey: "episode:show:s01:e02", CandidateType: CandidateTypeEpisode, CanonicalKey: "episode:show:s01:e02", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "single_episode_identity"}}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: "assignment", EvidenceValue: "single_episode_identity"}, {InventoryFileID: &fileID, EvidenceKey: "season_number", EvidenceValue: "1"}, {InventoryFileID: &fileID, EvidenceKey: "episode_number", EvidenceValue: "2"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeSeries}}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
 	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted episode by single episode identity, got %#v", result.Decisions)
@@ -179,9 +216,9 @@ func TestResolverProducesFallbackOutcomes(t *testing.T) {
 	}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: candidates})
 	if len(result.Decisions) != 4 {
-		t.Fatalf("expected fallback decisions, got %#v", result.Decisions)
+		t.Fatalf("expected kernel decisions, got %#v", result.Decisions)
 	}
-	want := map[string]string{"resource:provisional": DecisionOutcomeProvisional, "resource:still-provisional": DecisionOutcomeProvisional, "resource:review": DecisionOutcomeReviewRequired, "resource:unmatched": DecisionOutcomeUnmatched}
+	want := map[string]string{"resource:provisional": DecisionOutcomeReviewRequired, "resource:still-provisional": DecisionOutcomeReviewRequired, "resource:review": DecisionOutcomeReviewRequired, "resource:unmatched": DecisionOutcomeReviewRequired}
 	for _, decision := range result.Decisions {
 		if decision.Outcome != want[decision.TargetKey] {
 			t.Fatalf("unexpected outcome for %s: got %s want %s", decision.TargetKey, decision.Outcome, want[decision.TargetKey])
@@ -190,20 +227,25 @@ func TestResolverProducesFallbackOutcomes(t *testing.T) {
 }
 
 func TestResolverAcceptsDuplicateBinaryCandidate(t *testing.T) {
-	candidate := database.RecognitionCandidate{ID: 1, CandidateKey: "duplicate_binary:md5:same", CandidateType: CandidateTypeDuplicateBinary}
-	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}})
+	fileID := uint(7)
+	candidate := database.RecognitionCandidate{ID: 1, CandidateKey: "duplicate_binary:md5:same", CandidateType: CandidateTypeDuplicateBinary, PrimaryInventoryID: &fileID}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
+	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
 	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected duplicate binary accepted, got %#v", result.Decisions)
 	}
 }
 
 func TestResolverAcceptsVariantAndEditionCandidates(t *testing.T) {
+	fileID := uint(7)
 	candidates := []database.RecognitionCandidate{
-		{ID: 1, CandidateKey: "variant:2160p:work", CandidateType: CandidateTypeVariant, ParentCandidateKey: "work:movie:movie:2024", VariantKey: "variant:2160p"},
-		{ID: 2, CandidateKey: "edition:directors-cut:work", CandidateType: CandidateTypeEdition, ParentCandidateKey: "work:movie:movie:2024", EditionKey: "edition:directors-cut"},
+		{ID: 1, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, PrimaryInventoryID: &fileID},
+		{ID: 2, CandidateKey: "variant:2160p:work", CandidateType: CandidateTypeVariant, ParentCandidateKey: "work:movie:movie:2024", VariantKey: "variant:2160p", PrimaryInventoryID: &fileID},
+		{ID: 3, CandidateKey: "edition:directors-cut:work", CandidateType: CandidateTypeEdition, ParentCandidateKey: "work:movie:movie:2024", EditionKey: "edition:directors-cut", PrimaryInventoryID: &fileID},
 	}
-	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: candidates})
-	if len(result.Decisions) != 2 {
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
+	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: candidates, Evidence: evidence})
+	if len(result.Decisions) != 3 {
 		t.Fatalf("expected two decisions, got %#v", result.Decisions)
 	}
 	for _, decision := range result.Decisions {
@@ -215,10 +257,11 @@ func TestResolverAcceptsVariantAndEditionCandidates(t *testing.T) {
 
 func TestResolverAcceptsPlayableResourceByDirectoryReductionGate(t *testing.T) {
 	fileID := uint(7)
-	candidate := database.RecognitionCandidate{ID: 1, CandidateKey: "playable_resource:local:path:/library/Movie.2160p.mkv", CandidateType: CandidateTypePlayableResource, ParentCandidateKey: "work:movie:movie:2024", PrimaryInventoryID: &fileID}
-	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: candidate.CandidateKey, EvidenceValue: "movie_multi_version"}}
-	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}, Evidence: evidence})
-	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
+	work := database.RecognitionCandidate{ID: 1, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, PrimaryInventoryID: &fileID}
+	candidate := database.RecognitionCandidate{ID: 2, CandidateKey: "playable_resource:local:path:/library/Movie.2160p.mkv", CandidateType: CandidateTypePlayableResource, ParentCandidateKey: work.CandidateKey, PrimaryInventoryID: &fileID}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceSource: "directory_reduction", EvidenceKey: candidate.CandidateKey, EvidenceValue: "movie_multi_version"}, {InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
+	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{work, candidate}, Evidence: evidence})
+	if len(result.Decisions) != 2 || result.Decisions[1].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted resource by directory reduction, got %#v", result.Decisions)
 	}
 }
@@ -226,16 +269,18 @@ func TestResolverAcceptsPlayableResourceByDirectoryReductionGate(t *testing.T) {
 func TestResolverLeavesSupplementalForReviewWithoutParentGate(t *testing.T) {
 	candidate := database.RecognitionCandidate{ID: 1, CandidateKey: "supplemental:trailer:resource", CandidateType: CandidateTypeSupplemental, CandidateRole: "trailer"}
 	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}})
-	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeUnmatched {
+	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeReviewRequired {
 		t.Fatalf("expected unmatched supplemental without parent evidence, got %#v", result.Decisions)
 	}
 }
 
 func TestResolverAcceptsSupplementalWithParentGate(t *testing.T) {
 	fileID := uint(7)
-	candidate := database.RecognitionCandidate{ID: 1, CandidateKey: "supplemental:trailer:resource", CandidateType: CandidateTypeSupplemental, CandidateRole: "trailer", ParentCandidateKey: "work:movie:movie:2024", PrimaryInventoryID: &fileID}
-	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{candidate}})
-	if len(result.Decisions) != 1 || result.Decisions[0].Outcome != DecisionOutcomeAccepted {
+	work := database.RecognitionCandidate{ID: 1, CandidateKey: "work:movie:movie:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, PrimaryInventoryID: &fileID}
+	candidate := database.RecognitionCandidate{ID: 2, CandidateKey: "supplemental:trailer:resource", CandidateType: CandidateTypeSupplemental, CandidateRole: "trailer", ParentCandidateKey: work.CandidateKey, PrimaryInventoryID: &fileID}
+	evidence := []database.RecognitionEvidence{{InventoryFileID: &fileID, EvidenceKey: "title", EvidenceValue: "Movie"}, {InventoryFileID: &fileID, EvidenceKey: "year", EvidenceValue: "2024"}, {InventoryFileID: &fileID, EvidenceKey: "folder_shape", EvidenceValue: FolderShapeMovie}}
+	result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: []database.RecognitionCandidate{work, candidate}, Evidence: evidence})
+	if len(result.Decisions) != 2 || result.Decisions[1].Outcome != DecisionOutcomeAccepted {
 		t.Fatalf("expected accepted supplemental with parent evidence, got %#v", result.Decisions)
 	}
 }

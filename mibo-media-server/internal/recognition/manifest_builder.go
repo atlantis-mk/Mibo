@@ -181,10 +181,12 @@ func candidateTitleEvidence(title string, year *int, sidecarHints []SidecarHint)
 func candidateSeriesEvidence(signal database.InventoryFileSignal, sidecarHints []SidecarHint) string {
 	for _, hint := range sidecarHints {
 		if strings.TrimSpace(hint.SeriesTitle) != "" {
-			return mustJSON(map[string]any{"title": strings.TrimSpace(hint.SeriesTitle), "year": hint.Year, "season_number": hint.SeasonNumber, "episode_number": hint.EpisodeNumber})
+			seriesTitle := strings.TrimSpace(hint.SeriesTitle)
+			return mustJSON(map[string]any{"series_title": seriesTitle, "title": seriesTitle, "year": hint.Year, "season_number": hint.SeasonNumber, "episode_number": hint.EpisodeNumber})
 		}
 	}
-	return mustJSON(map[string]any{"title": strings.TrimSpace(signal.TitleCandidate), "year": signal.Year, "season_number": signal.SeasonNumber, "episode_number": signal.EpisodeNumber})
+	seriesTitle := strings.TrimSpace(signal.TitleCandidate)
+	return mustJSON(map[string]any{"series_title": seriesTitle, "title": seriesTitle, "year": signal.Year, "season_number": signal.SeasonNumber, "episode_number": signal.EpisodeNumber})
 }
 
 func movieWorkCandidateKey(file database.InventoryFile, signal database.InventoryFileSignal, sidecarHints []SidecarHint) string {
