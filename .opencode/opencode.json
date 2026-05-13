@@ -6,7 +6,8 @@
   "instructions": [
     "AGENTS.md",
     "CONTRIBUTING.md",
-    "instructions/INSTRUCTIONS.md", 
+    "instructions/INSTRUCTIONS.md",
+    "skills/tdd-workflow/SKILL.md",
     "skills/security-review/SKILL.md",
     "skills/coding-standards/SKILL.md",
     "skills/frontend-patterns/SKILL.md",
@@ -19,9 +20,7 @@
     "skills/eval-harness/SKILL.md"
   ],
   "plugin": [
-    "./plugins",
-    "ecc-universal",
-    "superpowers@git+https://github.com/obra/superpowers.git"
+    "./plugins"
   ],
   "skills": {
     "paths": [
@@ -87,6 +86,18 @@
         "bash": true,
         "write": true,
         "edit": true
+      }
+    },
+    "tdd-guide": {
+      "description": "Test-Driven Development specialist enforcing write-tests-first methodology. Use when writing new features, fixing bugs, or refactoring code. Ensures 80%+ test coverage.",
+      "mode": "subagent",
+      "model": "anthropic/claude-opus-4-5",
+      "prompt": "{file:prompts/agents/tdd-guide.txt}",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": true
       }
     },
     "build-error-resolver": {
@@ -318,117 +329,135 @@
   },
   "command": {
     "plan": {
-      "description": "为复杂功能创建详细的实现计划",
+      "description": "Create a detailed implementation plan for complex features",
       "template": "{file:commands/plan.md}\n\n$ARGUMENTS",
       "agent": "planner",
       "subtask": true
-    }, 
+    },
+    "tdd": {
+      "description": "Enforce TDD workflow with 80%+ test coverage",
+      "template": "{file:commands/tdd.md}\n\n$ARGUMENTS",
+      "agent": "tdd-guide",
+      "subtask": true
+    },
     "code-review": {
-      "description": "从质量、安全性和可维护性角度审查代码",
+      "description": "Review code for quality, security, and maintainability",
       "template": "{file:commands/code-review.md}\n\n$ARGUMENTS",
       "agent": "code-reviewer",
       "subtask": true
     },
     "security": {
-      "description": "执行全面的安全审查",
+      "description": "Run comprehensive security review",
       "template": "{file:commands/security.md}\n\n$ARGUMENTS",
       "agent": "security-reviewer",
       "subtask": true
     },
     "build-fix": {
-      "description": "以最小改动修复构建和 TypeScript 错误",
+      "description": "Fix build and TypeScript errors with minimal changes",
       "template": "{file:commands/build-fix.md}\n\n$ARGUMENTS",
       "agent": "build-error-resolver",
       "subtask": true
     },
     "e2e": {
-      "description": "使用 Playwright 生成并运行 E2E 测试",
+      "description": "Generate and run E2E tests with Playwright",
       "template": "{file:commands/e2e.md}\n\n$ARGUMENTS",
       "agent": "e2e-runner",
       "subtask": true
     },
     "refactor-clean": {
-      "description": "清理死代码并合并重复逻辑",
+      "description": "Remove dead code and consolidate duplicates",
       "template": "{file:commands/refactor-clean.md}\n\n$ARGUMENTS",
       "agent": "refactor-cleaner",
       "subtask": true
     },
     "orchestrate": {
-      "description": "协调多个 agent 处理复杂任务",
+      "description": "Orchestrate multiple agents for complex tasks",
       "template": "{file:commands/orchestrate.md}\n\n$ARGUMENTS",
       "agent": "planner",
       "subtask": true
     },
     "learn": {
-      "description": "从会话中提取模式和经验",
+      "description": "Extract patterns and learnings from session",
       "template": "{file:commands/learn.md}\n\n$ARGUMENTS"
     },
     "checkpoint": {
-      "description": "保存验证状态和进度",
+      "description": "Save verification state and progress",
       "template": "{file:commands/checkpoint.md}\n\n$ARGUMENTS"
     },
     "verify": {
-      "description": "运行验证循环",
+      "description": "Run verification loop",
       "template": "{file:commands/verify.md}\n\n$ARGUMENTS"
     },
     "eval": {
-      "description": "根据标准执行评估",
+      "description": "Run evaluation against criteria",
       "template": "{file:commands/eval.md}\n\n$ARGUMENTS"
     },
     "update-docs": {
-      "description": "更新文档",
+      "description": "Update documentation",
       "template": "{file:commands/update-docs.md}\n\n$ARGUMENTS",
       "agent": "doc-updater",
       "subtask": true
     },
     "update-codemaps": {
-      "description": "更新代码映射",
+      "description": "Update codemaps",
       "template": "{file:commands/update-codemaps.md}\n\n$ARGUMENTS",
       "agent": "doc-updater",
       "subtask": true
-    }, 
+    },
+    "test-coverage": {
+      "description": "Analyze test coverage",
+      "template": "{file:commands/test-coverage.md}\n\n$ARGUMENTS",
+      "agent": "tdd-guide",
+      "subtask": true
+    },
     "setup-pm": {
-      "description": "配置包管理器",
+      "description": "Configure package manager",
       "template": "{file:commands/setup-pm.md}\n\n$ARGUMENTS"
     },
     "go-review": {
-      "description": "Go 代码审查",
+      "description": "Go code review",
       "template": "{file:commands/go-review.md}\n\n$ARGUMENTS",
       "agent": "go-reviewer",
       "subtask": true
-    }, 
+    },
+    "go-test": {
+      "description": "Go TDD workflow",
+      "template": "{file:commands/go-test.md}\n\n$ARGUMENTS",
+      "agent": "tdd-guide",
+      "subtask": true
+    },
     "go-build": {
-      "description": "修复 Go 构建错误",
+      "description": "Fix Go build errors",
       "template": "{file:commands/go-build.md}\n\n$ARGUMENTS",
       "agent": "go-build-resolver",
       "subtask": true
     },
     "skill-create": {
-      "description": "从 git 历史生成技能",
+      "description": "Generate skills from git history",
       "template": "{file:commands/skill-create.md}\n\n$ARGUMENTS"
     },
     "instinct-status": {
-      "description": "查看已学习的直觉",
+      "description": "View learned instincts",
       "template": "{file:commands/instinct-status.md}\n\n$ARGUMENTS"
     },
     "instinct-import": {
-      "description": "导入直觉",
+      "description": "Import instincts",
       "template": "{file:commands/instinct-import.md}\n\n$ARGUMENTS"
     },
     "instinct-export": {
-      "description": "导出直觉",
+      "description": "Export instincts",
       "template": "{file:commands/instinct-export.md}\n\n$ARGUMENTS"
     },
     "evolve": {
-      "description": "将直觉聚类为技能",
+      "description": "Cluster instincts into skills",
       "template": "{file:commands/evolve.md}\n\n$ARGUMENTS"
     },
     "promote": {
-      "description": "将项目直觉提升到全局范围",
+      "description": "Promote project instincts to global scope",
       "template": "{file:commands/promote.md}\n\n$ARGUMENTS"
     },
     "projects": {
-      "description": "列出已知项目和直觉统计",
+      "description": "List known projects and instinct stats",
       "template": "{file:commands/projects.md}\n\n$ARGUMENTS"
     }
   },
