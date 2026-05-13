@@ -1,0 +1,22 @@
+---
+description: 将项目直觉提升为全局范围
+agent: everything-claude-code:build
+---
+
+# Promote Command
+
+Promote instincts in continuous-learning-v2: $ARGUMENTS
+
+## Your Task
+
+Run:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/continuous-learning-v2/scripts/instinct-cli.py" promote $ARGUMENTS
+```
+
+If `CLAUDE_PLUGIN_ROOT` is unavailable, use:
+
+```bash
+python3 ~/.claude/skills/continuous-learning-v2/scripts/instinct-cli.py promote $ARGUMENTS
+```
