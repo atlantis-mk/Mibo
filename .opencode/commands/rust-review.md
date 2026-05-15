@@ -1,6 +1,6 @@
 ---
 description: 审查 Rust 的所有权、安全性和惯用写法
-agent: everything-claude-code:rust-reviewer
+agent: rust-reviewer
 subtask: true
 ---
 

@@ -1,6 +1,6 @@
 ---
 description: 将项目直觉提升为全局范围
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Promote Command

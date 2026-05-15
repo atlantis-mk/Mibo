@@ -36,6 +36,62 @@ func TestRepositoryUpsertAndLoadManifestGraph(t *testing.T) {
 	}
 }
 
+func TestRepositoryUpsertManifestGeneratesKeyFromScope(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	repo := NewRepository(db)
+	first, err := repo.UpsertManifest(ctx, ManifestScope{LibraryID: 1, StorageProvider: "openlist", RootPath: "/library", ScopePath: "/library/A", ClassifierVersion: "test", Fingerprint: "fp-a"})
+	if err != nil {
+		t.Fatalf("upsert first manifest: %v", err)
+	}
+	second, err := repo.UpsertManifest(ctx, ManifestScope{LibraryID: 1, StorageProvider: "openlist", RootPath: "/library", ScopePath: "/library/B", ClassifierVersion: "test", Fingerprint: "fp-b"})
+	if err != nil {
+		t.Fatalf("upsert second manifest: %v", err)
+	}
+	if first.ManifestKey == "" || second.ManifestKey == "" || first.ManifestKey == second.ManifestKey || first.ID == second.ID {
+		t.Fatalf("expected distinct generated manifest keys, first=%#v second=%#v", first, second)
+	}
+}
+
+func TestRepositoryReplaceCandidatesAndEvidenceRemovesStaleRows(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	repo := NewRepository(db)
+	manifest, err := repo.UpsertManifest(ctx, ManifestScope{ManifestKey: "manifest:replace-candidates", LibraryID: 1, StorageProvider: "local", RootPath: "/library", ScopePath: "/library", ClassifierVersion: "test", Fingerprint: "fp"})
+	if err != nil {
+		t.Fatalf("upsert manifest: %v", err)
+	}
+	fileID := uint(1)
+	if err := repo.ReplaceCandidatesAndEvidence(ctx, manifest.ID,
+		[]database.RecognitionCandidate{{ManifestID: manifest.ID, CandidateKey: "work:movie:old", CandidateType: CandidateTypeWork, ReviewState: database.ReviewStatePending}},
+		[]database.RecognitionEvidence{{ManifestID: manifest.ID, InventoryFileID: &fileID, EvidenceKind: "kind", EvidenceSource: "source", EvidenceKey: "old", EvidenceValue: "old"}},
+	); err != nil {
+		t.Fatalf("save initial rows: %v", err)
+	}
+	if err := repo.ReplaceCandidatesAndEvidence(ctx, manifest.ID,
+		[]database.RecognitionCandidate{{ManifestID: manifest.ID, CandidateKey: "work:movie:new", CandidateType: CandidateTypeWork, ReviewState: database.ReviewStatePending}},
+		[]database.RecognitionEvidence{{ManifestID: manifest.ID, InventoryFileID: &fileID, EvidenceKind: "kind", EvidenceSource: "source", EvidenceKey: "new", EvidenceValue: "new"}},
+	); err != nil {
+		t.Fatalf("replace rows: %v", err)
+	}
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+	if len(graph.Candidates) != 1 || graph.Candidates[0].CandidateKey != "work:movie:new" {
+		t.Fatalf("expected only replacement candidate, got %#v", graph.Candidates)
+	}
+	if len(graph.Evidence) != 1 || graph.Evidence[0].EvidenceKey != "new" {
+		t.Fatalf("expected only replacement evidence, got %#v", graph.Evidence)
+	}
+}
+
 func TestRepositorySupersedeManifest(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -59,32 +115,6 @@ func TestRepositorySupersedeManifest(t *testing.T) {
 	}
 }
 
-func TestRepositoryLoadEnabledRulesAppliesPathScope(t *testing.T) {
-	ctx := context.Background()
-	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	repo := NewRepository(db)
-	_, err = repo.UpsertRule(ctx, database.RecognitionRule{RuleKey: "scoped", LibraryID: 1, StorageProvider: "local", ScopePath: "/library/Movie", RuleType: "recognition_correction", CandidateType: CandidateTypeWork, Action: RuleActionAccept, Enabled: true, Priority: 10})
-	if err != nil {
-		t.Fatalf("upsert rule: %v", err)
-	}
-	matched, err := repo.LoadEnabledRules(ctx, 1, "local", "/library/Movie/File.mkv")
-	if err != nil {
-		t.Fatalf("load matched rules: %v", err)
-	}
-	if len(matched) != 1 {
-		t.Fatalf("expected scoped rule match, got %#v", matched)
-	}
-	unmatched, err := repo.LoadEnabledRules(ctx, 1, "local", "/library/Other/File.mkv")
-	if err != nil {
-		t.Fatalf("load unmatched rules: %v", err)
-	}
-	if len(unmatched) != 0 {
-		t.Fatalf("expected no out-of-scope rules, got %#v", unmatched)
-	}
-}
 
 func TestRepositoryReplaceEvidenceForInventoryFiles(t *testing.T) {
 	ctx := context.Background()
@@ -120,7 +150,7 @@ func TestRepositoryReplaceEvidenceForInventoryFiles(t *testing.T) {
 	}
 }
 
-func TestRepositoryLoadLibraryGraphsAndDeleteLibraryManifests(t *testing.T) {
+func TestRepositoryDeleteLibraryManifests(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
 	if err != nil {
@@ -141,21 +171,7 @@ func TestRepositoryLoadLibraryGraphsAndDeleteLibraryManifests(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save candidates: %v", err)
 	}
-	graphs, err := repo.LoadLibraryGraphs(ctx, 1)
-	if err != nil {
-		t.Fatalf("load library graphs: %v", err)
-	}
-	if len(graphs) != 2 {
-		t.Fatalf("expected two graphs, got %#v", graphs)
-	}
 	if err := repo.DeleteLibraryManifests(ctx, 1); err != nil {
 		t.Fatalf("delete library manifests: %v", err)
-	}
-	graphs, err = repo.LoadLibraryGraphs(ctx, 1)
-	if err != nil {
-		t.Fatalf("load graphs after delete: %v", err)
-	}
-	if len(graphs) != 0 {
-		t.Fatalf("expected no graphs after delete, got %#v", graphs)
 	}
 }

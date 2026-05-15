@@ -1,6 +1,6 @@
 ---
 description: 使用单元测试和属性测试的 Rust TDD 流程
-agent: everything-claude-code:tdd-guide
+agent: tdd-guide
 subtask: true
 ---
 

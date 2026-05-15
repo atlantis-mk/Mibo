@@ -1,6 +1,6 @@
 ---
 description: 修复 Rust 构建错误和借用检查器问题
-agent: everything-claude-code:rust-build-resolver
+agent: rust-build-resolver
 subtask: true
 ---
 

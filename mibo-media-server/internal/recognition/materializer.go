@@ -221,7 +221,7 @@ func (m *Materializer) upsertMetadataForCandidate(ctx context.Context, scopePath
 	query := m.db.WithContext(ctx).Where("item_type = ? AND sort_key = ? AND deleted_at IS NULL", itemType, sortKey)
 	err := query.First(&item).Error
 	if err == nil {
-		if err := m.updateMetadataHierarchy(ctx, &item, candidate, candidatesByKey); err != nil {
+		if err := m.updateMetadataForCandidate(ctx, &item, candidate, candidatesByKey); err != nil {
 			return database.MetadataItem{}, err
 		}
 		return item, nil
@@ -245,7 +245,7 @@ func (m *Materializer) populateMetadataHierarchy(ctx context.Context, item *data
 	}
 	switch metadataItemTypeForCandidate(candidate) {
 	case database.MetadataItemTypeSeason:
-		parentID, rootID, err := m.parentAndRootIDsForCandidate(ctx, candidatesByKey[strings.TrimSpace(candidate.ParentCandidateKey)], candidatesByKey)
+		parentID, rootID, err := m.parentAndRootIDsForCandidate(ctx, item.SortKey, candidatesByKey[strings.TrimSpace(candidate.ParentCandidateKey)], candidatesByKey)
 		if err != nil {
 			return err
 		}
@@ -254,7 +254,7 @@ func (m *Materializer) populateMetadataHierarchy(ctx context.Context, item *data
 		item.IndexNumber = seasonNumberFromCandidate(candidate)
 	case database.MetadataItemTypeEpisode:
 		parentCandidate := candidatesByKey[strings.TrimSpace(candidate.ParentCandidateKey)]
-		parentID, rootID, err := m.parentAndRootIDsForCandidate(ctx, parentCandidate, candidatesByKey)
+		parentID, rootID, err := m.parentAndRootIDsForCandidate(ctx, item.SortKey, parentCandidate, candidatesByKey)
 		if err != nil {
 			return err
 		}
@@ -279,15 +279,29 @@ func candidateMetadataSortKey(scopePath string, candidate database.RecognitionCa
 	return sortKey
 }
 
-func (m *Materializer) updateMetadataHierarchy(ctx context.Context, item *database.MetadataItem, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) error {
+func metadataScopeFromSortKey(sortKey string) string {
+	parts := strings.SplitN(strings.TrimSpace(sortKey), "\x00", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return parts[0]
+}
+
+func (m *Materializer) updateMetadataForCandidate(ctx context.Context, item *database.MetadataItem, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) error {
 	if item == nil || item.ID == 0 {
 		return nil
 	}
 	updated := *item
+	if title := titleFromCandidate(candidate); title != "" {
+		updated.Title = title
+		updated.SortTitle = title
+	}
 	if err := m.populateMetadataHierarchy(ctx, &updated, candidate, candidatesByKey); err != nil {
 		return err
 	}
 	updates := map[string]any{
+		"title":               updated.Title,
+		"sort_title":          updated.SortTitle,
 		"parent_id":           updated.ParentID,
 		"root_id":             updated.RootID,
 		"index_number":        updated.IndexNumber,
@@ -300,11 +314,11 @@ func (m *Materializer) updateMetadataHierarchy(ctx context.Context, item *databa
 	return nil
 }
 
-func (m *Materializer) parentAndRootIDsForCandidate(ctx context.Context, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) (*uint, *uint, error) {
+func (m *Materializer) parentAndRootIDsForCandidate(ctx context.Context, childSortKey string, candidate database.RecognitionCandidate, candidatesByKey map[string]database.RecognitionCandidate) (*uint, *uint, error) {
 	if strings.TrimSpace(candidate.CandidateKey) == "" {
 		return nil, nil, nil
 	}
-	parentItem, err := m.upsertMetadataForCandidate(ctx, "", candidate, candidatesByKey)
+	parentItem, err := m.upsertMetadataForCandidate(ctx, metadataScopeFromSortKey(childSortKey), candidate, candidatesByKey)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -113,23 +113,23 @@ func saveInventoryFileSignals(ctx context.Context, db *gorm.DB, scope inventoryF
 			Extension:          strings.ToLower(path.Ext(storagePath)),
 			ClassifierVersion:  strings.TrimSpace(scope.ClassifierVersion),
 			FileFingerprint:    inventoryFileSignalFingerprint(file, scope.ClassifierVersion),
-			TitleCandidate:     strings.TrimSpace(input.Model.Identity.TitleCandidate),
-			Year:               input.Model.Identity.Year,
-			SeasonNumber:       input.Model.Identity.SeasonNumber,
-			EpisodeNumber:      input.Model.Identity.EpisodeNumber,
-			LeadingNumber:      input.Model.Identity.LeadingNumber,
-			EpisodeSource:      strings.TrimSpace(input.Model.Identity.EpisodeSource),
-			Role:               strings.TrimSpace(input.Model.RoleHints.Role),
-			IsExtra:            input.Model.RoleHints.IsExtra,
-			Quality:            strings.TrimSpace(input.Model.ReleaseHints.Quality),
-			Codec:              strings.TrimSpace(input.Model.ReleaseHints.Codec),
-			Audio:              strings.TrimSpace(input.Model.ReleaseHints.Audio),
-			Subtitle:           strings.TrimSpace(input.Model.ReleaseHints.Subtitle),
-			HDR:                strings.TrimSpace(input.Model.ReleaseHints.HDR),
-			Edition:            strings.TrimSpace(input.Model.ReleaseHints.Edition),
-			ReleaseGroup:       strings.TrimSpace(input.Model.ReleaseHints.ReleaseGroup),
-			SourceTagsJSON:     mustJSON(input.Model.ReleaseHints.SourceTags),
-			EpisodeNumbersJSON: mustJSON(input.Model.Identity.EpisodeNumbers),
+			TitleCandidate:     strings.TrimSpace(firstNonEmptyString(firstScanTitle(input.Model.VideoSignal.TitleCandidates), input.Model.Identity.TitleCandidate)),
+			Year:               firstNonNilInt(input.Model.VideoSignal.Year, input.Model.Identity.Year),
+			SeasonNumber:       firstNonNilInt(input.Model.VideoSignal.Season, input.Model.Identity.SeasonNumber),
+			EpisodeNumber:      firstNonNilInt(input.Model.VideoSignal.Episode, input.Model.Identity.EpisodeNumber),
+			LeadingNumber:      firstNonNilInt(input.Model.VideoSignal.LeadingNumber, input.Model.Identity.LeadingNumber),
+			EpisodeSource:      strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.EpisodeSource, input.Model.Identity.EpisodeSource)),
+			Role:               strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.Role, input.Model.RoleHints.Role)),
+			IsExtra:            input.Model.VideoSignal.IsExtra || input.Model.RoleHints.IsExtra,
+			Quality:            strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.Quality, input.Model.ReleaseHints.Quality)),
+			Codec:              strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.Codec, input.Model.ReleaseHints.Codec)),
+			Audio:              strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.Audio, input.Model.ReleaseHints.Audio)),
+			Subtitle:           strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.Subtitle, input.Model.ReleaseHints.Subtitle)),
+			HDR:                strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.HDR, input.Model.ReleaseHints.HDR)),
+			Edition:            strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.Edition, input.Model.ReleaseHints.Edition)),
+			ReleaseGroup:       strings.TrimSpace(firstNonEmptyString(input.Model.VideoSignal.ReleaseGroup, input.Model.ReleaseHints.ReleaseGroup)),
+			SourceTagsJSON:     mustJSON(firstNonEmptyStrings(input.Model.VideoSignal.SourceTags, input.Model.ReleaseHints.SourceTags)),
+			EpisodeNumbersJSON: mustJSON(firstNonEmptyInts(input.Model.VideoSignal.EpisodeNumbers, input.Model.Identity.EpisodeNumbers)),
 			TitleTokensJSON:    mustJSON(input.Model.TitleTokens),
 			ModelJSON:          mustJSON(input.Model),
 			EvidenceJSON:       mustJSON(input.Model.Evidence),
@@ -151,9 +151,12 @@ func filenameSignalModelFromInventoryFileSignal(row database.InventoryFileSignal
 	var model filenameSignalModel
 	if strings.TrimSpace(row.ModelJSON) != "" {
 		if err := json.Unmarshal([]byte(row.ModelJSON), &model); err == nil {
+			hydrateFilenameSignalRawPathData(strings.TrimSpace(row.StoragePath), &model)
+			syncFilenameSignalModel(strings.TrimSpace(row.StoragePath), &model)
 			return model, true
 		}
 	}
+	hydrateFilenameSignalRawPathData(strings.TrimSpace(row.StoragePath), &model)
 	model.Identity.TitleCandidate = strings.TrimSpace(row.TitleCandidate)
 	model.Identity.Year = row.Year
 	model.Identity.SeasonNumber = row.SeasonNumber
@@ -176,7 +179,33 @@ func filenameSignalModelFromInventoryFileSignal(row database.InventoryFileSignal
 	_ = json.Unmarshal([]byte(strings.TrimSpace(row.SourceTagsJSON)), &model.ReleaseHints.SourceTags)
 	_ = json.Unmarshal([]byte(strings.TrimSpace(row.TitleTokensJSON)), &model.TitleTokens)
 	_ = json.Unmarshal([]byte(strings.TrimSpace(row.EvidenceJSON)), &model.Evidence)
+	syncFilenameSignalModel(strings.TrimSpace(row.StoragePath), &model)
 	return model, strings.TrimSpace(model.Identity.TitleCandidate) != "" || model.Identity.Year != nil || model.Identity.EpisodeNumber != nil || model.Identity.LeadingNumber != nil || model.RoleHints.Role != ""
+}
+
+func hydrateFilenameSignalRawPathData(storagePath string, model *filenameSignalModel) {
+	if model == nil {
+		return
+	}
+	cleanPath := path.Clean(strings.TrimSpace(storagePath))
+	if cleanPath == "" || cleanPath == "." {
+		return
+	}
+	if strings.TrimSpace(model.RawPathData.Path) == "" {
+		model.RawPathData.Path = cleanPath
+	}
+	if strings.TrimSpace(model.RawPathData.Directory) == "" {
+		model.RawPathData.Directory = path.Dir(cleanPath)
+	}
+	if strings.TrimSpace(model.RawPathData.Basename) == "" {
+		model.RawPathData.Basename = path.Base(cleanPath)
+	}
+	if strings.TrimSpace(model.RawPathData.Extension) == "" {
+		model.RawPathData.Extension = path.Ext(cleanPath)
+	}
+	if len(model.RawPathData.Segments) == 0 {
+		model.RawPathData.Segments = strings.Split(strings.Trim(cleanPath, "/"), "/")
+	}
 }
 
 func hydrateFilenameTokenCacheFromSignals(cache *filenameTokenProfileCache, models map[string]filenameSignalModel) {
@@ -194,4 +223,22 @@ func hydrateFilenameTokenCacheFromSignals(cache *filenameTokenProfileCache, mode
 	for _, storagePath := range keys {
 		cache.profilesByPath[strings.TrimSpace(storagePath)] = models[storagePath]
 	}
+}
+
+func firstNonEmptyStrings(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return append([]string(nil), value...)
+		}
+	}
+	return nil
+}
+
+func firstNonEmptyInts(values ...[]int) []int {
+	for _, value := range values {
+		if len(value) > 0 {
+			return append([]int(nil), value...)
+		}
+	}
+	return nil
 }

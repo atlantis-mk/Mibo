@@ -1,6 +1,6 @@
 ---
 description: 保存验证状态和进度检查点
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Checkpoint Command

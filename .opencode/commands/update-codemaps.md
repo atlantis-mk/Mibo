@@ -1,6 +1,6 @@
 ---
 description: 更新用于代码库导航的代码映射
-agent: everything-claude-code:doc-updater
+agent: doc-updater
 subtask: true
 ---
 

@@ -1,6 +1,6 @@
 ---
 description: 使用 Playwright 生成并运行 E2E 测试
-agent: everything-claude-code:e2e-runner
+agent: e2e-runner
 subtask: true
 ---
 

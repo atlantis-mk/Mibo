@@ -1,6 +1,6 @@
 ---
 description: 协调多个 agent 处理复杂任务
-agent: everything-claude-code:planner
+agent: planner
 subtask: true
 ---
 

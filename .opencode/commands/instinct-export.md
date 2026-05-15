@@ -1,6 +1,6 @@
 ---
 description: 导出直觉以便共享
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Instinct Export Command

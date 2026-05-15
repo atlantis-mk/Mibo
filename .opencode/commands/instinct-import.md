@@ -1,6 +1,6 @@
 ---
 description: 从外部来源导入直觉
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Instinct Import Command

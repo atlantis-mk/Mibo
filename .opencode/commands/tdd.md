@@ -1,6 +1,6 @@
 ---
 description: 强制执行 TDD 流程并保持 80%+ 覆盖率
-agent: everything-claude-code:tdd-guide
+agent: tdd-guide
 subtask: true
 ---
 

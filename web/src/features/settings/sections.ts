@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import type { ComponentType } from "react"
 
-export type SettingsSectionPath =
+type SettingsSectionPath =
   | "/settings/health"
   | "/settings/users"
   | "/settings/devices"

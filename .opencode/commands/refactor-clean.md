@@ -1,6 +1,6 @@
 ---
 description: 移除死代码并合并重复项
-agent: everything-claude-code:refactor-cleaner
+agent: refactor-cleaner
 subtask: true
 ---
 

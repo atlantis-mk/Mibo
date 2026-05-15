@@ -2,6 +2,8 @@ package library
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 	"sort"
@@ -11,6 +13,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/inventory"
 	"github.com/atlan/mibo-media-server/internal/recognition"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"gorm.io/gorm"
 )
@@ -37,12 +40,13 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 		return database.RecognitionManifest{}, err
 	}
 	indexedSignals := signalsByFileID(fileSignals)
-	contentShapeEvidence, err := s.recognitionContentShapeContextEvidence(ctx, library, files, indexedSignals)
+	sidecarHints, sidecarsByFileID, err := s.recognitionSidecarInputs(ctx, library, files)
 	if err != nil {
 		return database.RecognitionManifest{}, err
 	}
-	pathTreeEvidence := recognitionPathTreeContextEvidence(files, library.RootPath, indexedSignals)
-	sidecarHints, sidecarsByFileID, err := s.recognitionSidecarInputs(ctx, library, files)
+	output := buildScanRecognitionManifestOutput(files, rootPath, sidecarHints)
+	lockedKindsByFileID := scanRecognitionLockedKindsByFileID(output.Candidates)
+	contentShapeEvidence, err := s.recognitionContentShapeContextEvidence(ctx, library, files, indexedSignals, lockedKindsByFileID)
 	if err != nil {
 		return database.RecognitionManifest{}, err
 	}
@@ -55,49 +59,64 @@ func (s *Service) persistRecognitionManifestForFiles(ctx context.Context, librar
 	contextEvidence := mergeRecognitionContextEvidence(
 		directoryReductionContextEvidence(files, indexedSignals),
 		contentShapeEvidence,
-		pathTreeEvidence,
 	)
-	excludedFileIDs := directoryReductionExcludedFileIDs(files, indexedSignals)
-	input := recognition.GraphConstructInput{
-		Scope:            recognition.ManifestScope{LibraryID: library.ID, MediaSourceID: library.MediaSourceID, StorageProvider: storageProvider, RootPath: rootPath, ScopePath: scopePath, ClassifierVersion: settings.ClassifierVersion},
-		Files:            files,
-		FileSignals:      indexedSignals,
-		SidecarsByFileID: sidecarsByFileID,
-		SidecarHints:     sidecarHints,
-		ContextEvidence:  contextEvidence,
-		ExcludedFileIDs:  excludedFileIDs,
-	}
-	output := recognition.ConstructGraphFromInventory(input)
-	repo := recognition.NewRepository(s.db)
-	manifest, err := repo.UpsertManifest(ctx, output.ManifestScope)
-	if err != nil {
-		return database.RecognitionManifest{}, err
-	}
-	for idx := range output.Candidates {
-		output.Candidates[idx].ManifestID = manifest.ID
-	}
-	for idx := range output.Evidence {
-		output.Evidence[idx].ManifestID = manifest.ID
-	}
-	for idx := range output.MediaGraphNodes {
-		output.MediaGraphNodes[idx].ManifestID = manifest.ID
-	}
-	for idx := range output.MediaGraphEdges {
-		output.MediaGraphEdges[idx].ManifestID = manifest.ID
-	}
-	for idx := range output.MediaGraphClassifications {
-		output.MediaGraphClassifications[idx].ManifestID = manifest.ID
-	}
-	if err := repo.SaveMediaGraph(ctx, manifest.ID, output.MediaGraphNodes, output.MediaGraphEdges, output.MediaGraphClassifications); err != nil {
-		return database.RecognitionManifest{}, err
-	}
-	if err := repo.SaveCandidates(ctx, output.Candidates); err != nil {
-		return database.RecognitionManifest{}, err
-	}
-	if err := repo.SaveEvidence(ctx, output.Evidence); err != nil {
+	scope := recognition.ManifestScope{LibraryID: library.ID, MediaSourceID: library.MediaSourceID, StorageProvider: storageProvider, RootPath: rootPath, ScopePath: scopePath, ClassifierVersion: settings.ClassifierVersion, Fingerprint: newRecognitionFingerprint(files), EvidenceJSON: mustJSON(map[string]any{"scheme": "scanrecognition"})}
+	var manifest database.RecognitionManifest
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		repo := recognition.NewRepository(tx)
+		created, err := repo.UpsertManifest(ctx, scope)
+		if err != nil {
+			return err
+		}
+		manifest = created
+		for idx := range output.Candidates {
+			output.Candidates[idx].ManifestID = manifest.ID
+		}
+		for idx := range output.Evidence {
+			output.Evidence[idx].ManifestID = manifest.ID
+		}
+		graphOutput := recognition.ConstructGraphFromCandidates(recognition.GraphConstructInput{Scope: scope, Files: files, FileSignals: indexedSignals, SidecarsByFileID: sidecarsByFileID, SidecarHints: sidecarHints, ContextEvidence: contextEvidence}, output.Candidates)
+		for idx := range graphOutput.MediaGraphNodes {
+			graphOutput.MediaGraphNodes[idx].ManifestID = manifest.ID
+		}
+		for idx := range graphOutput.MediaGraphEdges {
+			graphOutput.MediaGraphEdges[idx].ManifestID = manifest.ID
+		}
+		for idx := range graphOutput.MediaGraphClassifications {
+			graphOutput.MediaGraphClassifications[idx].ManifestID = manifest.ID
+		}
+		if err := repo.ReplaceCandidatesAndEvidence(ctx, manifest.ID, output.Candidates, output.Evidence); err != nil {
+			return err
+		}
+		if err := repo.SaveMediaGraph(ctx, manifest.ID, graphOutput.MediaGraphNodes, graphOutput.MediaGraphEdges, graphOutput.MediaGraphClassifications); err != nil {
+			return err
+		}
+		graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+		if err != nil {
+			return err
+		}
+		decisions := buildScanRecognitionDecisions(graph.Candidates)
+		return repo.ReplaceDecisionsAndConflicts(ctx, manifest.ID, decisions, nil)
+	}); err != nil {
 		return database.RecognitionManifest{}, err
 	}
 	return manifest, nil
+}
+
+func newRecognitionFingerprint(files []database.InventoryFile) string {
+	hash := sha256.New()
+	for _, file := range files {
+		if file.ID == 0 {
+			continue
+		}
+		hash.Write([]byte(strings.TrimSpace(file.StorageProvider)))
+		hash.Write([]byte("\x00"))
+		hash.Write([]byte(strings.TrimSpace(file.StoragePath)))
+		hash.Write([]byte("\x00"))
+		hash.Write([]byte(strings.TrimSpace(file.StableIdentityKey)))
+		hash.Write([]byte("\x00"))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func mergeRecognitionContextEvidence(groups ...map[uint][]recognition.ContextEvidence) map[uint][]recognition.ContextEvidence {
@@ -120,6 +139,36 @@ func mergeRecognitionContextEvidence(groups ...map[uint][]recognition.ContextEvi
 		return nil
 	}
 	return merged
+}
+
+type recognitionLockedKind string
+
+const (
+	recognitionLockedKindMovie   recognitionLockedKind = "movie"
+	recognitionLockedKindEpisode recognitionLockedKind = "episode"
+)
+
+func scanRecognitionLockedKindsByFileID(candidates []database.RecognitionCandidate) map[uint]recognitionLockedKind {
+	locked := make(map[uint]recognitionLockedKind)
+	for _, candidate := range candidates {
+		if candidate.PrimaryInventoryID == nil || *candidate.PrimaryInventoryID == 0 {
+			continue
+		}
+		fileID := *candidate.PrimaryInventoryID
+		switch {
+		case candidate.CandidateType == recognition.CandidateTypeEpisode:
+			locked[fileID] = recognitionLockedKindEpisode
+		case candidate.CandidateType == recognition.CandidateTypeWork && (candidate.CandidateRole == recognition.WorkKindSeries || candidate.CandidateRole == recognition.WorkKindSeason):
+			if locked[fileID] == "" {
+				locked[fileID] = recognitionLockedKindEpisode
+			}
+		case candidate.CandidateType == recognition.CandidateTypeWork && candidate.CandidateRole == recognition.WorkKindMovie:
+			if locked[fileID] == "" {
+				locked[fileID] = recognitionLockedKindMovie
+			}
+		}
+	}
+	return locked
 }
 
 func (s *Service) recognitionSidecarInputs(ctx context.Context, library database.Library, files []database.InventoryFile) (map[uint][]recognition.SidecarHint, map[uint][]database.InventoryFile, error) {
@@ -203,7 +252,7 @@ func mergeMaps(base map[string]any, extras map[string]any) map[string]any {
 	return merged
 }
 
-func (s *Service) recognitionContentShapeContextEvidence(ctx context.Context, library database.Library, files []database.InventoryFile, indexedSignals map[uint]database.InventoryFileSignal) (map[uint][]recognition.ContextEvidence, error) {
+func (s *Service) recognitionContentShapeContextEvidence(ctx context.Context, library database.Library, files []database.InventoryFile, indexedSignals map[uint]database.InventoryFileSignal, lockedKindsByFileID map[uint]recognitionLockedKind) (map[uint][]recognition.ContextEvidence, error) {
 	if len(files) == 0 || s.db == nil {
 		return nil, nil
 	}
@@ -212,29 +261,30 @@ func (s *Service) recognitionContentShapeContextEvidence(ctx context.Context, li
 	if err := hydrateRecognitionFilenameTokenCache(ctx, s.db, library, settings.ClassifierVersion, files, cache); err != nil {
 		return nil, err
 	}
-	objects := make([]storage.Object, 0, len(files))
 	assignmentsByPath := make(map[string]contentShapeFileAssignment, len(files))
 	for _, file := range files {
 		storagePath := strings.TrimSpace(file.StoragePath)
 		if file.ID == 0 || storagePath == "" || file.Status != inventory.FileStatusAvailable || file.ContentClass != SourceContentClassVideo || !isVideoFile(storagePath) {
 			continue
 		}
-		objects = append(objects, storage.Object{Path: storagePath})
 		model := filenameTokenProfileForPath(cache, storagePath)
 		signal := indexedSignals[file.ID]
 		title := strings.TrimSpace(signal.TitleCandidate)
 		if title == "" {
-			title = strings.TrimSpace(model.Identity.TitleCandidate)
+			title = filenameSignalTitleCandidate(model)
 		}
 		year := signal.Year
 		if year == nil {
-			year = model.Identity.Year
+			year = filenameSignalYear(model)
 		}
-		model.Identity.TitleCandidate = title
-		model.Identity.Year = year
-		model.Identity.SeasonNumber = firstNonNilInt(signal.SeasonNumber, model.Identity.SeasonNumber, model.PathHints.SeasonNumber)
-		model.Identity.EpisodeNumber = firstNonNilInt(signal.EpisodeNumber, model.Identity.EpisodeNumber)
-		assignment := recognitionContentShapeAssignmentForModel(library.RootPath, storagePath, model)
+		videoSignal := model.VideoSignal
+		if strings.TrimSpace(title) != "" && len(videoSignal.TitleCandidates) == 0 {
+			videoSignal.TitleCandidates = []string{title}
+		}
+		videoSignal.Year = firstNonNilInt(signal.Year, videoSignal.Year, year)
+		videoSignal.Season = firstNonNilInt(signal.SeasonNumber, videoSignal.Season, model.PathHints.SeasonNumber)
+		videoSignal.Episode = firstNonNilInt(signal.EpisodeNumber, videoSignal.Episode)
+		assignment := recognitionContentShapeAssignmentForModel(library.RootPath, storagePath, videoSignal, model.PathHints, lockedKindsByFileID[file.ID])
 		if strings.TrimSpace(assignment.AssignmentType) == "" {
 			continue
 		}
@@ -272,6 +322,20 @@ func hydrateRecognitionFilenameTokenCache(ctx context.Context, db *gorm.DB, libr
 	return nil
 }
 
+func signalsByFileID(rows map[string]database.InventoryFileSignal) map[uint]database.InventoryFileSignal {
+	if len(rows) == 0 {
+		return nil
+	}
+	result := make(map[uint]database.InventoryFileSignal, len(rows))
+	for _, row := range rows {
+		if row.InventoryFileID == nil || *row.InventoryFileID == 0 {
+			continue
+		}
+		result[*row.InventoryFileID] = row
+	}
+	return result
+}
+
 func contentShapeAssignmentsFromMap(assignments map[string]contentShapeFileAssignment) []contentShapeFileAssignment {
 	if len(assignments) == 0 {
 		return nil
@@ -297,23 +361,29 @@ func recognitionContentShapePlanShape(assignments map[string]contentShapeFileAss
 	return contentShapeUnknownReview
 }
 
-func recognitionContentShapeAssignmentForModel(libraryRoot string, storagePath string, model filenameSignalModel) contentShapeFileAssignment {
-	if strings.TrimSpace(model.PathHints.SeriesTitle) == "" {
-		model.PathHints.SeriesTitle = tvSeriesTitleFromPath(libraryRoot, storagePath)
+func recognitionContentShapeAssignmentForModel(libraryRoot string, storagePath string, videoSignal scanrecognition.VideoSignal, pathHints filenamePathHints, lockedKind recognitionLockedKind) contentShapeFileAssignment {
+	if lockedKind == recognitionLockedKindMovie {
+		return contentShapeFileAssignment{}
 	}
-	if model.PathHints.SeasonNumber == nil {
-		model.PathHints.SeasonNumber = tvSeasonFromPath(libraryRoot, storagePath)
+	if strings.TrimSpace(pathHints.SeriesTitle) == "" {
+		pathHints.SeriesTitle = scanrecognition.SeriesTitleFromPath(libraryRoot, storagePath)
 	}
-	seriesTitle := contentShapeEpisodeSeriesTitle(contentShapeDirectoryPlan{}, storage.Object{Path: storagePath}, model)
-	seasonNumber := firstNonNilInt(model.Identity.SeasonNumber, model.PathHints.SeasonNumber, tvSeasonFromPath(libraryRoot, storagePath))
-	episodeNumber := firstNonNilInt(model.Identity.EpisodeNumber, parseEpisodeNumberFromTitle(strings.TrimSuffix(path.Base(storagePath), path.Ext(storagePath)), seriesTitle))
+	if pathHints.SeasonNumber == nil {
+		pathHints.SeasonNumber = scanrecognition.SeasonFromPath(libraryRoot, storagePath)
+	}
+	seriesTitle := contentShapeEpisodeSeriesTitle(contentShapeDirectoryPlan{}, storage.Object{Path: storagePath}, pathHints)
+	seasonNumber := firstNonNilInt(videoSignal.Season, pathHints.SeasonNumber, scanrecognition.SeasonFromPath(libraryRoot, storagePath))
+	episodeNumber := firstNonNilInt(videoSignal.Episode, scanrecognition.AnalyzeVideoPath(strings.TrimSuffix(path.Base(storagePath), path.Ext(storagePath))+".mkv").Episode)
 	if strings.TrimSpace(seriesTitle) == "" || seasonNumber == nil {
 		return contentShapeFileAssignment{}
 	}
-	if episodeNumber == nil && weakEpisodeNumberAllowed(strings.TrimSuffix(path.Base(storagePath), path.Ext(storagePath))) {
-		episodeNumber = model.Identity.LeadingNumber
+	if episodeNumber == nil && scanrecognition.WeakEpisodeNumberAllowed(strings.TrimSuffix(path.Base(storagePath), path.Ext(storagePath))) {
+		episodeNumber = videoSignal.LeadingNumber
 	}
 	if episodeNumber == nil || *episodeNumber <= 0 {
+		return contentShapeFileAssignment{}
+	}
+	if lockedKind != "" && lockedKind != recognitionLockedKindEpisode {
 		return contentShapeFileAssignment{}
 	}
 	return contentShapeFileAssignment{
@@ -327,51 +397,6 @@ func recognitionContentShapeAssignmentForModel(libraryRoot string, storagePath s
 		ReviewState:    "auto",
 		Evidence:       map[string]any{"source": "content_shape", "shape": contentShapeSeasonFolder},
 	}
-}
-
-func recognitionPathTreeContextEvidence(files []database.InventoryFile, libraryRoot string, indexedSignals map[uint]database.InventoryFileSignal) map[uint][]recognition.ContextEvidence {
-	if len(files) == 0 {
-		return nil
-	}
-	indexedModels := make(map[string]filenameSignalModel, len(indexedSignals))
-	for _, file := range files {
-		signal, ok := indexedSignals[file.ID]
-		if !ok {
-			continue
-		}
-		model := filenameSignalModel{
-			Identity: filenameIdentitySignals{
-				TitleCandidate: strings.TrimSpace(signal.TitleCandidate),
-				Year:           signal.Year,
-				SeasonNumber:   signal.SeasonNumber,
-				EpisodeNumber:  signal.EpisodeNumber,
-				EpisodeSource:  strings.TrimSpace(signal.EpisodeSource),
-			},
-			RoleHints: filenameRoleHints{
-				Role:    strings.TrimSpace(signal.Role),
-				IsExtra: signal.IsExtra,
-			},
-			PathHints: filenamePathHints{
-				SeasonNumber: tvSeasonFromPath(libraryRoot, file.StoragePath),
-				SeriesTitle:  tvSeriesTitleFromPath(libraryRoot, file.StoragePath),
-			},
-			ReleaseHints: filenameReleaseHints{
-				Quality:      strings.TrimSpace(signal.Quality),
-				Codec:        strings.TrimSpace(signal.Codec),
-				Audio:        strings.TrimSpace(signal.Audio),
-				Subtitle:     strings.TrimSpace(signal.Subtitle),
-				HDR:          strings.TrimSpace(signal.HDR),
-				Edition:      strings.TrimSpace(signal.Edition),
-				ReleaseGroup: strings.TrimSpace(signal.ReleaseGroup),
-			},
-		}
-		indexedModels[strings.TrimSpace(file.StoragePath)] = model
-	}
-	assignments := compilePathTreeAssignmentsFromFiles(files, libraryRoot, indexedModels, nil)
-	if len(assignments) == 0 {
-		return nil
-	}
-	return recognitionContextEvidenceFromAssignments(files, contentShapeAssignmentsByPath(contentShapeAssignmentsFromPathTree(assignments)), contentShapeDirectoryPlan{Shape: pathTreeContentShapePlanForAssignments(commonRecognitionScopePath(libraryRoot, files), assignments).Shape, Confidence: 0.88, ReviewState: "auto"}, "path_tree")
 }
 
 func recognitionContextEvidenceFromAssignments(files []database.InventoryFile, assignments map[string]contentShapeFileAssignment, plan contentShapeDirectoryPlan, source string) map[uint][]recognition.ContextEvidence {
@@ -419,33 +444,9 @@ func recognitionContextEvidenceForAssignment(assignment contentShapeFileAssignme
 			{Source: source, Assignment: "season_identity", TargetKey: assignment.TargetKey, ParentKey: seasonKey, ReviewState: reviewState, Confidence: floatPtr(confidence), Payload: map[string]any{"series_title": assignment.SeriesTitle, "season_number": *assignment.SeasonNumber}},
 			{Source: source, Assignment: "episode_identity", TargetKey: assignment.TargetKey, ParentKey: episodeKey, ReviewState: reviewState, Confidence: floatPtr(confidence), Payload: map[string]any{"series_title": assignment.SeriesTitle, "season_number": *assignment.SeasonNumber, "episode_number": *assignment.EpisodeNumber}},
 		}
-	case contentShapeAssignmentVersion:
-		if strings.TrimSpace(assignment.TargetKey) == "" {
-			return nil
-		}
-		return []recognition.ContextEvidence{{Source: source, Assignment: "movie_version", TargetKey: assignment.TargetKey, ParentKey: strings.TrimSpace(assignment.TargetKey), ReviewState: reviewState, Confidence: floatPtr(confidence)}}
-	case contentShapeAssignmentMovie:
-		if strings.TrimSpace(assignment.TargetKey) == "" {
-			return nil
-		}
-		return []recognition.ContextEvidence{{Source: source, Assignment: "movie_collection", TargetKey: assignment.TargetKey, ParentKey: strings.TrimSpace(assignment.TargetKey), ReviewState: reviewState, Confidence: floatPtr(confidence)}}
 	default:
 		return nil
 	}
-}
-
-func signalsByFileID(rows map[string]database.InventoryFileSignal) map[uint]database.InventoryFileSignal {
-	if len(rows) == 0 {
-		return nil
-	}
-	result := make(map[uint]database.InventoryFileSignal, len(rows))
-	for _, row := range rows {
-		if row.InventoryFileID == nil || *row.InventoryFileID == 0 {
-			continue
-		}
-		result[*row.InventoryFileID] = row
-	}
-	return result
 }
 
 func (s *Service) resolveRecognitionManifest(ctx context.Context, manifestID uint) (recognition.MaterializeResult, error) {
@@ -458,25 +459,28 @@ func (s *Service) resolveRecognitionManifest(ctx context.Context, manifestID uin
 	if err != nil {
 		return result, err
 	}
-	rules, err := repo.LoadEnabledRules(ctx, graph.Manifest.LibraryID, graph.Manifest.StorageProvider, graph.Manifest.ScopePath)
-	if err != nil {
-		return result, err
-	}
-	resolver := recognition.NewResolver(rules)
-	resolved := resolver.Resolve(graph)
-	if err := repo.ReplaceDecisionsAndConflicts(ctx, graph.Manifest.ID, resolved.Decisions, resolved.Conflicts); err != nil {
-		return result, err
+	if !hasScanRecognitionDecisions(graph.Decisions) {
+		return result, nil
 	}
 	materializer := recognition.NewMaterializer(s.db)
-	metadataResult, err := materializer.MaterializeMetadata(ctx, graph, resolved.Decisions)
+	metadataResult, err := materializer.MaterializeMetadata(ctx, graph, graph.Decisions)
 	if err != nil {
 		return result, err
 	}
-	resourceResult, err := materializer.MaterializeResources(ctx, graph, resolved.Decisions)
+	resourceResult, err := materializer.MaterializeResources(ctx, graph, graph.Decisions)
 	if err != nil {
 		return result, err
 	}
 	return result.Merge(metadataResult).Merge(resourceResult), nil
+}
+
+func hasScanRecognitionDecisions(decisions []database.RecognitionDecision) bool {
+	for _, decision := range decisions {
+		if strings.TrimSpace(decision.DecisionType) == "scanrecognition_outcome" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) markReviewRequiredInventoryFromManifest(ctx context.Context, manifestID uint) error {

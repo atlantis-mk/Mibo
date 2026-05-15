@@ -395,10 +395,6 @@ export function getMediaCardMatchStatus(item: MediaCardItem) {
   return item.governance_status
 }
 
-export function getMediaCardAvailabilityStatus(item: MediaCardItem) {
-  return item.availability_status
-}
-
 export function formatMediaCardYearRange(item: MediaCardItem) {
   if (item.organizing_summary?.message) {
     return item.organizing_summary.message
@@ -444,10 +440,6 @@ export function getMediaCardBadgeCount(item: MediaCardItem) {
   if (summary.available_count > 0) return summary.available_count
   if (summary.child_count > 0) return summary.child_count
   return null
-}
-
-export function isMediaCardPlayable(item: MediaCardItem) {
-  return item.availability_status === "available"
 }
 
 export function getMediaCardOrganizingLabel(item: MediaCardItem) {

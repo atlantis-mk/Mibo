@@ -1,6 +1,6 @@
 ---
 description: 显示已学习的直觉（项目 + 全局）及置信度
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Instinct Status Command

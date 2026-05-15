@@ -1,6 +1,6 @@
 ---
 description: 列出已注册项目和直觉数量
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Projects Command

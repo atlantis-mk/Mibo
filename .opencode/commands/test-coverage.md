@@ -1,6 +1,6 @@
 ---
 description: 分析并提升测试覆盖率
-agent: everything-claude-code:tdd-guide
+agent: tdd-guide
 subtask: true
 ---
 

@@ -44,7 +44,7 @@ import type { CatalogListItem, HomeMediaOverview } from "#/lib/mibo-api"
 import { cn } from "#/lib/utils"
 import { useAuthStore } from "#/stores/auth-store"
 
-export const LIBRARY_PAGE_SIZE_OPTIONS = [24, 48, 60, 96] as const
+const LIBRARY_PAGE_SIZE_OPTIONS = [24, 48, 60, 96] as const
 export const DEFAULT_LIBRARY_PAGE_SIZE = 60
 
 export function isLibraryPageSize(value: number) {

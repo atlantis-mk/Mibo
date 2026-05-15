@@ -3,9 +3,9 @@ import type {
   MediaResourceFileSummary,
   CatalogSourceEvidence,
   MetadataResourceDetail,
-  MediaDetailPresentation,
   Track,
 } from "#/lib/mibo-api"
+import type { MediaDetailPresentation } from "#/lib/media-presentation"
 
 export function getPrimaryCatalogResource(
   item: Pick<{ resources?: MediaResourceDetail[] }, "resources">
@@ -14,9 +14,11 @@ export function getPrimaryCatalogResource(
 }
 
 export function canPlayMediaDetailItem(
-  item: Pick<MediaDetailPresentation, "type" | "availability_status" | "series_playback_target">,
-  selectedResource?: MetadataResourceDetail,
-  primaryResource?: MediaResourceDetail
+  item: Pick<MediaDetailPresentation, "type" | "availability_status"> & {
+    series_playback_target?: MediaDetailPresentation["series_playback_target"]
+  },
+  selectedResource?: Pick<MetadataResourceDetail, "status">,
+  primaryResource?: Pick<MediaResourceDetail, "status">
 ) {
   if (item.type === "series") {
     return Boolean(item.series_playback_target)
@@ -69,24 +71,6 @@ export function getDisplaySourcePath(
     }
   }
   return "catalog item"
-}
-
-export function formatAudioTrackLabel(track?: Track) {
-  if (!track) return "未知"
-  return [
-    track.language || null,
-    track.title || track.codec || null,
-    formatChannels(track),
-  ]
-    .filter(Boolean)
-    .join(" ")
-}
-
-export function formatChannels(track?: Pick<Track, "channels">) {
-  if (!track?.channels || track.channels <= 0) return "立体声"
-  if (track.channels === 1) return "单声道"
-  if (track.channels === 2) return "stereo"
-  return `${track.channels} ch`
 }
 
 export function formatChannelsCompact(track?: Pick<Track, "channels">) {
@@ -146,7 +130,7 @@ export function formatBooleanFlag(value?: boolean) {
   return value ? "是" : "否"
 }
 
-export function fileNameFromStoragePath(path?: string) {
+function fileNameFromStoragePath(path?: string) {
   const value = formatTechnicalValue(path)
   if (!value) return ""
   const segments = value.split("/")
@@ -281,18 +265,6 @@ export function formatDateTime(value: string) {
   }).format(date)
 }
 
-export function formatDate(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date)
-}
-
 export function formatMediaType(type: string) {
   if (type === "movie") return "电影"
   if (type === "show" || type === "series" || type === "episode") return "剧集"
@@ -313,29 +285,6 @@ export function formatProbeStatus(status: string) {
       return "分析中"
     default:
       return "等待分析"
-  }
-}
-
-export function describeMatchStatus(status: string) {
-  switch (status) {
-    case "matched":
-      return ""
-    case "needs_review":
-      return "该条目的元数据需要人工复核后再确认。"
-    case "manual":
-      return "该条目当前使用人工治理结果。"
-    case "locked":
-      return "该条目的关键字段已锁定，刷新不会直接覆盖。"
-    case "pending":
-      return "该条目还未完成元数据匹配。"
-    case "searching":
-      return "系统正在为该条目搜索更准确的元数据。"
-    case "failed":
-      return "最近一次元数据匹配失败，可以尝试重新匹配。"
-    case "unmatched":
-      return "当前没有找到合适的元数据结果。"
-    default:
-      return ""
   }
 }
 

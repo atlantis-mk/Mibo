@@ -1,3 +1,7 @@
+---
+description: 根据任务复杂度和预算推荐合适模型
+---
+
 # Model Route Command
 
 Recommend the best model tier for the current task by complexity and budget.

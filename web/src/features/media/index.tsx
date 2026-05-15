@@ -176,7 +176,10 @@ export default function MediaDetail({
       }
 
       const api = createAuthedMiboApi(token)
-		const metadataItemId = itemQuery.data.metadata_item_id
+		const metadataItemId = itemQuery.data?.metadata_item_id
+		if (typeof metadataItemId !== "number") {
+		  throw new Error("当前媒体暂不支持收藏。")
+		}
       return favorite
         ? api.addFavorite(metadataItemId)
         : api.removeFavorite(metadataItemId)

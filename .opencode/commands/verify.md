@@ -1,6 +1,6 @@
 ---
 description: 运行验证循环以确认实现
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Verify Command

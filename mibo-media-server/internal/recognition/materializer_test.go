@@ -42,6 +42,32 @@ func TestMaterializeMetadataCreatesMovieOnce(t *testing.T) {
 	}
 }
 
+func TestMaterializeMetadataUpdatesExistingTitleFromCandidate(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	existing := database.MetadataItem{ItemType: database.MetadataItemTypeMovie, ContentForm: database.MetadataContentFormStandard, Title: "Old Title", SortTitle: "Old Title", SortKey: "/library/Movie Folder\x00work:movie:new-title:2024", GovernanceStatus: database.ReviewStatePending}
+	if err := db.Create(&existing).Error; err != nil {
+		t.Fatalf("create metadata item: %v", err)
+	}
+	materializer := NewMaterializer(db)
+	candidate := database.RecognitionCandidate{ID: 1, CandidateKey: "work:movie:new-title:2024", CandidateType: CandidateTypeWork, CandidateRole: WorkKindMovie, CanonicalKey: "work:movie:new-title:2024", EvidenceJSON: `{"title":"New Title"}`}
+	decision := database.RecognitionDecision{CandidateID: &candidate.ID, TargetKind: candidate.CandidateType, TargetKey: candidate.CandidateKey, Outcome: DecisionOutcomeAccepted}
+	graph := ManifestGraph{Manifest: database.RecognitionManifest{ScopePath: "/library/Movie Folder"}, Candidates: []database.RecognitionCandidate{candidate}}
+	if _, err := materializer.MaterializeMetadata(ctx, graph, []database.RecognitionDecision{decision}); err != nil {
+		t.Fatalf("materialize metadata: %v", err)
+	}
+	var updated database.MetadataItem
+	if err := db.First(&updated, existing.ID).Error; err != nil {
+		t.Fatalf("reload metadata item: %v", err)
+	}
+	if updated.Title != "New Title" || updated.SortTitle != "New Title" {
+		t.Fatalf("expected title refresh, got %#v", updated)
+	}
+}
+
 func TestMaterializeMetadataSeparatesMovieWorkByManifestScopePath(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -179,12 +205,19 @@ func TestMovieCollectionManifestMaterializesResourceLinksAfterRepositorySave(t *
 	if err != nil {
 		t.Fatalf("load graph: %v", err)
 	}
-	resolved := NewResolver(nil).Resolve(graph)
+	decisions := make([]database.RecognitionDecision, 0, len(graph.Candidates))
+	for _, candidate := range graph.Candidates {
+		switch candidate.CandidateType {
+		case CandidateTypeWork, CandidateTypePlayableResource:
+			candidateID := candidate.ID
+			decisions = append(decisions, database.RecognitionDecision{ManifestID: graph.Manifest.ID, CandidateID: &candidateID, DecisionType: "scanrecognition_outcome", Outcome: DecisionOutcomeAccepted, TargetKind: candidate.CandidateType, TargetKey: candidate.CandidateKey, TargetMetadataID: candidate.TargetMetadataID, TargetResourceID: candidate.TargetResourceID, Confidence: candidate.Confidence})
+		}
+	}
 	materializer := NewMaterializer(db)
-	if _, err := materializer.MaterializeMetadata(ctx, graph, resolved.Decisions); err != nil {
+	if _, err := materializer.MaterializeMetadata(ctx, graph, decisions); err != nil {
 		t.Fatalf("materialize metadata: %v", err)
 	}
-	if _, err := materializer.MaterializeResources(ctx, graph, resolved.Decisions); err != nil {
+	if _, err := materializer.MaterializeResources(ctx, graph, decisions); err != nil {
 		t.Fatalf("materialize resources: %v", err)
 	}
 

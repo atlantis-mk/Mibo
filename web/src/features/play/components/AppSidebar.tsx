@@ -20,7 +20,7 @@ import {
   TabsTrigger,
 } from "#/components/ui/tabs.tsx"
 
-export type PlaybackSidebarItem = {
+type PlaybackSidebarItem = {
   id: number
   title: string
   label?: string

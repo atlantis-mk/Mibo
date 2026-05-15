@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 )
 
 const (
@@ -142,7 +143,7 @@ func shouldPlanFlatEpisodeFolder(profile contentShapeDirectoryProfile, movieColl
 		return false
 	}
 	if strings.TrimSpace(profile.RootPath) != "" && strings.TrimSpace(profile.Path) != "" {
-		relative := relativePathSegments(profile.RootPath, profile.Path)
+		relative := scanrecognition.RelativePathSegments(profile.RootPath, profile.Path)
 		if len(relative) <= 1 {
 			return true
 		}
@@ -226,7 +227,7 @@ func contentShapeSeriesTitle(profile contentShapeDirectoryProfile) string {
 	if profile.CommonTitleStem == "" {
 		return ""
 	}
-	return cleanTitle(profile.CommonTitleStem)
+	return scanrecognition.CleanTitle(profile.CommonTitleStem)
 }
 
 func contentShapeDatabasePlan(scope contentShapeScope, profileID uint, plan contentShapeDirectoryPlan) database.ContentShapePlan {

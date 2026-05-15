@@ -1,3 +1,7 @@
+---
+description: 按需运行 ECC 质量流水线
+---
+
 # Quality Gate Command
 
 Run the ECC quality pipeline on demand for a file or project scope.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 )
@@ -156,20 +157,20 @@ func pathTreeFileSummaryFromObject(object storage.Object, indexedSignals map[str
 	if !ok {
 		signal = filenameTokenProfileForPath(tokenCache, storagePath)
 	}
-	return pathTreeFileSummary{StoragePath: storagePath, ParentPath: path.Dir(storagePath), Basename: path.Base(storagePath), Signal: signal, MovieWorkKey: normalizedMovieWorkKeyFromSignal(signal), IsVideo: true, IsExtra: signal.RoleHints.IsExtra}, true
+	return pathTreeFileSummary{StoragePath: storagePath, ParentPath: path.Dir(storagePath), Basename: path.Base(storagePath), Signal: signal, MovieWorkKey: normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year), IsVideo: true, IsExtra: signal.VideoSignal.IsExtra}, true
 }
 
-func normalizedMovieWorkKeyFromSignal(signal filenameSignalModel) pathTreeWorkKey {
-	title := pathTreeMovieTitleFromSignal(signal)
+func normalizedMovieWorkKeyFromSignal(videoSignal scanrecognition.VideoSignal, rawPathData filenameRawPathData, fallbackTitle string, fallbackYear *int) pathTreeWorkKey {
+	title := pathTreeMovieTitleFromSignal(videoSignal, rawPathData, fallbackTitle, fallbackYear)
 	if title == "" {
 		return pathTreeWorkKey{Kind: pathTreeWorkGroupShapeMovie}
 	}
 	normalizedTitle := titleclean.NormalizeMovieWorkTitle(title)
-	displayTitle := cleanTitle(title)
+	displayTitle := scanrecognition.CleanTitle(title)
 	if strings.EqualFold(titleclean.NormalizeMovieWorkTitle(displayTitle), normalizedTitle) {
 		displayTitle = titleTitleCase(normalizedTitle)
 	}
-	key := pathTreeWorkKey{Kind: pathTreeWorkGroupShapeMovie, Title: displayTitle, Year: signal.Identity.Year}
+	key := pathTreeWorkKey{Kind: pathTreeWorkGroupShapeMovie, Title: displayTitle, Year: preferredMovieYear(videoSignal, rawPathData, fallbackYear)}
 	key.Normalized = normalizedMovieWorkKeyString(key.Title, key.Year)
 	return key
 }
@@ -185,12 +186,26 @@ func titleTitleCase(input string) string {
 	return strings.Join(parts, " ")
 }
 
-func pathTreeMovieTitleFromSignal(signal filenameSignalModel) string {
-	if strings.TrimSpace(signal.Identity.TitleCandidate) != "" {
-		return signal.Identity.TitleCandidate
+func pathTreeMovieTitleFromSignal(videoSignal scanrecognition.VideoSignal, rawPathData filenameRawPathData, fallbackTitle string, fallbackYear *int) string {
+	if title := movieFolderTitleCandidateFromParts(videoSignal, rawPathData, fallbackTitle, fallbackYear); title != "" {
+		return title
 	}
-	rawTitle := strings.TrimSuffix(signal.RawPathData.Basename, signal.RawPathData.Extension)
-	return cleanTitle(titleclean.MovieWorkTitle(rawTitle))
+	if title := firstScanTitle(videoSignal.TitleCandidates); strings.TrimSpace(title) != "" {
+		return title
+	}
+	if title := strings.TrimSpace(fallbackTitle); title != "" {
+		return title
+	}
+	rawTitle := strings.TrimSuffix(rawPathData.Basename, rawPathData.Extension)
+	return scanrecognition.CleanTitle(titleclean.MovieWorkTitle(rawTitle))
+}
+
+func preferredMovieYear(videoSignal scanrecognition.VideoSignal, rawPathData filenameRawPathData, fallbackYear *int) *int {
+	folderSignal := scanrecognition.ParseFolderName(path.Base(strings.TrimSpace(rawPathData.Directory)))
+	if folderSignal.Season == nil && folderSignal.Year != nil {
+		return firstNonNilInt(folderSignal.Year, videoSignal.Year, fallbackYear)
+	}
+	return firstNonNilInt(videoSignal.Year, fallbackYear)
 }
 
 func normalizedMovieWorkKeyString(title string, year *int) string {
@@ -224,14 +239,14 @@ func pathTreeParentFingerprint(summary pathTreeParentSummary) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func pathTreeReleaseHintCount(signal filenameSignalModel) int {
+func pathTreeReleaseHintCount(videoSignal scanrecognition.VideoSignal) int {
 	count := 0
-	for _, value := range []string{signal.ReleaseHints.Quality, signal.ReleaseHints.Codec, signal.ReleaseHints.Audio, signal.ReleaseHints.Subtitle, signal.ReleaseHints.HDR, signal.ReleaseHints.Edition, signal.ReleaseHints.ReleaseGroup} {
+	for _, value := range []string{videoSignal.Quality, videoSignal.Codec, videoSignal.Audio, videoSignal.Subtitle, videoSignal.HDR, videoSignal.Edition, videoSignal.ReleaseGroup} {
 		if strings.TrimSpace(value) != "" {
 			count++
 		}
 	}
-	count += len(signal.ReleaseHints.SourceTags)
+	count += len(videoSignal.SourceTags)
 	return count
 }
 
@@ -249,11 +264,11 @@ func compileSiblingMovieVersionAssignmentsFromFiles(files []database.InventoryFi
 		if !ok {
 			signal = filenameTokenProfileForPath(tokenCache, storagePath)
 		}
-		if signal.RoleHints.IsExtra {
+		if signal.VideoSignal.IsExtra {
 			continue
 		}
-		workKey := normalizedMovieWorkKeyFromSignal(signal)
-		if strings.TrimSpace(workKey.Normalized) == "" || workKey.Year == nil || signal.Identity.EpisodeNumber != nil || len(signal.Identity.EpisodeNumbers) > 0 {
+		workKey := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
+		if strings.TrimSpace(workKey.Normalized) == "" || workKey.Year == nil || signal.VideoSignal.Episode != nil || len(signal.VideoSignal.EpisodeNumbers) > 0 {
 			continue
 		}
 		childDir := path.Dir(storagePath)
@@ -285,7 +300,7 @@ func compileSiblingMovieVersionAssignmentsFromFiles(files []database.InventoryFi
 			sort.Slice(childFiles, func(i, j int) bool { return childFiles[i].Summary.StoragePath < childFiles[j].Summary.StoragePath })
 			targetKey := pathTreeMovieVersionTargetPath(parentDir, childFiles[0].Summary.MovieWorkKey)
 			for _, child := range childFiles {
-				evidence := map[string]any{"source": "path_tree_work_group", "shape": pathTreeWorkGroupShapeMovieVersionGroup, "work_key": workKey, "parent_path": parentDir, "release_hint_count": pathTreeReleaseHintCount(child.Summary.Signal), "title": child.Summary.MovieWorkKey.Title}
+				evidence := map[string]any{"source": "path_tree_work_group", "shape": pathTreeWorkGroupShapeMovieVersionGroup, "work_key": workKey, "parent_path": parentDir, "release_hint_count": pathTreeReleaseHintCount(child.Summary.Signal.VideoSignal), "title": child.Summary.MovieWorkKey.Title}
 				if child.Summary.MovieWorkKey.Year != nil {
 					evidence["year"] = *child.Summary.MovieWorkKey.Year
 				}
@@ -310,10 +325,10 @@ func compileMovieCollectionAssignmentsFromFiles(files []database.InventoryFile, 
 		if !ok {
 			signal = filenameTokenProfileForPath(tokenCache, storagePath)
 		}
-		if signal.RoleHints.IsExtra || signal.Identity.EpisodeNumber != nil || len(signal.Identity.EpisodeNumbers) > 0 {
+		if signal.VideoSignal.IsExtra || signal.VideoSignal.Episode != nil || len(signal.VideoSignal.EpisodeNumbers) > 0 {
 			continue
 		}
-		workKey := normalizedMovieWorkKeyFromSignal(signal)
+		workKey := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
 		if strings.TrimSpace(workKey.Normalized) == "" || workKey.Year == nil {
 			continue
 		}
@@ -343,7 +358,7 @@ func pathTreeMovieCollectionParentDir(childDir string, workKey pathTreeWorkKey) 
 		return trimmed
 	}
 	dirSignal := extractFilenameSignalModel(path.Base(trimmed) + ".mkv")
-	dirKey := normalizedMovieWorkKeyFromSignal(dirSignal)
+	dirKey := normalizedMovieWorkKeyFromSignal(dirSignal.VideoSignal, dirSignal.RawPathData, dirSignal.Identity.TitleCandidate, dirSignal.Identity.Year)
 	if strings.TrimSpace(dirKey.Normalized) == strings.TrimSpace(workKey.Normalized) {
 		parent := path.Dir(trimmed)
 		if parent != "." && parent != trimmed {
@@ -382,8 +397,9 @@ func compilePathTreeSeriesAssignmentsFromFiles(files []database.InventoryFile, l
 			continue
 		}
 		childDir := path.Dir(storagePath)
-		season := parseSeasonDirectoryNumber(path.Base(childDir))
-		seriesTitle := seriesTitleFromEmbeddedSeasonDirectory(path.Base(childDir))
+		folderSignal := scanrecognition.ParseFolderName(path.Base(childDir))
+		season := folderSignal.Season
+		seriesTitle := firstScanTitle(folderSignal.TitleCandidates)
 		if season == nil || strings.TrimSpace(seriesTitle) == "" {
 			continue
 		}
@@ -391,8 +407,8 @@ func compilePathTreeSeriesAssignmentsFromFiles(files []database.InventoryFile, l
 		if !ok {
 			signal = filenameTokenProfileForPath(tokenCache, storagePath)
 		}
-		episode := signal.Identity.EpisodeNumber
-		if episode == nil || signal.RoleHints.IsExtra {
+		episode := signal.VideoSignal.Episode
+		if episode == nil || signal.VideoSignal.IsExtra {
 			continue
 		}
 		parentDir := path.Dir(childDir)
@@ -513,7 +529,7 @@ func pathTreeMovieVersionAssignmentsForRule(files []database.InventoryFile, rule
 	}
 	_ = json.Unmarshal([]byte(strings.TrimSpace(rule.PayloadJSON)), &payload)
 	if strings.TrimSpace(payload.Title) == "" {
-		payload.Title = cleanTitle(path.Base(strings.TrimSpace(rule.PathPattern)))
+		payload.Title = scanrecognition.CleanTitle(path.Base(strings.TrimSpace(rule.PathPattern)))
 	}
 	target := pathTreeMovieVersionTargetPath(strings.TrimSpace(rule.PathPattern), pathTreeWorkKey{Title: payload.Title, Year: payload.Year, Normalized: normalizedMovieWorkKeyString(payload.Title, payload.Year)})
 	assignments := make(map[string]pathTreeWorkGroupAssignment)
@@ -537,7 +553,7 @@ func pathTreeIndependentMovieAssignmentsForRule(files []database.InventoryFile, 
 			continue
 		}
 		signal := pathTreeSignalForFile(file.StoragePath, indexedSignals, tokenCache)
-		workKey := normalizedMovieWorkKeyFromSignal(signal)
+		workKey := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
 		if strings.TrimSpace(workKey.Normalized) == "" {
 			continue
 		}
@@ -549,7 +565,7 @@ func pathTreeIndependentMovieAssignmentsForRule(files []database.InventoryFile, 
 func pathTreeSeriesAssignmentsForRule(files []database.InventoryFile, rule database.ClassificationRule, indexedSignals map[string]filenameSignalModel, tokenCache *filenameTokenProfileCache) map[string]pathTreeWorkGroupAssignment {
 	seriesTitle := strings.TrimSpace(rule.SeriesTitle)
 	if seriesTitle == "" {
-		seriesTitle = cleanTitle(path.Base(strings.TrimSpace(rule.PathPattern)))
+		seriesTitle = scanrecognition.CleanTitle(path.Base(strings.TrimSpace(rule.PathPattern)))
 	}
 	assignments := make(map[string]pathTreeWorkGroupAssignment)
 	for _, file := range files {
@@ -557,8 +573,8 @@ func pathTreeSeriesAssignmentsForRule(files []database.InventoryFile, rule datab
 			continue
 		}
 		signal := pathTreeSignalForFile(file.StoragePath, indexedSignals, tokenCache)
-		season := firstNonNilInt(signal.Identity.SeasonNumber, signal.PathHints.SeasonNumber, parseSeasonDirectoryNumber(path.Base(path.Dir(file.StoragePath))), rule.SeasonNumber)
-		episode := signal.Identity.EpisodeNumber
+		season := firstNonNilInt(signal.VideoSignal.Season, signal.PathHints.SeasonNumber, scanrecognition.ParseFolderName(path.Base(path.Dir(file.StoragePath))).Season, rule.SeasonNumber)
+		episode := signal.VideoSignal.Episode
 		if season == nil || episode == nil {
 			continue
 		}
@@ -595,11 +611,11 @@ func compileAmbiguousPathTreeReviewAssignmentsFromFiles(files []database.Invento
 		if !ok {
 			signal = filenameTokenProfileForPath(tokenCache, storagePath)
 		}
-		if signal.RoleHints.IsExtra {
+		if signal.VideoSignal.IsExtra {
 			continue
 		}
-		workKey := normalizedMovieWorkKeyFromSignal(signal)
-		if strings.TrimSpace(workKey.Normalized) == "" || workKey.Year != nil || signal.Identity.EpisodeNumber != nil || len(signal.Identity.EpisodeNumbers) > 0 {
+		workKey := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
+		if strings.TrimSpace(workKey.Normalized) == "" || workKey.Year != nil || signal.VideoSignal.Episode != nil || len(signal.VideoSignal.EpisodeNumbers) > 0 {
 			continue
 		}
 		parentPath := path.Dir(path.Dir(storagePath))
@@ -720,7 +736,7 @@ func pathTreeMovieCollectionEvidence(children []pathTreeMovieCollectionChild) bo
 	uniqueKeys := make(map[string]struct{}, len(children))
 	for _, child := range children {
 		key := strings.TrimSpace(child.Summary.MovieWorkKey.Normalized)
-		if key == "" || child.Summary.MovieWorkKey.Year == nil || child.Summary.Signal.Identity.EpisodeNumber != nil || len(child.Summary.Signal.Identity.EpisodeNumbers) > 0 {
+		if key == "" || child.Summary.MovieWorkKey.Year == nil || child.Summary.Signal.VideoSignal.Episode != nil || len(child.Summary.Signal.VideoSignal.EpisodeNumbers) > 0 {
 			return false
 		}
 		uniqueKeys[key] = struct{}{}
@@ -735,7 +751,7 @@ func pathTreeSiblingMovieVersionsHaveReleaseEvidence(children []pathTreeSiblingM
 	withReleaseHints := 0
 	basenames := make(map[string]struct{}, len(children))
 	for _, child := range children {
-		if pathTreeReleaseHintCount(child.Summary.Signal) > 0 {
+		if pathTreeReleaseHintCount(child.Summary.Signal.VideoSignal) > 0 {
 			withReleaseHints++
 		}
 		base := titleclean.NormalizeMovieWorkTitle(strings.TrimSuffix(path.Base(child.Summary.StoragePath), path.Ext(child.Summary.StoragePath)))
@@ -749,7 +765,7 @@ func pathTreeSiblingMovieVersionsHaveReleaseEvidence(children []pathTreeSiblingM
 func pathTreeMovieVersionTargetPath(parentPath string, key pathTreeWorkKey) string {
 	title := strings.TrimSpace(key.Title)
 	if title == "" {
-		title = cleanTitle(key.Normalized)
+		title = scanrecognition.CleanTitle(key.Normalized)
 	}
 	if key.Year != nil {
 		return path.Join(strings.TrimSpace(parentPath), fmt.Sprintf("%s (%d)", title, *key.Year))

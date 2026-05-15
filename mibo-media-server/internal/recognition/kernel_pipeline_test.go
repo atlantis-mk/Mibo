@@ -6,7 +6,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 )
 
-func TestConstructGraphFromInventoryUsesKernelLayersForGoldenFixtures(t *testing.T) {
+func TestBuildKernelDecisionsUsesKernelLayersForGoldenFixtures(t *testing.T) {
 	for _, fixture := range goldenRecognitionFixtures() {
 		t.Run(fixture.Name, func(t *testing.T) {
 			output := ConstructGraphFromInventory(ManifestBuildInput{Scope: ManifestScope{LibraryID: 1, RootPath: fixture.LibraryRoot, ScopePath: fixture.LibraryRoot, StorageProvider: "local"}, Files: fixture.Files, FileSignals: signalsByGoldenFixtureFileID(fixture)})
@@ -18,7 +18,11 @@ func TestConstructGraphFromInventoryUsesKernelLayersForGoldenFixtures(t *testing
 					t.Fatalf("expected evidence key %s in %#v", key, output.Evidence)
 				}
 			}
-			result := NewResolver(nil).Resolve(ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: output.Candidates, Evidence: output.Evidence})
+			graph := ManifestGraph{Manifest: database.RecognitionManifest{ID: 1}, Candidates: output.Candidates, Evidence: output.Evidence}
+			constraints := ApplyHardConstraints(graph.Candidates, graph.Evidence)
+			inference := InferConsistentCandidateGraph(graph.Candidates, constraints)
+			scores := ScoreCandidates(inference.AcceptedCandidates, graph.Evidence)
+			result := BuildKernelDecisions(graph.Manifest, inference, constraints, scores)
 			assertGoldenDecisions(t, fixture, result)
 		})
 	}

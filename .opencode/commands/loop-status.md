@@ -1,3 +1,7 @@
+---
+description: 查看循环状态、进度和故障信号
+---
+
 # Loop Status Command
 
 Inspect active loop state, progress, and failure signals.

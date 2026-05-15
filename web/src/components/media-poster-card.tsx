@@ -138,6 +138,9 @@ export function MediaPosterCard({
       const api = createAuthedMiboApi(token)
       if (isInventoryOnly) throw new Error("生成条目后可收藏。")
 		const metadataItemId = item.metadata_item_id
+		if (typeof metadataItemId !== "number") {
+		  throw new Error("生成条目后可收藏。")
+		}
 		return favorite
         ? api.addFavorite(metadataItemId)
         : api.removeFavorite(metadataItemId)
@@ -555,39 +558,6 @@ async function invalidateMediaCardQueries(
     queryClient.invalidateQueries({ queryKey: ["catalog", "detail"] }),
     queryClient.invalidateQueries({ queryKey: ["catalog", "series-seasons"] }),
   ])
-}
-
-export function MediaRail({
-  title,
-  href,
-  children,
-}: {
-  title: string
-  href?: { type?: "movie" | "show" }
-  children: ReactNode
-}) {
-  return (
-    <section>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        {href ? (
-          <Link
-            to="/library"
-            search={{ type: href.type }}
-            className="text-xl font-semibold tracking-tight text-foreground underline-offset-4 hover:underline"
-          >
-            {title}
-          </Link>
-        ) : (
-          <h2 className="text-xl font-semibold tracking-tight text-foreground">
-            {title}
-          </h2>
-        )}
-      </div>
-      <div className="overflow-x-auto pb-3">
-        <div className="flex min-w-max gap-4">{children}</div>
-      </div>
-    </section>
-  )
 }
 
 export function MediaLandscapeCard({

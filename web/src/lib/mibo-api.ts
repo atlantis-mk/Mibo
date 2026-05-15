@@ -1587,8 +1587,6 @@ type ApiOptions = {
   token?: string | null
 }
 
-export const TOKEN_STORAGE_KEY = "mibo-web-token"
-
 let isRedirectingToLogin = false
 
 export class ApiError extends Error {

@@ -1,3 +1,7 @@
+---
+description: 以安全默认值启动受控自治循环
+---
+
 # Loop Start Command
 
 Start a managed autonomous loop pattern with safety defaults.

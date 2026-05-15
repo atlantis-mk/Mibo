@@ -1,6 +1,6 @@
 ---
 description: 审查 Go 代码的惯用模式
-agent: everything-claude-code:go-reviewer
+agent: go-reviewer
 subtask: true
 ---
 

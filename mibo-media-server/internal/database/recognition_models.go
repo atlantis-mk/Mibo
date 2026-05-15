@@ -109,26 +109,3 @@ type RecognitionConflict struct {
 }
 
 func (RecognitionConflict) TableName() string { return "recognition_conflicts" }
-
-type RecognitionRule struct {
-	ID              uint       `gorm:"primaryKey" json:"id"`
-	RuleKey         string     `gorm:"size:255;not null;uniqueIndex" json:"rule_key"`
-	LibraryID       uint       `gorm:"not null;index:idx_recognition_rules_library_enabled,priority:1" json:"library_id"`
-	MediaSourceID   uint       `gorm:"not null;default:0;index" json:"media_source_id"`
-	StorageProvider string     `gorm:"size:64;not null;index" json:"storage_provider"`
-	ScopePath       string     `gorm:"size:2048;not null;index" json:"scope_path"`
-	RuleType        string     `gorm:"size:64;not null;index" json:"rule_type"`
-	CandidateType   string     `gorm:"size:64;index" json:"candidate_type"`
-	Action          string     `gorm:"size:64;not null;index" json:"action"`
-	Priority        int        `gorm:"not null;default:100;index" json:"priority"`
-	PayloadJSON     string     `gorm:"type:text" json:"payload_json"`
-	EvidenceJSON    string     `gorm:"type:text" json:"evidence_json"`
-	Enabled         bool       `gorm:"not null;default:true;index:idx_recognition_rules_library_enabled,priority:2" json:"enabled"`
-	CreatedByUserID *uint      `gorm:"index" json:"created_by_user_id,omitempty"`
-	UpdatedByUserID *uint      `gorm:"index" json:"updated_by_user_id,omitempty"`
-	DisabledAt      *time.Time `gorm:"index" json:"disabled_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-}
-
-func (RecognitionRule) TableName() string { return "recognition_rules" }

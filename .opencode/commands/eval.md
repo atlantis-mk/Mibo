@@ -1,6 +1,6 @@
 ---
 description: 按验收标准运行评估
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Eval Command

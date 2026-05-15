@@ -1,6 +1,6 @@
 ---
 description: 更新近期变更的文档
-agent: everything-claude-code:doc-updater
+agent: doc-updater
 subtask: true
 ---
 

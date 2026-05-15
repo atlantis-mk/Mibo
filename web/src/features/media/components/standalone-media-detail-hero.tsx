@@ -332,8 +332,8 @@ export function DetailHeroSection({
             <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
               <span className="font-medium text-foreground">你的进度</span>
               <span>
-                {formatSeconds(progress.position_seconds)} /{" "}
-                {formatSeconds(progress.duration_seconds)}
+                {formatSeconds(progress?.position_seconds ?? 0)} /{" "}
+                {formatSeconds(progress?.duration_seconds ?? 0)}
               </span>
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
@@ -343,7 +343,7 @@ export function DetailHeroSection({
               />
             </div>
             <div className="mt-2 text-xs text-muted-foreground">
-              {progress.watched ? "已看完" : "继续观看中"} ·{" "}
+              {progress?.watched ? "已看完" : "继续观看中"} ·{" "}
               {itemProgressPercent}%
             </div>
           </div>

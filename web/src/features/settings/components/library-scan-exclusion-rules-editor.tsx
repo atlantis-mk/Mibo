@@ -17,7 +17,7 @@ export type LibraryScanExclusionRuleDraft = ScanExclusionRuleInput & {
   id?: number
 }
 
-export const EMPTY_SCAN_EXCLUSION_RULE_DRAFT: LibraryScanExclusionRuleDraft = {
+const EMPTY_SCAN_EXCLUSION_RULE_DRAFT: LibraryScanExclusionRuleDraft = {
   name: '',
   description: '',
   rule_type: 'filename_token',

@@ -1,6 +1,6 @@
 ---
 description: 以最小改动修复构建和 TypeScript 错误
-agent: everything-claude-code:build-error-resolver
+agent: build-error-resolver
 subtask: true
 ---
 

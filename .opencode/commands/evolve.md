@@ -1,6 +1,6 @@
 ---
 description: 分析直觉并建议或生成演进后的结构
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Evolve Command

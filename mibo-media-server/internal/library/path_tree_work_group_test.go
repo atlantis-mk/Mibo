@@ -25,7 +25,8 @@ func TestNormalizedMovieWorkKeySuppressesReleaseHints(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			key := normalizedMovieWorkKeyFromSignal(extractFilenameSignalModel(tt.path))
+			signal := extractFilenameSignalModel(tt.path)
+			key := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
 			if key.Normalized != tt.want {
 				t.Fatalf("expected %q, got %q from title %q", tt.want, key.Normalized, key.Title)
 			}
@@ -34,13 +35,23 @@ func TestNormalizedMovieWorkKeySuppressesReleaseHints(t *testing.T) {
 }
 
 func TestNormalizedMovieWorkKeyKeepsMaterialDifferences(t *testing.T) {
-	first := normalizedMovieWorkKeyFromSignal(extractFilenameSignalModel("/movies/Alien.1979.1080p.BluRay.x265.mkv"))
-	second := normalizedMovieWorkKeyFromSignal(extractFilenameSignalModel("/movies/Aliens.1986.1080p.BluRay.x265.mkv"))
+	firstSignal := extractFilenameSignalModel("/movies/Alien.1979.1080p.BluRay.x265.mkv")
+	secondSignal := extractFilenameSignalModel("/movies/Aliens.1986.1080p.BluRay.x265.mkv")
+	first := normalizedMovieWorkKeyFromSignal(firstSignal.VideoSignal, firstSignal.RawPathData, firstSignal.Identity.TitleCandidate, firstSignal.Identity.Year)
+	second := normalizedMovieWorkKeyFromSignal(secondSignal.VideoSignal, secondSignal.RawPathData, secondSignal.Identity.TitleCandidate, secondSignal.Identity.Year)
 	if first.Normalized == "" || second.Normalized == "" {
 		t.Fatalf("expected keys, got %q and %q", first.Normalized, second.Normalized)
 	}
 	if first.Normalized == second.Normalized {
 		t.Fatalf("expected distinct keys, both were %q", first.Normalized)
+	}
+}
+
+func TestNormalizedMovieWorkKeyPrefersMovieFolderName(t *testing.T) {
+	signal := extractFilenameSignalModel("/movies/The Matrix (1999)/file.mkv")
+	key := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
+	if key.Normalized != "the matrix:1999" {
+		t.Fatalf("expected movie folder work key, got %#v", key)
 	}
 }
 

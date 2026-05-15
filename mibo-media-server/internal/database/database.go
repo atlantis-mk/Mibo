@@ -77,7 +77,6 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		&RecognitionEvidence{},
 		&RecognitionDecision{},
 		&RecognitionConflict{},
-		&RecognitionRule{},
 		&MediaGraphNode{},
 		&MediaGraphEdge{},
 		&MediaGraphClassification{},
@@ -131,6 +130,10 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	if err := removeRetiredDevelopmentColumns(db); err != nil {
+		return nil, err
+	}
+
+	if err := removeRetiredDevelopmentTables(db); err != nil {
 		return nil, err
 	}
 
@@ -217,6 +220,22 @@ func removeRetiredDevelopmentColumns(db *gorm.DB) error {
 	return nil
 }
 
+func removeRetiredDevelopmentTables(db *gorm.DB) error {
+	retiredTables := []string{
+		"recognition_shadow_runs",
+		"recognition_rules",
+	}
+	for _, table := range retiredTables {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Migrator().DropTable(table); err != nil {
+			return fmt.Errorf("drop retired table %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func ensureCatalogKernelIndexes(db *gorm.DB) error {
 	requiredIndexes := []struct {
 		model any
@@ -272,7 +291,6 @@ func ensureCatalogKernelIndexes(db *gorm.DB) error {
 		{&RecognitionEvidence{}, "idx_recognition_evidence_kind"},
 		{&RecognitionDecision{}, "idx_recognition_decisions_manifest_status"},
 		{&RecognitionConflict{}, "idx_recognition_conflicts_manifest_status"},
-		{&RecognitionRule{}, "idx_recognition_rules_library_enabled"},
 		{&ScanExclusion{}, "idx_scan_exclusions_identity"},
 		{&ScanExclusion{}, "idx_scan_exclusions_path"},
 		{&FilenameExclusionRule{}, "idx_filename_exclusion_rules_normalized_filename"},

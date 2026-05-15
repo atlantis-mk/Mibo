@@ -108,7 +108,7 @@ export function libraryFormMetadataStrategyInput(
   }
 }
 
-export function deriveLibraryNameFromPath(path: string): string {
+function deriveLibraryNameFromPath(path: string): string {
   const trimmedPath = path.trim().replace(/[\\/]+$/, "")
   if (!trimmedPath) return ""
 

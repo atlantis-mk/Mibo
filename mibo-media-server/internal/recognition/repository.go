@@ -44,8 +44,12 @@ type ManifestGraph struct {
 }
 
 func (r *Repository) UpsertManifest(ctx context.Context, scope ManifestScope) (database.RecognitionManifest, error) {
+	manifestKey := strings.TrimSpace(scope.ManifestKey)
+	if manifestKey == "" {
+		manifestKey = ManifestKey(Scope{StorageProvider: scope.StorageProvider, RootPath: scope.RootPath, ScopePath: scope.ScopePath}, scope.ClassifierVersion)
+	}
 	manifest := database.RecognitionManifest{
-		ManifestKey:       strings.TrimSpace(scope.ManifestKey),
+		ManifestKey:       manifestKey,
 		LibraryID:         scope.LibraryID,
 		MediaSourceID:     scope.MediaSourceID,
 		LibraryPathID:     scope.LibraryPathID,
@@ -73,6 +77,31 @@ func (r *Repository) UpsertManifest(ctx context.Context, scope ManifestScope) (d
 		return database.RecognitionManifest{}, err
 	}
 	return manifest, nil
+}
+
+func (r *Repository) ReplaceCandidatesAndEvidence(ctx context.Context, manifestID uint, candidates []database.RecognitionCandidate, evidence []database.RecognitionEvidence) error {
+	if manifestID == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.RecognitionCandidate{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("manifest_id = ?", manifestID).Delete(&database.RecognitionEvidence{}).Error; err != nil {
+			return err
+		}
+		if len(candidates) > 0 {
+			if err := NewRepository(tx).SaveCandidates(ctx, candidates); err != nil {
+				return err
+			}
+		}
+		if len(evidence) > 0 {
+			if err := tx.CreateInBatches(&evidence, 100).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *Repository) LoadManifestByKey(ctx context.Context, manifestKey string) (database.RecognitionManifest, bool, error) {
@@ -248,58 +277,6 @@ func (r *Repository) SupersedeManifest(ctx context.Context, manifestID uint, at 
 	})
 }
 
-func (r *Repository) ListOpenManifestsForLibrary(ctx context.Context, libraryID uint) ([]database.RecognitionManifest, error) {
-	if libraryID == 0 {
-		return nil, nil
-	}
-	var manifests []database.RecognitionManifest
-	err := r.db.WithContext(ctx).
-		Where("library_id = ? AND superseded_at IS NULL AND status <> ?", libraryID, "superseded").
-		Order("observed_at asc, id asc").
-		Find(&manifests).Error
-	return manifests, err
-}
-
-func (r *Repository) LoadLibraryGraphs(ctx context.Context, libraryID uint) ([]ManifestGraph, error) {
-	manifests, err := r.ListOpenManifestsForLibrary(ctx, libraryID)
-	if err != nil || len(manifests) == 0 {
-		return nil, err
-	}
-	graphs := make([]ManifestGraph, 0, len(manifests))
-	for _, manifest := range manifests {
-		graph, loadErr := r.LoadManifestGraph(ctx, manifest.ID)
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		graphs = append(graphs, graph)
-	}
-	return graphs, nil
-}
-
-func (r *Repository) FindCandidatesByInventoryFile(ctx context.Context, inventoryFileID uint) ([]database.RecognitionCandidate, error) {
-	if inventoryFileID == 0 {
-		return nil, nil
-	}
-	var candidates []database.RecognitionCandidate
-	err := r.db.WithContext(ctx).
-		Where("primary_inventory_id = ? AND superseded_at IS NULL", inventoryFileID).
-		Order("id asc").
-		Find(&candidates).Error
-	return candidates, err
-}
-
-func (r *Repository) FindCandidatesByTargetMetadata(ctx context.Context, metadataID uint) ([]database.RecognitionCandidate, error) {
-	if metadataID == 0 {
-		return nil, nil
-	}
-	var candidates []database.RecognitionCandidate
-	err := r.db.WithContext(ctx).
-		Where("target_metadata_id = ? AND superseded_at IS NULL", metadataID).
-		Order("id asc").
-		Find(&candidates).Error
-	return candidates, err
-}
-
 func (r *Repository) DeleteLibraryManifests(ctx context.Context, libraryID uint) error {
 	if libraryID == 0 {
 		return nil
@@ -320,39 +297,4 @@ func (r *Repository) DeleteLibraryManifests(ctx context.Context, libraryID uint)
 		}
 		return tx.Where("library_id = ?", libraryID).Delete(&database.RecognitionManifest{}).Error
 	})
-}
-
-func (r *Repository) UpsertRule(ctx context.Context, rule database.RecognitionRule) (database.RecognitionRule, error) {
-	rule.RuleKey = strings.TrimSpace(rule.RuleKey)
-	err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "rule_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"library_id", "media_source_id", "storage_provider", "scope_path", "rule_type", "candidate_type", "action", "priority", "payload_json", "evidence_json", "enabled", "updated_by_user_id", "disabled_at", "updated_at",
-		}),
-	}).Create(&rule).Error
-	if err != nil {
-		return database.RecognitionRule{}, err
-	}
-	if err := r.db.WithContext(ctx).Where("rule_key = ?", rule.RuleKey).First(&rule).Error; err != nil {
-		return database.RecognitionRule{}, err
-	}
-	return rule, nil
-}
-
-func (r *Repository) LoadEnabledRules(ctx context.Context, libraryID uint, storageProvider string, scopePath string) ([]database.RecognitionRule, error) {
-	if libraryID == 0 {
-		return nil, nil
-	}
-	trimmedProvider := strings.TrimSpace(storageProvider)
-	trimmedScope := strings.TrimSpace(scopePath)
-	var rules []database.RecognitionRule
-	query := r.db.WithContext(ctx).Where("library_id = ? AND enabled = ?", libraryID, true)
-	if trimmedProvider != "" {
-		query = query.Where("storage_provider = ?", trimmedProvider)
-	}
-	if trimmedScope != "" {
-		query = query.Where("scope_path = ? OR ? LIKE scope_path || '/%'", trimmedScope, trimmedScope)
-	}
-	err := query.Order("priority asc, id asc").Find(&rules).Error
-	return rules, err
 }

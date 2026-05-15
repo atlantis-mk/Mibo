@@ -1,6 +1,6 @@
 ---
 description: 使用表驱动测试的 Go TDD 流程
-agent: everything-claude-code:tdd-guide
+agent: tdd-guide
 subtask: true
 ---
 

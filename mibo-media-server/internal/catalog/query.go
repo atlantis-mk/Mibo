@@ -186,6 +186,12 @@ func (s *Service) discoveredBrowseEntries(ctx context.Context, input BrowseItems
 		Where("inventory_files.status = ?", "available").
 		Where("inventory_files.content_class = ?", "video").
 		Where(`NOT EXISTS (
+			SELECT 1 FROM recognition_candidates
+			WHERE recognition_candidates.primary_inventory_id = inventory_files.id
+			AND recognition_candidates.candidate_type = ?
+			AND recognition_candidates.superseded_at IS NULL
+		)`, "supplemental").
+		Where(`NOT EXISTS (
 			SELECT 1 FROM resource_files
 			JOIN resource_metadata_links ON resource_metadata_links.resource_id = resource_files.resource_id
 			JOIN metadata_items ON metadata_items.id = resource_metadata_links.metadata_item_id AND metadata_items.deleted_at IS NULL

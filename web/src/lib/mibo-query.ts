@@ -358,18 +358,6 @@ export function librariesQueryOptions(token: string) {
   })
 }
 
-export function libraryMetadataStrategyQueryOptions(
-  token: string,
-  libraryId: number
-) {
-  return queryOptions({
-    queryKey: miboQueryKeys.libraryMetadataStrategy(token, libraryId),
-    queryFn: () =>
-      createAuthedMiboApi(token).getLibraryMetadataStrategy(libraryId),
-    enabled: libraryId > 0,
-  })
-}
-
 export function scanExclusionsQueryOptions(
   token: string,
   filters: { libraryId?: number; enabled?: boolean }
@@ -394,14 +382,6 @@ export function schedulesQueryOptions(token: string) {
   })
 }
 
-export function scheduleDetailQueryOptions(token: string, scheduleId: number) {
-  return queryOptions({
-    queryKey: miboQueryKeys.scheduleDetail(token, scheduleId),
-    queryFn: () => createAuthedMiboApi(token).getSchedule(scheduleId),
-    enabled: scheduleId > 0,
-  })
-}
-
 export function scheduleHistoryQueryOptions(token: string, scheduleId: number) {
   return queryOptions({
     queryKey: miboQueryKeys.scheduleHistory(token, scheduleId),
@@ -417,12 +397,5 @@ export function workflowsQueryOptions(
   return queryOptions({
     queryKey: miboQueryKeys.workflows(token, filters),
     queryFn: () => createAuthedMiboApi(token).listWorkflows(filters),
-  })
-}
-
-export function workflowDiagnosticsQueryOptions(token: string) {
-  return queryOptions({
-    queryKey: miboQueryKeys.workflowDiagnostics(token),
-    queryFn: () => createAuthedMiboApi(token).getWorkflowDiagnostics(),
   })
 }

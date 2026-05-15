@@ -1,6 +1,6 @@
 ---
 description: 从质量、安全性和可维护性角度审查代码
-agent: everything-claude-code:code-reviewer
+agent: code-reviewer
 subtask: true
 ---
 

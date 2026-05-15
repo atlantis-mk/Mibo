@@ -1,6 +1,6 @@
 ---
 description: 配置包管理器偏好
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Setup Package Manager Command

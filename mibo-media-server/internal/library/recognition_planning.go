@@ -3,36 +3,13 @@ package library
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
-	"gorm.io/gorm"
 )
 
-func savePathTreeReviewDecision(ctx context.Context, db *gorm.DB, libraryID uint, parentPath string, assignments map[string]pathTreeWorkGroupAssignment, reason string) error {
-	if db == nil || len(assignments) == 0 {
-		return nil
-	}
-	affected := make([]string, 0, len(assignments))
-	evidence := make([]map[string]any, 0, len(assignments))
-	confidence := 1.0
-	for storagePath, assignment := range assignments {
-		affected = append(affected, storagePath)
-		if assignment.Confidence > 0 && assignment.Confidence < confidence {
-			confidence = assignment.Confidence
-		}
-		evidence = append(evidence, map[string]any{"storage_path": storagePath, "assignment_type": assignment.AssignmentType, "target_key": assignment.TargetKey, "evidence": assignment.Evidence})
-	}
-	if confidence == 1.0 {
-		confidence = 0.5
-	}
-	sort.Strings(affected)
-	return db.WithContext(ctx).Create(&database.ClassificationDecision{LibraryID: libraryID, SourcePath: strings.TrimSpace(parentPath), DecisionType: "path_tree_work_group", CandidateType: pathTreeWorkGroupShapeReview, TargetKind: "work_group", TargetKey: strings.TrimSpace(parentPath), Status: scanDecisionStatusProvisional, Confidence: &confidence, EvidenceJSON: mustJSON(evidence), AffectedFilesJSON: mustJSON(affected), AlternativesJSON: mustJSON([]string{pathTreeWorkGroupShapeMovieVersionGroup, pathTreeWorkGroupShapeMovieCollection, pathTreeWorkGroupShapeSeries}), Reason: strings.TrimSpace(reason)}).Error
-}
-
-func (s *Service) contentShapePlanForRecognitionDirectory(ctx context.Context, config EffectiveLibraryConfig, pathRecord database.LibraryPath, provider storage.Provider, snapshot scanDirectorySnapshot, batchState *recognitionBatchState) (contentShapeDirectoryPlan, error) {
+func (s *Service) contentShapeCachePlanForDirectory(ctx context.Context, config EffectiveLibraryConfig, pathRecord database.LibraryPath, provider storage.Provider, snapshot scanDirectorySnapshot, batchState *recognitionBatchState) (contentShapeDirectoryPlan, error) {
 	if batchState == nil {
 		return contentShapeDirectoryPlan{}, nil
 	}
@@ -72,12 +49,12 @@ func (s *Service) contentShapePlanForRecognitionDirectory(ctx context.Context, c
 		return contentShapeDirectoryPlan{}, err
 	}
 	if reusedPlan {
-		return s.reuseRecognitionContentShapePlan(ctx, key, snapshot, profileRecord, planRecord, batchState)
+		return s.reuseCachedContentShapePlan(ctx, key, snapshot, profileRecord, planRecord, batchState)
 	}
-	return s.compileRecognitionContentShapePlan(ctx, key, scope, snapshot, builtProfile, profileRecord, batchState)
+	return s.compileCachedContentShapePlan(ctx, key, scope, snapshot, builtProfile, profileRecord, batchState)
 }
 
-func (s *Service) reuseRecognitionContentShapePlan(ctx context.Context, key string, snapshot scanDirectorySnapshot, profileRecord database.ContentShapeProfile, planRecord database.ContentShapePlan, batchState *recognitionBatchState) (contentShapeDirectoryPlan, error) {
+func (s *Service) reuseCachedContentShapePlan(ctx context.Context, key string, snapshot scanDirectorySnapshot, profileRecord database.ContentShapeProfile, planRecord database.ContentShapePlan, batchState *recognitionBatchState) (contentShapeDirectoryPlan, error) {
 	if batchState != nil && batchState.shapeCounters != nil {
 		batchState.shapeCounters.PlanReuses++
 	}
@@ -100,7 +77,7 @@ func (s *Service) reuseRecognitionContentShapePlan(ctx context.Context, key stri
 	return plan, nil
 }
 
-func (s *Service) compileRecognitionContentShapePlan(ctx context.Context, key string, scope contentShapeScope, snapshot scanDirectorySnapshot, builtProfile contentShapeDirectoryProfile, profileRecord database.ContentShapeProfile, batchState *recognitionBatchState) (contentShapeDirectoryPlan, error) {
+func (s *Service) compileCachedContentShapePlan(ctx context.Context, key string, scope contentShapeScope, snapshot scanDirectorySnapshot, builtProfile contentShapeDirectoryProfile, profileRecord database.ContentShapeProfile, batchState *recognitionBatchState) (contentShapeDirectoryPlan, error) {
 	if batchState != nil && batchState.shapeCounters != nil {
 		batchState.shapeCounters.PlanCompiles++
 	}

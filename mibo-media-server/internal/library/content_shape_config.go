@@ -3,7 +3,7 @@ package library
 import "github.com/atlan/mibo-media-server/internal/config"
 
 const (
-	ContentShapeClassifierVersion = "content-shape-v1"
+	ContentShapeClassifierVersion = "content-shape-v2"
 
 	contentShapePlanReuseConfidenceThreshold    = 0.85
 	contentShapeHighConfidenceThreshold         = 0.75

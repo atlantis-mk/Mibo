@@ -1,6 +1,6 @@
 ---
 description: 使用 AgentShield 扫描 agent、hook、MCP、权限和密钥面
-agent: everything-claude-code:security-reviewer
+agent: security-reviewer
 subtask: true
 ---
 

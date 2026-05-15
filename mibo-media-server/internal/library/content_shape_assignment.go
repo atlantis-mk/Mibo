@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 	"github.com/atlan/mibo-media-server/internal/storage"
 )
 
@@ -66,7 +67,7 @@ func generateContentShapeAssignments(plan contentShapeDirectoryPlan, snapshot sc
 	for _, object := range objects {
 		model := filenameTokenProfileForPath(tokenCache, object.Path)
 		assignment := contentShapeFileAssignment{StoragePath: strings.TrimSpace(object.Path), Confidence: plan.Confidence, ReviewState: plan.ReviewState, Evidence: map[string]any{"source": "directory_plan_assignment", "plan_shape": plan.Shape, "filename_token_profile": model.Evidence}}
-		if model.RoleHints.IsExtra {
+		if model.VideoSignal.IsExtra {
 			if contentShapeShouldSkipAttachment(plan, snapshot, object) {
 				assignment.AssignmentType = contentShapeAssignmentSkip
 				assignment.ReviewState = "skipped"
@@ -75,7 +76,7 @@ func generateContentShapeAssignments(plan contentShapeDirectoryPlan, snapshot sc
 				continue
 			}
 			assignment.AssignmentType = contentShapeAssignmentAttachment
-			assignment.AssetRole = firstNonEmptyString(model.RoleHints.Role, plan.AttachmentRole, "extra")
+			assignment.AssetRole = firstNonEmptyString(model.VideoSignal.Role, plan.AttachmentRole, "extra")
 			assignment.TargetKey = plan.SeriesTitle
 			assignments = append(assignments, assignment)
 			continue
@@ -84,12 +85,12 @@ func generateContentShapeAssignments(plan contentShapeDirectoryPlan, snapshot sc
 		case contentShapeEpisodePack, contentShapeSeasonFolder, contentShapeFlatEpisodeFolder, contentShapeAbsoluteEpisodePack:
 			episodeOrder++
 			assignment.AssignmentType = contentShapeAssignmentEpisode
-			assignment.SeriesTitle = contentShapeEpisodeSeriesTitle(plan, object, model)
-			assignment.SeasonNumber = firstNonNilInt(model.Identity.SeasonNumber, model.PathHints.SeasonNumber, plan.SeasonNumber)
-			episode := model.Identity.EpisodeNumber
+			assignment.SeriesTitle = contentShapeEpisodeSeriesTitle(plan, object, model.PathHints)
+			assignment.SeasonNumber = firstNonNilInt(model.VideoSignal.Season, model.PathHints.SeasonNumber, plan.SeasonNumber)
+			episode := model.VideoSignal.Episode
 			if episode == nil {
 				rawTitle := strings.TrimSuffix(path.Base(object.Path), path.Ext(object.Path))
-				if parsed := parseEpisodeNumberFromTitle(rawTitle, assignment.SeriesTitle); parsed != nil && weakEpisodeNumberAllowed(rawTitle) {
+				if parsed := scanrecognition.AnalyzeVideoPath(rawTitle + ".mkv").Episode; parsed != nil && scanrecognition.WeakEpisodeNumberAllowed(rawTitle) {
 					episode = parsed
 				}
 			}
@@ -108,10 +109,10 @@ func generateContentShapeAssignments(plan contentShapeDirectoryPlan, snapshot sc
 			}
 		case contentShapeMovieVersionsFolder:
 			assignment.AssignmentType = contentShapeAssignmentVersion
-			assignment.TargetKey = firstNonEmptyString(plan.MovieWorkKey, normalizeVersionCompareTitle(model.Identity.TitleCandidate))
+			assignment.TargetKey = firstNonEmptyString(plan.MovieWorkKey, normalizeVersionCompareTitle(preferredMovieTitleCandidate(model, true)))
 		case contentShapeMovieFolder, contentShapeMovieCollection:
 			assignment.AssignmentType = contentShapeAssignmentMovie
-			assignment.TargetKey = movieAssignmentTarget(plan, model)
+			assignment.TargetKey = movieAssignmentTarget(plan, model, true)
 		default:
 			assignment.AssignmentType = contentShapeAssignmentReview
 			assignment.ReviewState = "review_required"
@@ -123,7 +124,7 @@ func generateContentShapeAssignments(plan contentShapeDirectoryPlan, snapshot sc
 }
 
 func contentShapeShouldSkipAttachment(plan contentShapeDirectoryPlan, snapshot scanDirectorySnapshot, object storage.Object) bool {
-	if strings.TrimSpace(videoFileRoleSignal(object.Path)) == "" {
+	if strings.TrimSpace(scanrecognition.VideoFileRoleSignal(object.Path)) == "" {
 		return false
 	}
 	switch strings.TrimSpace(plan.Shape) {
@@ -144,27 +145,27 @@ func contentShapeHasNonExtraVideoSibling(snapshot scanDirectorySnapshot, object 
 			continue
 		}
 		model := filenameTokenProfileForPath(nil, sibling.Path)
-		if !model.RoleHints.IsExtra {
+		if !model.VideoSignal.IsExtra {
 			return true
 		}
 	}
 	return false
 }
 
-func contentShapeEpisodeSeriesTitle(plan contentShapeDirectoryPlan, object storage.Object, model filenameSignalModel) string {
-	if title := strings.TrimSpace(model.PathHints.SeriesTitle); title != "" {
-		return primarySeriesTitleFromGroup(normalizeSeriesGroupingTitle(title))
+func contentShapeEpisodeSeriesTitle(plan contentShapeDirectoryPlan, object storage.Object, pathHints filenamePathHints) string {
+	if title := strings.TrimSpace(pathHints.SeriesTitle); title != "" {
+		return scanrecognition.PrimarySeriesTitleFromGroup(scanrecognition.NormalizeSeriesGroupingTitle(title))
 	}
-	if title := tvSeriesTitleFromPath("", object.Path); title != "" {
-		return primarySeriesTitleFromGroup(normalizeSeriesGroupingTitle(title))
+	if title := scanrecognition.SeriesTitleFromPath("", object.Path); title != "" {
+		return scanrecognition.PrimarySeriesTitleFromGroup(scanrecognition.NormalizeSeriesGroupingTitle(title))
 	}
 	if title := strings.TrimSpace(plan.SeriesTitle); title != "" {
-		return normalizeSeriesGroupingTitle(title)
+		return scanrecognition.NormalizeSeriesGroupingTitle(title)
 	}
 	if plan.SeasonNumber != nil {
-		return normalizeSeriesGroupingTitle(path.Base(path.Dir(path.Dir(object.Path))))
+		return scanrecognition.NormalizeSeriesGroupingTitle(path.Base(path.Dir(path.Dir(object.Path))))
 	}
-	return normalizeSeriesGroupingTitle(path.Base(path.Dir(object.Path)))
+	return scanrecognition.NormalizeSeriesGroupingTitle(path.Base(path.Dir(object.Path)))
 }
 
 func contentShapeAssignmentsByPath(assignments []contentShapeFileAssignment) map[string]contentShapeFileAssignment {
@@ -246,13 +247,13 @@ func episodeAssignmentTarget(plan contentShapeDirectoryPlan, assignment contentS
 	return fmt.Sprintf("%s:s%02d:e%04d", plan.SeriesTitle, season, *assignment.EpisodeNumber)
 }
 
-func movieAssignmentTarget(plan contentShapeDirectoryPlan, model filenameSignalModel) string {
+func movieAssignmentTarget(plan contentShapeDirectoryPlan, model filenameSignalModel, preferFolder bool) string {
 	if plan.Shape == contentShapeMovieFolder && plan.MovieWorkKey != "" {
 		return plan.MovieWorkKey
 	}
-	title := normalizeVersionCompareTitle(model.Identity.TitleCandidate)
-	if model.Identity.Year != nil {
-		return fmt.Sprintf("%s:%d", title, *model.Identity.Year)
+	title := normalizeVersionCompareTitle(strings.TrimSpace(preferredMovieTitleCandidate(model, preferFolder)))
+	if year := preferredMovieYearCandidate(model, preferFolder); year != nil {
+		return fmt.Sprintf("%s:%d", title, *year)
 	}
 	return title
 }

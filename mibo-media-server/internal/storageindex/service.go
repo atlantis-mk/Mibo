@@ -287,15 +287,11 @@ func (s *Service) markSubtreeObserved(ctx context.Context, libraryID uint, provi
 func directoryFingerprint(objects []storage.Object) (string, error) {
 	parts := make([]string, 0, len(objects))
 	for _, object := range objects {
-		modified := ""
-		if object.Modified != nil {
-			modified = object.Modified.UTC().Format(time.RFC3339Nano)
-		}
 		hashes, err := encodeStringMap(object.HashInfo)
 		if err != nil {
 			return "", err
 		}
-		parts = append(parts, strings.Join([]string{normalizePath(object.Path), fmtBool(object.IsDir), fmtInt64(object.Size), modified, strings.TrimSpace(object.StableIdentity), hashes, strings.TrimSpace(object.Provider), strings.TrimSpace(object.ObjectType)}, "\x00"))
+		parts = append(parts, strings.Join([]string{normalizePath(object.Path), fmtBool(object.IsDir), fmtInt64(object.Size), strings.TrimSpace(object.StableIdentity), hashes, strings.TrimSpace(object.Provider), strings.TrimSpace(object.ObjectType)}, "\x00"))
 	}
 	sort.Strings(parts)
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))

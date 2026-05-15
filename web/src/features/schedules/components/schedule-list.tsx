@@ -311,7 +311,7 @@ export function formatKind(kind: string) {
   }
 }
 
-export function formatScope(
+function formatScope(
   scope: Schedule["scope_kind"],
   libraryId?: number,
   libraryNames?: Map<number, string>
@@ -323,7 +323,7 @@ export function formatScope(
     : "全局范围"
 }
 
-export function formatFrequency(frequency: Schedule["frequency"]) {
+function formatFrequency(frequency: Schedule["frequency"]) {
   if (frequency.kind === "daily") return `每天 ${frequency.time_of_day}`
   if (frequency.kind === "weekly") {
     return `每周 ${formatWeekday(frequency.weekday)} ${frequency.time_of_day}`
@@ -345,7 +345,7 @@ export function formatDateTime(value?: string) {
   })
 }
 
-export function formatLatestResult(schedule: Schedule) {
+function formatLatestResult(schedule: Schedule) {
   if (!schedule.latest_run_status) return "暂无历史"
   const statusMap: Record<string, string> = {
     queued: "待执行",

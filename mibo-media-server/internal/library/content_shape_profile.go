@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/titleclean"
 	"gorm.io/gorm"
@@ -131,7 +132,7 @@ func contentShapeSeasonHint(value *int) string {
 }
 
 func buildContentShapeDirectoryProfile(libraryType string, libraryRoot string, snapshot scanDirectorySnapshot, tokenCache *filenameTokenProfileCache) contentShapeDirectoryProfile {
-	profile := contentShapeDirectoryProfile{LibraryType: libraryType, Path: snapshot.Path, RootPath: libraryRoot, SeasonHint: parseSeasonDirectoryNumber(path.Base(snapshot.Path))}
+	profile := contentShapeDirectoryProfile{LibraryType: libraryType, Path: snapshot.Path, RootPath: libraryRoot, SeasonHint: scanrecognition.ParseFolderName(path.Base(snapshot.Path)).Season}
 	titleCounts := make(map[string]int)
 	categoryHints := make(map[string]struct{})
 	for _, object := range snapshot.Objects {
@@ -149,28 +150,28 @@ func buildContentShapeDirectoryProfile(libraryType string, libraryRoot string, s
 		}
 		profile.VideoCount++
 		model := filenameTokenProfileForPath(tokenCache, object.Path)
-		if model.RoleHints.IsExtra {
+		if model.VideoSignal.IsExtra {
 			profile.AttachmentCount++
 			continue
 		}
 		profile.NonExtraVideoCount++
-		if model.Identity.EpisodeSource == "explicit" && (model.Identity.EpisodeNumber != nil || len(model.Identity.EpisodeNumbers) > 0) {
+		if model.VideoSignal.EpisodeSource == "explicit" && (model.VideoSignal.Episode != nil || len(model.VideoSignal.EpisodeNumbers) > 0) {
 			profile.ExplicitEpisodeCount++
 		}
-		if model.Identity.LeadingNumber != nil {
+		if model.VideoSignal.LeadingNumber != nil {
 			profile.LeadingNumericCount++
 		}
-		if model.Identity.EpisodeNumber != nil {
-			profile.NumericSequence = append(profile.NumericSequence, *model.Identity.EpisodeNumber)
+		if model.VideoSignal.Episode != nil {
+			profile.NumericSequence = append(profile.NumericSequence, *model.VideoSignal.Episode)
 		}
-		if model.Identity.Year != nil && model.Identity.EpisodeNumber == nil && len(model.Identity.EpisodeNumbers) == 0 {
+		if filenameSignalYear(model) != nil && model.VideoSignal.Episode == nil && len(model.VideoSignal.EpisodeNumbers) == 0 {
 			profile.TitleYearCount++
 		}
-		stem := normalizeVersionCompareTitle(model.Identity.TitleCandidate)
+		stem := normalizeVersionCompareTitle(filenameSignalTitleCandidate(model))
 		if stem != "" {
 			titleCounts[stem]++
 		}
-		if strings.TrimSpace(model.ReleaseHints.Quality) != "" || strings.TrimSpace(model.ReleaseHints.Edition) != "" || strings.TrimSpace(model.ReleaseHints.ReleaseGroup) != "" {
+		if strings.TrimSpace(model.VideoSignal.Quality) != "" || strings.TrimSpace(model.VideoSignal.Edition) != "" || strings.TrimSpace(model.VideoSignal.ReleaseGroup) != "" {
 			profile.VersionEvidenceCount++
 		}
 	}
@@ -230,7 +231,7 @@ func contentShapeCategoryHint(objectPath string) string {
 	case "season", "seasons", "extras", "trailers", "samples", "specials", "movies", "movie", "show", "shows", "tv":
 		return segment
 	}
-	if parseSeasonDirectoryNumber(segment) != nil {
+	if scanrecognition.ParseFolderName(segment).Season != nil {
 		return "season"
 	}
 	return ""

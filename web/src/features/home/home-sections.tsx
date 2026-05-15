@@ -506,7 +506,7 @@ function formatEpisodeProgressLabel(item: CatalogUserItemEntry["item"]) {
   return [season, episode].filter(Boolean).join(":")
 }
 
-export function StatCard({
+function StatCard({
   icon: Icon,
   label,
   value,
@@ -538,7 +538,7 @@ export function StatCard({
   )
 }
 
-export function formatMediaType(type: string) {
+function formatMediaType(type: string) {
   if (type === "movie") return "电影"
   if (type === "show" || type === "episode") return "剧集"
   return "媒体"

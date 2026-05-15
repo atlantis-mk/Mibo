@@ -11,6 +11,7 @@ import (
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/ingest"
 	"github.com/atlan/mibo-media-server/internal/inventory"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 	"github.com/atlan/mibo-media-server/internal/storage"
 	"github.com/atlan/mibo-media-server/internal/storageindex"
 	"gorm.io/gorm"
@@ -403,7 +404,6 @@ func (s *Service) flushDiscoveredInventoryCandidates(ctx context.Context, provid
 	}
 	if mode != nil {
 		mode.recordDiscoveredFiles(files)
-		mode.mergePathTreeAssignments(compilePathTreeAssignmentsFromFiles(mode.discoveredVideoFilesInSnapshot(decisionSnapshot), library.RootPath, nil, newFilenameTokenProfileCache()))
 	}
 	batchFiles := make([]database.InventoryFile, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -439,10 +439,7 @@ func (s *Service) shouldDelaySiblingMovieMaterialization(ctx context.Context, mo
 	if childDir == strings.TrimSpace(library.RootPath) || parentDir == "." || parentDir == childDir {
 		return false
 	}
-	if rules, err := loadPathTreeClassificationRules(ctx, s.db, library.ID); err == nil && pathTreeFileMatchesAnyRule(file.StoragePath, rules) {
-		return true
-	}
-	if parseSeasonDirectoryNumber(path.Base(childDir)) != nil && strings.TrimSpace(seriesTitleFromEmbeddedSeasonDirectory(path.Base(childDir))) != "" {
+	if scanrecognition.ParseFolderName(path.Base(childDir)).Season != nil && strings.TrimSpace(firstScanTitle(scanrecognition.ParseFolderName(path.Base(childDir)).TitleCandidates)) != "" {
 		return true
 	}
 	if mode.pendingSiblingMovieFiles != nil {
@@ -456,14 +453,12 @@ func (s *Service) shouldDelaySiblingMovieMaterialization(ctx context.Context, mo
 	if err != nil {
 		return false
 	}
-	assignments := compilePathTreeAssignmentsFromFiles([]database.InventoryFile{file}, library.RootPath, models, newFilenameTokenProfileCache())
-	_ = assignments
 	signal := models[strings.TrimSpace(file.StoragePath)]
-	if strings.TrimSpace(signal.Identity.TitleCandidate) == "" {
+	if strings.TrimSpace(firstNonEmptyString(firstScanTitle(signal.VideoSignal.TitleCandidates), signal.Identity.TitleCandidate)) == "" {
 		signal = extractFilenameSignalModel(object.Path)
 	}
-	workKey := normalizedMovieWorkKeyFromSignal(signal)
-	return strings.TrimSpace(workKey.Normalized) != "" && workKey.Year != nil && signal.Identity.EpisodeNumber == nil && len(signal.Identity.EpisodeNumbers) == 0 && !signal.RoleHints.IsExtra
+	workKey := normalizedMovieWorkKeyFromSignal(signal.VideoSignal, signal.RawPathData, signal.Identity.TitleCandidate, signal.Identity.Year)
+	return strings.TrimSpace(workKey.Normalized) != "" && workKey.Year != nil && signal.VideoSignal.Episode == nil && len(signal.VideoSignal.EpisodeNumbers) == 0 && !signal.VideoSignal.IsExtra
 }
 
 func (m *scanMode) recordPendingSiblingMovieFile(pending pendingSiblingMovieFile) {

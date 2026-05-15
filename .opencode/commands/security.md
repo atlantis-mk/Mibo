@@ -1,6 +1,6 @@
 ---
 description: 运行全面安全审查
-agent: everything-claude-code:security-reviewer
+agent: security-reviewer
 subtask: true
 ---
 

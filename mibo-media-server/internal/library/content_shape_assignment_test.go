@@ -59,7 +59,7 @@ func TestContentShapePersistedPlanAndAssignmentsSavedAndReused(t *testing.T) {
 	provider := staticNameProvider{name: "local"}
 	snapshot := largeEpisodeShapeSnapshot("/library/Show", 5)
 
-	first, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
+	first, err := svc.contentShapeCachePlanForDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("first content shape plan: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestContentShapePersistedPlanAndAssignmentsSavedAndReused(t *testing.T) {
 	}
 
 	state.shapePlansByDir = make(map[string]contentShapeDirectoryPlan)
-	second, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
+	second, err := svc.contentShapeCachePlanForDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("second content shape plan: %v", err)
 	}
@@ -149,11 +149,11 @@ func TestContentShapePersistedReviewDecisionNotDuplicatedOnReuse(t *testing.T) {
 		t.Fatalf("expected one seeded review decision, got %d", firstCount)
 	}
 
-	if _, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
+	if _, err := svc.contentShapeCachePlanForDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
 		t.Fatalf("reuse review plan: %v", err)
 	}
 	state.shapePlansByDir = make(map[string]contentShapeDirectoryPlan)
-	if _, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
+	if _, err := svc.contentShapeCachePlanForDirectory(ctx, cfg, pathRecord, provider, snapshot, &state); err != nil {
 		t.Fatalf("reuse persisted review plan after cache clear: %v", err)
 	}
 	var secondCount int64
@@ -206,11 +206,11 @@ func TestContentShapeLargeEpisodeDirectoryPlanReusedAcrossBatches(t *testing.T) 
 	pathRecord := database.LibraryPath{LibraryID: 1, MediaSourceID: 1, RootPath: "/library"}
 	provider := staticNameProvider{name: "local"}
 	snapshot := largeEpisodeShapeSnapshot("/library/Show", 1000)
-	first, err := svc.contentShapePlanForRecognitionDirectory(context.Background(), config, pathRecord, provider, snapshot, &state)
+	first, err := svc.contentShapeCachePlanForDirectory(context.Background(), config, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("compile first plan: %v", err)
 	}
-	second, err := svc.contentShapePlanForRecognitionDirectory(context.Background(), config, pathRecord, provider, scanDirectorySnapshot{Path: snapshot.Path, Objects: snapshot.Objects[:25]}, &state)
+	second, err := svc.contentShapeCachePlanForDirectory(context.Background(), config, pathRecord, provider, scanDirectorySnapshot{Path: snapshot.Path, Objects: snapshot.Objects[:25]}, &state)
 	if err != nil {
 		t.Fatalf("reuse second plan: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestContentShapeFlatEpisodeAssignmentsRemainDistinctWhenReused(t *testing.T
 	provider := staticNameProvider{name: "local"}
 	snapshot := scanDirectorySnapshot{Path: "/library/FlatShow", Objects: []storage.Object{{Path: "/library/FlatShow/Alpha.mkv"}, {Path: "/library/FlatShow/Beta.mkv"}, {Path: "/library/FlatShow/Gamma.mkv"}}}
 
-	plan, err := svc.contentShapePlanForRecognitionDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
+	plan, err := svc.contentShapeCachePlanForDirectory(ctx, cfg, pathRecord, provider, snapshot, &state)
 	if err != nil {
 		t.Fatalf("build flat plan: %v", err)
 	}

@@ -113,3 +113,27 @@ func TestListLibraryItemsIncludesReviewRequiredInventoryEntries(t *testing.T) {
 		t.Fatalf("expected review-required organizing summary, got %#v", entry)
 	}
 }
+
+func TestListLibraryItemsExcludesRecognizedSupplementalInventoryEntries(t *testing.T) {
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	ctx := context.Background()
+	svc := NewService(db)
+	file := database.InventoryFile{LibraryID: 7, StorageProvider: "local", StoragePath: "/library/Show/behind-the-scenes.mkv", ContentClass: "video", Status: "available", ScanState: "discovered"}
+	if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+		t.Fatalf("create inventory file: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&database.RecognitionCandidate{ManifestID: 1, CandidateKey: "supplemental:test", CandidateType: "supplemental", CandidateRole: "behind_the_scenes", ParentCandidateKey: "episode:test", PrimaryInventoryID: &file.ID, ReviewState: database.ReviewStatePending}).Error; err != nil {
+		t.Fatalf("create recognition candidate: %v", err)
+	}
+
+	items, err := svc.ListLibraryItems(ctx, 7, "", "movie", 20)
+	if err != nil {
+		t.Fatalf("list library items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected recognized supplemental to stay out of discovered browse items, got %#v", items)
+	}
+}

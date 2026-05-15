@@ -1,6 +1,6 @@
 ---
 description: 创建包含风险评估的实施计划
-agent: everything-claude-code:planner
+agent: planner
 subtask: true
 ---
 

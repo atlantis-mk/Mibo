@@ -63,7 +63,7 @@ func TestInventoryFileSignalsInvalidateOnFingerprintOrVersionChange(t *testing.T
 	}
 
 	changedScope := scope
-	changedScope.ClassifierVersion = "content-shape-v2"
+	changedScope.ClassifierVersion = ContentShapeClassifierVersion + "-next"
 	models, _, err = loadReusableInventoryFileSignals(ctx, db, changedScope, []database.InventoryFile{file})
 	if err != nil {
 		t.Fatalf("load changed version signal: %v", err)

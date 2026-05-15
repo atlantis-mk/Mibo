@@ -27,6 +27,12 @@ func ConstructGraphFromInventory(input GraphConstructInput) GraphConstructOutput
 		evidence = append(evidence, siblingConsistencyEvidence(unit)...)
 		candidates = append(candidates, GenerateCandidatesForWorkUnit(unit)...)
 	}
+	output := ConstructGraphFromCandidates(input, candidates)
+	output.Evidence = evidence
+	return output
+}
+
+func ConstructGraphFromCandidates(input GraphConstructInput, candidates []database.RecognitionCandidate) GraphConstructOutput {
 	graph := mediaGraphFromKernelCandidates(input, candidates)
 	return GraphConstructOutput{
 		ManifestScope:             graph.scope,
@@ -34,7 +40,6 @@ func ConstructGraphFromInventory(input GraphConstructInput) GraphConstructOutput
 		MediaGraphEdges:           graphEdgesFromMediaGraph(graph),
 		MediaGraphClassifications: graphClassificationsFromMediaGraph(graph),
 		Candidates:                candidates,
-		Evidence:                  evidence,
 	}
 }
 

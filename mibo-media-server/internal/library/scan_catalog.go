@@ -8,6 +8,7 @@ import (
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/inventory"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 	"gorm.io/gorm"
 )
 
@@ -289,7 +290,7 @@ func resolverDecisionEvidenceItemsPayload(evidence []scanDecisionEvidence) []map
 }
 
 func canonicalSeriesPath(seriesTitle string) string {
-	cleaned := strings.TrimSpace(cleanTitle(seriesTitle))
+	cleaned := strings.TrimSpace(scanrecognition.CleanTitle(seriesTitle))
 	if cleaned == "" {
 		return "series"
 	}

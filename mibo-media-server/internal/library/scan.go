@@ -2,27 +2,11 @@ package library
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/atlan/mibo-media-server/internal/database"
 	"github.com/atlan/mibo-media-server/internal/storage"
-)
-
-var (
-	episodePattern             = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:s(\d{1,2})e(\d{1,2})|(\d{1,2})x(\d{1,2}))(?:[\s._-]+.*)?$`)
-	yearPattern                = regexp.MustCompile(`(?i)(?:^|[\s._\-(])((?:19|20)\d{2})(?:$|[\s._\-)])`)
-	seasonDirectoryPattern     = regexp.MustCompile(`(?i)^(?:season|s)[\s._-]*0*(\d{1,2})(?:$|[\s._-]+.*$)|^第?\s*([0-9一二三四五六七八九十两零]+)\s*季(?:$|[\s._-]+.*$)`)
-	embeddedSeasonDirPattern   = regexp.MustCompile(`(?i)^(.*?)[\s._-]+(?:season[\s._-]*0*(\d{1,2})|s0*(\d{1,2}))(?:$|[\s._\-(]+.*$)`)
-	episodeOnlyPattern         = regexp.MustCompile(`(?i)^(?:e|ep|episode)[\s._-]*0*(\d{1,3})(?:[\s._-]+.*)?$`)
-	embeddedEpisodePattern     = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:e|ep|episode)[\s._-]*0*([1-9]\d{0,2})(?:$|[\s._-])`)
-	numericEpisodePattern      = regexp.MustCompile(`^0*([1-9]\d{0,2})(?:[\s._-]+.*)?$`)
-	chineseEpisodePattern      = regexp.MustCompile(`^第?\s*(\d{1,3})\s*[集话話](?:[\s._-]+.*)?$`)
-	trailingEpisodePattern     = regexp.MustCompile(`(?i)^.*?[\s._-]+(?:e|ep|episode)?[\s._-]*0*([1-9]\d{0,2})(?:v\d+)?(?:[\s._-]+.*)?$`)
-	trailingSeasonTitlePattern = regexp.MustCompile(`(?i)(?:[\s._-]+(?:season[\s._-]*0*\d{1,2}|s0*\d{1,2})|第\s*[0-9一二三四五六七八九十两零]+\s*季)$`)
-	scanNoisePattern           = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(【(])(2160p|1080p|720p|480p|4k|hdr10\+?|dv|dolby[\s._-]?vision|atmos|dts(?:hd)?|truehd|aac\d?(?:\.\d)?|x26[45]|h\.?26[45]|hevc|avc|bluray|blu[\s._-]?ray|bdrip|brrip|bdrmux|remux|web[\s._-]?dl|webrip|hdtv|uhd|nf|amzn|dsnp|hmax|proper|repack|extended|unrated|limited|dual[\s._-]?audio|multi(?:sub|subs)?|sub(?:bed|s)?|dub(?:bed)?|chs|cht|eng|jpn|gb|big5)(?:$|[\s._\-)\]】])`)
-	genericMediaNamePattern    = regexp.MustCompile(`(?i)^(movie|video|feature|main|full|default|film|media|sample)$`)
 )
 
 var videoExtensions = map[string]struct{}{
@@ -73,7 +57,6 @@ type scanMode struct {
 	discoveredFiles            map[string]database.InventoryFile
 	directorySnapshots         map[string]scanDirectorySnapshot
 	decisionSnapshots          map[string]scanDirectorySnapshot
-	pathTreeAssignmentsByPath  map[string]pathTreeWorkGroupAssignment
 	pendingSiblingMovieFiles   map[string][]pendingSiblingMovieFile
 	resolvedDirectories        map[string]struct{}
 	skippedDirectories         map[string]error
@@ -88,25 +71,6 @@ type pendingSiblingMovieFile struct {
 	DirectorySnapshots map[string]scanDirectorySnapshot
 	SubtitlePolicy     database.LibrarySubtitlePolicy
 	FileID             uint
-}
-
-func (m *scanMode) pathTreeAssignment(storagePath string) pathTreeWorkGroupAssignment {
-	if m == nil || len(m.pathTreeAssignmentsByPath) == 0 {
-		return pathTreeWorkGroupAssignment{}
-	}
-	return m.pathTreeAssignmentsByPath[strings.TrimSpace(storagePath)]
-}
-
-func (m *scanMode) mergePathTreeAssignments(assignments map[string]pathTreeWorkGroupAssignment) {
-	if m == nil || len(assignments) == 0 {
-		return
-	}
-	if m.pathTreeAssignmentsByPath == nil {
-		m.pathTreeAssignmentsByPath = make(map[string]pathTreeWorkGroupAssignment, len(assignments))
-	}
-	for storagePath, assignment := range assignments {
-		m.pathTreeAssignmentsByPath[strings.TrimSpace(storagePath)] = assignment
-	}
 }
 
 func (m *scanMode) allowsMissingCleanup() bool {

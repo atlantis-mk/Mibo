@@ -1,6 +1,6 @@
 ---
 description: 基于 git 历史分析生成技能
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Skill Create Command

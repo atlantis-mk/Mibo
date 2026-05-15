@@ -241,6 +241,84 @@ func TestRecognitionManifestSeasonFolderLeadingNumericBuildsSeriesSeasonEpisodeI
 	}
 }
 
+func TestRecognitionManifestScanRecognitionBeatsConflictingContentShapeMovieContext(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "openlist", StoragePath: "/library/电视剧/轮到你了[全20集][中文字幕].Anata.no.Ban.Desu.E01-E20+SP.2019.1080p.WEB-DL.x265.AC3-BitsTV/Anata.no.Ban.Desu.E01.2019.1080p.WEB-DL.x265.10bit.AC3-BitsTV.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "openlist", StoragePath: "/library/电视剧/轮到你了[全20集][中文字幕].Anata.no.Ban.Desu.E01-E20+SP.2019.1080p.WEB-DL.x265.AC3-BitsTV/Anata.no.Ban.Desu.E02.2019.1080p.WEB-DL.x265.10bit.AC3-BitsTV.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "openlist", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/电视剧")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+
+	seriesKey := recognition.SeriesWorkKey("Anata no Ban Desu")
+	seasonKey := recognition.SeasonWorkKey("Anata no Ban Desu", 1)
+	episodeOneKey := recognition.EpisodeKey(recognition.EpisodeInput{SeriesTitle: "Anata no Ban Desu", SeasonNumber: 1, EpisodeNumber: 1})
+	if !hasRecognitionCandidate(graph.Candidates, seriesKey, recognition.CandidateTypeWork, recognition.WorkKindSeries) {
+		t.Fatalf("expected series candidate, got %#v", graph.Candidates)
+	}
+	if !hasRecognitionCandidate(graph.Candidates, seasonKey, recognition.CandidateTypeWork, recognition.WorkKindSeason) {
+		t.Fatalf("expected season candidate, got %#v", graph.Candidates)
+	}
+	if !hasRecognitionCandidate(graph.Candidates, episodeOneKey, recognition.CandidateTypeEpisode, recognition.WorkKindEpisode) {
+		t.Fatalf("expected episode candidate, got %#v", graph.Candidates)
+	}
+	if hasMovieCandidateWithTitle(graph.Candidates, "Anata no Ban Desu") {
+		t.Fatalf("expected scan recognition to block conflicting movie context, got %#v", graph.Candidates)
+	}
+	for _, candidate := range graph.Candidates {
+		if candidate.PrimaryInventoryID == nil || *candidate.PrimaryInventoryID != files[0].ID {
+			continue
+		}
+		if candidate.CandidateType == recognition.CandidateTypeWork && candidate.CandidateRole == recognition.WorkKindMovie {
+			t.Fatalf("unexpected conflicting movie candidate: %#v", candidate)
+		}
+	}
+}
+
+func hasRecognitionCandidate(candidates []database.RecognitionCandidate, key string, candidateType string, role string) bool {
+	for _, candidate := range candidates {
+		if candidate.CandidateKey == key && candidate.CandidateType == candidateType && candidate.CandidateRole == role {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMovieCandidateWithTitle(candidates []database.RecognitionCandidate, title string) bool {
+	needle := strings.ToLower(title)
+	for _, candidate := range candidates {
+		if candidate.CandidateType == recognition.CandidateTypeWork && candidate.CandidateRole == recognition.WorkKindMovie && strings.Contains(strings.ToLower(candidate.CandidateKey), needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRecognitionManifestSeasonFolderLeadingNumericResourcesPointToEpisodes(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
@@ -506,6 +584,107 @@ func TestPersistRecognitionManifestPersistsSidecarAttachmentGraphRows(t *testing
 	}
 	if playableCount != 0 {
 		t.Fatalf("did not expect sidecar attachment to materialize as playable resource")
+	}
+}
+
+func TestRecognitionManifestCombinedSeasonFolderMaterializesSeriesHierarchy(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	seasonDir := "/library/电视剧/六尺之下 第一季[全13集][中文字幕].Six.Feet.Under.2001.1080p.WEB-DL.x265.AC3-BitsTV"
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: seasonDir + "/Six.Feet.Under.S01E01.2001.1080p.WEB-DL.x265.AC3-BitsTV.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: seasonDir + "/Six.Feet.Under.S01E02.2001.1080p.WEB-DL.x265.AC3-BitsTV.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, seasonDir)
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	result, err := svc.resolveRecognitionManifest(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if len(result.MetadataIDs) < 4 {
+		t.Fatalf("expected series/season/two episodes to materialize, got %#v", result)
+	}
+	counts := map[string]int64{}
+	var rows []struct {
+		ItemType string
+		Count    int64
+	}
+	if err := db.WithContext(ctx).Model(&database.MetadataItem{}).Select("item_type, count(*) as count").Group("item_type").Scan(&rows).Error; err != nil {
+		t.Fatalf("count metadata items: %v", err)
+	}
+	for _, row := range rows {
+		counts[row.ItemType] = row.Count
+	}
+	if counts[database.MetadataItemTypeSeries] != 1 || counts[database.MetadataItemTypeSeason] != 1 || counts[database.MetadataItemTypeEpisode] != 2 {
+		t.Fatalf("expected combined season hierarchy, got %#v", counts)
+	}
+}
+
+func TestRecognitionManifestParentAndChildDirectoriesClassifyDirectVideosIndependently(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "mibo.db")})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	svc := NewService(config.Config{}, db, nil, nil)
+	libraryRecord := database.Library{ID: 1, MediaSourceID: 1, RootPath: "/library"}
+	if err := db.WithContext(ctx).Create(&libraryRecord).Error; err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	files := []database.InventoryFile{
+		{ID: 1, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/MixedParent/Parent.Movie.2024.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 2, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/MixedParent/Show/Season 1/01.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+		{ID: 3, LibraryID: libraryRecord.ID, MediaSourceID: libraryRecord.MediaSourceID, StorageProvider: "local", StoragePath: "/library/MixedParent/Show/Season 1/02.mkv", Container: "mkv", ContentClass: SourceContentClassVideo, Status: "available"},
+	}
+	for _, file := range files {
+		if err := db.WithContext(ctx).Create(&file).Error; err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if err := svc.ensureInventoryFileSignals(ctx, libraryRecord.ID, "local", files); err != nil {
+		t.Fatalf("ensure signals: %v", err)
+	}
+	manifest, err := svc.persistRecognitionManifestForFiles(ctx, libraryRecord, files, "/library/MixedParent")
+	if err != nil {
+		t.Fatalf("persist manifest: %v", err)
+	}
+	repo := recognition.NewRepository(db)
+	graph, err := repo.LoadManifestGraph(ctx, manifest.ID)
+	if err != nil {
+		t.Fatalf("load graph: %v", err)
+	}
+	movieKey := recognition.MovieWorkKey(recognition.MovieWorkInput{Title: "Parent Movie", Year: intPtrForReduction(2024)})
+	seriesKey := recognition.SeriesWorkKey("Show")
+	seasonKey := recognition.SeasonWorkKey("Show", 1)
+	episodeOneKey := recognition.EpisodeKey(recognition.EpisodeInput{SeriesTitle: "Show", SeasonNumber: 1, EpisodeNumber: 1})
+	expected := map[string]bool{movieKey: false, seriesKey: false, seasonKey: false, episodeOneKey: false}
+	for _, candidate := range graph.Candidates {
+		if _, ok := expected[candidate.CandidateKey]; ok {
+			expected[candidate.CandidateKey] = true
+		}
+	}
+	for key, found := range expected {
+		if !found {
+			t.Fatalf("expected direct-video independent candidate %s, got %#v", key, graph.Candidates)
+		}
 	}
 }
 
@@ -789,7 +968,7 @@ func TestRecognitionResolveMarksAmbiguousInventoryFileReviewRequired(t *testing.
 	if err := repo.SaveDecisions(ctx, []database.RecognitionDecision{{
 		ManifestID:   manifest.ID,
 		CandidateID:  &graph.Candidates[0].ID,
-		DecisionType: "resolver_outcome",
+		DecisionType: "scanrecognition_outcome",
 		Outcome:      recognition.DecisionOutcomeReviewRequired,
 		TargetKind:   graph.Candidates[0].CandidateType,
 		TargetKey:    graph.Candidates[0].CandidateKey,

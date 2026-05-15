@@ -1,6 +1,6 @@
 ---
 description: 从当前会话提取模式和收获
-agent: everything-claude-code:build
+agent: build
 ---
 
 # Learn Command

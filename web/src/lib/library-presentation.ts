@@ -1,15 +1,3 @@
-export function formatLibraryType(type: string | null | undefined) {
-  switch ((type ?? "").trim().toLowerCase()) {
-    case "auto":
-    case "source":
-    case "source-first":
-    case "source_first":
-      return "自动分类"
-    default:
-      return type || "媒体库"
-  }
-}
-
 export function formatSourceContentClass(type: string | null | undefined) {
   switch ((type ?? "").trim().toLowerCase()) {
     case "video":

@@ -2,16 +2,11 @@ package library
 
 import (
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/atlan/mibo-media-server/internal/titleclean"
+	"github.com/atlan/mibo-media-server/internal/scanrecognition"
 )
-
-var leadingNumericTokenProfilePattern = regexp.MustCompile(`^0*([1-9]\d{0,2})(?:$|[\s._-]+.*)`)
-var bareSxETokenProfilePattern = regexp.MustCompile(`(?i)^s0*(\d{1,2})e0*(\d{1,3})(?:$|[\s._-]+.*)`)
-var bracketWebsiteTokenProfilePattern = regexp.MustCompile(`(?i)[\[【(（]([^\]】)）]*(?:网站|www\.|\.com|\.net|\.org)[^\]】)）]*)[\]】)）]`)
 
 const (
 	filenameSignalKindQuality               = "quality"
@@ -112,10 +107,15 @@ type filenameEvidenceSummary struct {
 }
 
 type filenameSignalModel struct {
-	RawPathData     filenameRawPathData
-	TitleTokens     []filenameTitleToken
-	Identity        filenameIdentitySignals
-	ReleaseHints    filenameReleaseHints
+	RawPathData filenameRawPathData
+	// VideoSignal is the authoritative scanrecognition result for this path.
+	VideoSignal scanrecognition.VideoSignal
+	TitleTokens []filenameTitleToken
+	// Identity mirrors selected VideoSignal fields for cache/persistence compatibility.
+	Identity filenameIdentitySignals
+	// ReleaseHints mirrors selected VideoSignal release metadata for legacy readers.
+	ReleaseHints filenameReleaseHints
+	// RoleHints mirrors selected VideoSignal role flags for legacy readers.
 	RoleHints       filenameRoleHints
 	CleanupEvidence []filenameCleanupEvidence
 	PathHints       filenamePathHints
@@ -127,164 +127,202 @@ func extractFilenameSignalModel(itemPath string) filenameSignalModel {
 	fileName := path.Base(cleanPath)
 	ext := path.Ext(fileName)
 	rawTitle := strings.TrimSuffix(fileName, ext)
-	segments := strings.Split(strings.Trim(cleanPath, "/"), "/")
-	normalized := titleclean.Normalize(titleclean.NormalizeInput{RawTitle: rawTitle})
+	videoSignal := scanrecognition.AnalyzeVideoPath(cleanPath)
+	folderSignal := scanrecognition.ParseFolderName(path.Base(path.Dir(cleanPath)))
 	model := filenameSignalModel{
-		RawPathData: filenameRawPathData{Path: cleanPath, Directory: path.Dir(cleanPath), Basename: fileName, Extension: ext, Segments: segments},
-		Identity:    filenameIdentitySignals{TitleCandidate: normalized.Title, Year: normalized.Year},
+		RawPathData: filenameRawPathData{Path: cleanPath, Directory: path.Dir(cleanPath), Basename: fileName, Extension: ext, Segments: strings.Split(strings.Trim(cleanPath, "/"), "/")},
+		VideoSignal: videoSignal,
+		Identity:    filenameIdentitySignals{TitleCandidate: firstScanTitle(videoSignal.TitleCandidates), Year: firstNonNilInt(videoSignal.Year, folderSignal.Year)},
 		ReleaseHints: filenameReleaseHints{
-			Quality:      qualitySignal(rawTitle),
-			SourceTags:   sourceTagSignals(rawTitle),
-			Codec:        firstSignalByReason(normalized.RemovedTokens, "video_codec"),
-			Audio:        firstSignalByReason(normalized.RemovedTokens, "audio"),
-			Subtitle:     firstSignalByReason(normalized.RemovedTokens, "subtitle"),
-			HDR:          firstSignalByReason(normalized.RemovedTokens, "hdr"),
-			Edition:      editionSignal(rawTitle),
-			ReleaseGroup: releaseGroupSignal(rawTitle),
-			Website:      firstNonEmptyString(firstSignalByReason(normalized.RemovedTokens, "website"), bracketWebsiteTokenProfile(rawTitle)),
-			GenericNoise: genericFilenameNoiseSignal(rawTitle),
+			Quality:      videoSignal.Quality,
+			SourceTags:   append([]string(nil), videoSignal.SourceTags...),
+			Codec:        videoSignal.Codec,
+			Audio:        videoSignal.Audio,
+			Subtitle:     videoSignal.Subtitle,
+			HDR:          videoSignal.HDR,
+			Edition:      videoSignal.Edition,
+			ReleaseGroup: videoSignal.ReleaseGroup,
+			Website:      videoSignal.Website,
+			GenericNoise: videoSignal.GenericNoise,
 		},
-		RoleHints:       filenameRoleHints{Role: videoFileRoleSignal(cleanPath)},
-		CleanupEvidence: cleanupEvidenceFromRemovedTokens(normalized.RemovedTokens),
+		RoleHints:       filenameRoleHints{Role: videoSignal.Role},
+		CleanupEvidence: filenameCleanupEvidenceFromSignal(videoSignal.CleanupEvidence),
 	}
-	model.RoleHints.IsSample = model.RoleHints.Role == "sample"
-	model.RoleHints.IsTrailer = model.RoleHints.Role == "trailer"
-	model.RoleHints.IsExtra = model.RoleHints.Role != ""
-	model.RoleHints.IsMain = !model.RoleHints.IsExtra
-	model.TitleTokens = filenameTitleTokens(rawTitle, model.CleanupEvidence)
-	if seriesPrefix, season, episodeNumbers, ok := parseMultiEpisodeRange(rawTitle); ok {
-		model.Identity.TitleCandidate = cleanTitle(seriesPrefix)
-		model.Identity.SeasonNumber = season
-		model.Identity.EpisodeNumbers = append([]int(nil), episodeNumbers...)
-		if len(episodeNumbers) > 0 {
-			first := episodeNumbers[0]
-			last := episodeNumbers[len(episodeNumbers)-1]
-			model.Identity.EpisodeNumber = &first
-			if len(episodeNumbers) > 1 {
-				model.Identity.EpisodeEnd = &last
-			}
-		}
-		model.Identity.EpisodeSource = "explicit"
-	} else if groups := episodePattern.FindStringSubmatch(rawTitle); len(groups) > 0 {
-		season, episode := parseEpisodeNumbers(groups[2], groups[3], groups[4], groups[5])
-		model.Identity.TitleCandidate = cleanTitle(groups[1])
-		model.Identity.SeasonNumber = season
-		model.Identity.EpisodeNumber = episode
-		model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
-		model.Identity.EpisodeSource = "explicit"
-	} else if groups := bareSxETokenProfilePattern.FindStringSubmatch(rawTitle); len(groups) >= 3 {
-		season := parseOrdinalToken(groups[1])
-		episode := parseOrdinalToken(groups[2])
-		model.Identity.SeasonNumber = season
-		model.Identity.EpisodeNumber = episode
-		model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
-		model.Identity.EpisodeSource = "explicit"
-	} else if episode := parseEmbeddedEpisodeNumber(rawTitle); episode != nil {
-		model.Identity.EpisodeNumber = episode
-		model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
-		model.Identity.EpisodeSource = "explicit"
-	} else if match := chineseEpisodePattern.FindStringSubmatch(normalizeEpisodeIdentifier(rawTitle)); len(match) >= 2 {
-		if episode := parseOrdinalToken(match[1]); episode != nil {
-			model.Identity.EpisodeNumber = episode
-			model.Identity.EpisodeNumbers = episodeNumbersFromPointer(episode)
-			model.Identity.EpisodeSource = "explicit"
-		}
-	}
-	if leading := leadingNumericTokenProfile(rawTitle); leading != nil {
-		model.Identity.LeadingNumber = leading
-		if model.Identity.EpisodeNumber == nil && weakEpisodeNumberAllowed(rawTitle) {
-			model.Identity.EpisodeNumber = leading
-			model.Identity.EpisodeNumbers = episodeNumbersFromPointer(leading)
-			model.Identity.EpisodeSource = "leading_numeric"
-		}
-	}
-	for idx := len(segments) - 2; idx >= 0; idx-- {
-		if season := parseSeasonDirectoryNumber(segments[idx]); season != nil {
-			model.PathHints.SeasonNumber = season
-			break
-		}
-	}
+	model.RoleHints.IsSample = videoSignal.IsSample
+	model.RoleHints.IsTrailer = videoSignal.IsTrailer
+	model.RoleHints.IsExtra = videoSignal.IsExtra
+	model.RoleHints.IsMain = videoSignal.IsMain
+	model.TitleTokens = filenameTitleTokensFromSignal(videoSignal.TitleTokens)
+	model.Identity.SeasonNumber = firstNonNilInt(videoSignal.Season, folderSignal.Season)
+	model.Identity.EpisodeNumber = videoSignal.Episode
+	model.Identity.EpisodeEnd = videoSignal.EpisodeEnd
+	model.Identity.EpisodeNumbers = append([]int(nil), videoSignal.EpisodeNumbers...)
+	model.Identity.LeadingNumber = videoSignal.LeadingNumber
+	model.Identity.EpisodeSource = videoSignal.EpisodeSource
+	model.PathHints.SeasonNumber = scanrecognition.SeasonFromPath("", cleanPath)
+	model.PathHints.SeriesTitle = scanrecognition.SeriesTitleFromPath("", cleanPath)
 	model.Evidence = filenameEvidenceSummariesFromModel(model, rawTitle)
 	return model
 }
 
-func bracketWebsiteTokenProfile(rawTitle string) string {
-	match := bracketWebsiteTokenProfilePattern.FindStringSubmatch(strings.TrimSpace(rawTitle))
-	if len(match) < 2 {
+func syncFilenameSignalModel(storagePath string, model *filenameSignalModel) {
+	if model == nil {
+		return
+	}
+	pathValue := strings.TrimSpace(storagePath)
+	if pathValue == "" {
+		pathValue = strings.TrimSpace(model.RawPathData.Path)
+	}
+	if pathValue != "" {
+		model.VideoSignal = scanrecognition.AnalyzeVideoPath(pathValue)
+	}
+	model.RoleHints.Role = model.VideoSignal.Role
+	model.RoleHints.IsSample = model.VideoSignal.IsSample
+	model.RoleHints.IsTrailer = model.VideoSignal.IsTrailer
+	model.RoleHints.IsExtra = model.VideoSignal.IsExtra
+	model.RoleHints.IsMain = model.VideoSignal.IsMain
+	model.ReleaseHints.Quality = model.VideoSignal.Quality
+	model.ReleaseHints.SourceTags = append([]string(nil), model.VideoSignal.SourceTags...)
+	model.ReleaseHints.Codec = model.VideoSignal.Codec
+	model.ReleaseHints.Audio = model.VideoSignal.Audio
+	model.ReleaseHints.Subtitle = model.VideoSignal.Subtitle
+	model.ReleaseHints.HDR = model.VideoSignal.HDR
+	model.ReleaseHints.Edition = model.VideoSignal.Edition
+	model.ReleaseHints.ReleaseGroup = model.VideoSignal.ReleaseGroup
+	model.ReleaseHints.Website = model.VideoSignal.Website
+	model.ReleaseHints.GenericNoise = model.VideoSignal.GenericNoise
+	if len(model.CleanupEvidence) == 0 {
+		model.CleanupEvidence = filenameCleanupEvidenceFromSignal(model.VideoSignal.CleanupEvidence)
+	}
+	if len(model.TitleTokens) == 0 {
+		model.TitleTokens = filenameTitleTokensFromSignal(model.VideoSignal.TitleTokens)
+	}
+	if strings.TrimSpace(model.Identity.TitleCandidate) == "" {
+		model.Identity.TitleCandidate = firstScanTitle(model.VideoSignal.TitleCandidates)
+	}
+	model.Identity.Year = firstNonNilInt(model.Identity.Year, model.VideoSignal.Year)
+	model.Identity.SeasonNumber = firstNonNilInt(model.Identity.SeasonNumber, model.VideoSignal.Season)
+	model.Identity.EpisodeNumber = firstNonNilInt(model.Identity.EpisodeNumber, model.VideoSignal.Episode)
+	if model.Identity.EpisodeEnd == nil {
+		model.Identity.EpisodeEnd = model.VideoSignal.EpisodeEnd
+	}
+	if len(model.Identity.EpisodeNumbers) == 0 {
+		model.Identity.EpisodeNumbers = append([]int(nil), model.VideoSignal.EpisodeNumbers...)
+	}
+	if model.Identity.LeadingNumber == nil {
+		model.Identity.LeadingNumber = model.VideoSignal.LeadingNumber
+	}
+	if strings.TrimSpace(model.Identity.EpisodeSource) == "" {
+		model.Identity.EpisodeSource = model.VideoSignal.EpisodeSource
+	}
+}
+
+func filenameCleanupEvidenceFromSignal(items []scanrecognition.CleanupEvidence) []filenameCleanupEvidence {
+	converted := make([]filenameCleanupEvidence, 0, len(items))
+	for _, item := range items {
+		converted = append(converted, filenameCleanupEvidence{Token: item.Token, Reason: item.Reason})
+	}
+	return converted
+}
+
+func filenameTitleTokensFromSignal(items []scanrecognition.TitleToken) []filenameTitleToken {
+	converted := make([]filenameTitleToken, 0, len(items))
+	for _, item := range items {
+		converted = append(converted, filenameTitleToken{Value: item.Value, Kept: item.Kept})
+	}
+	return converted
+}
+
+func filenameSignalTitleCandidate(model filenameSignalModel) string {
+	return strings.TrimSpace(firstNonEmptyString(firstScanTitle(model.VideoSignal.TitleCandidates), model.Identity.TitleCandidate))
+}
+
+func movieFolderTitleCandidate(model filenameSignalModel) string {
+	return movieFolderTitleCandidateFromParts(model.VideoSignal, model.RawPathData, model.Identity.TitleCandidate, model.Identity.Year)
+}
+
+func movieFolderTitleCandidateFromParts(videoSignal scanrecognition.VideoSignal, rawPathData filenameRawPathData, fallbackTitle string, fallbackYear *int) string {
+	folderName := strings.TrimSpace(path.Base(strings.TrimSpace(rawPathData.Directory)))
+	if folderName == "" || folderName == "." || folderName == "/" {
 		return ""
 	}
-	return strings.TrimSpace(match[1])
-}
-
-func leadingNumericTokenProfile(rawTitle string) *int {
-	match := leadingNumericTokenProfilePattern.FindStringSubmatch(strings.TrimSpace(rawTitle))
-	if len(match) < 2 {
-		return nil
+	folderSignal := scanrecognition.ParseFolderName(folderName)
+	if folderSignal.Season != nil {
+		return ""
 	}
-	return parseOrdinalToken(match[1])
-}
-
-func cleanupEvidenceFromRemovedTokens(tokens []titleclean.RemovedToken) []filenameCleanupEvidence {
-	items := make([]filenameCleanupEvidence, 0, len(tokens))
-	for _, token := range tokens {
-		value := strings.TrimSpace(token.Value)
-		reason := strings.TrimSpace(token.Reason)
-		if value == "" || reason == "" {
-			continue
-		}
-		items = append(items, filenameCleanupEvidence{Token: value, Reason: reason})
+	folderTitle := bestFolderTitleCandidate(folderSignal.TitleCandidates, videoSignal.TitleCandidates, fallbackTitle)
+	if folderTitle == "" {
+		return ""
 	}
-	return items
-}
-
-func firstSignalByReason(tokens []titleclean.RemovedToken, reason string) string {
-	for _, token := range tokens {
-		if strings.TrimSpace(token.Reason) == reason && strings.TrimSpace(token.Value) != "" {
-			return strings.TrimSpace(token.Value)
-		}
+	fileTitle := strings.TrimSpace(firstNonEmptyString(firstScanTitle(videoSignal.TitleCandidates), fallbackTitle))
+	folderNormalized := normalizeVersionCompareTitle(folderTitle)
+	fileNormalized := normalizeVersionCompareTitle(fileTitle)
+	if folderNormalized != "" && fileNormalized != "" && folderNormalized == fileNormalized {
+		return folderTitle
+	}
+	folderYear := folderSignal.Year
+	fileYear := firstNonNilInt(videoSignal.Year, fallbackYear)
+	if folderYear != nil && fileYear != nil && *folderYear == *fileYear {
+		return folderTitle
+	}
+	rawTitle := strings.TrimSpace(strings.TrimSuffix(rawPathData.Basename, rawPathData.Extension))
+	if strings.TrimSpace(videoSignal.GenericNoise) != "" || strings.TrimSpace(scanrecognition.GenericMediaNameSignal(rawTitle)) != "" {
+		return folderTitle
 	}
 	return ""
 }
 
-func genericFilenameNoiseSignal(rawTitle string) string {
-	if isGenericMediaName(rawTitle) {
-		return strings.TrimSpace(rawTitle)
+func bestFolderTitleCandidate(folderCandidates []string, fileCandidates []string, fallbackTitle string) string {
+	fileNormalized := normalizeVersionCompareTitle(strings.TrimSpace(firstNonEmptyString(firstScanTitle(fileCandidates), fallbackTitle)))
+	if fileNormalized != "" {
+		for _, candidate := range folderCandidates {
+			trimmed := strings.TrimSpace(candidate)
+			if trimmed == "" {
+				continue
+			}
+			if normalizeVersionCompareTitle(trimmed) == fileNormalized {
+				return trimmed
+			}
+		}
+	}
+	return strings.TrimSpace(firstScanTitle(folderCandidates))
+}
+
+func preferredMovieTitleCandidate(model filenameSignalModel, preferFolder bool) string {
+	if preferFolder {
+		if folderTitle := movieFolderTitleCandidate(model); folderTitle != "" {
+			return folderTitle
+		}
+	}
+	if title := filenameSignalTitleCandidate(model); title != "" {
+		return title
+	}
+	if !preferFolder {
+		return movieFolderTitleCandidate(model)
 	}
 	return ""
 }
 
-func filenameTitleTokens(rawTitle string, removed []filenameCleanupEvidence) []filenameTitleToken {
-	removedValues := make(map[string]struct{}, len(removed))
-	for _, evidence := range removed {
-		removedValues[strings.ToLower(strings.TrimSpace(evidence.Token))] = struct{}{}
-	}
-	tokens := strings.Fields(normalizeEpisodeIdentifier(rawTitle))
-	items := make([]filenameTitleToken, 0, len(tokens))
-	for _, token := range tokens {
-		trimmed := strings.TrimSpace(token)
-		if trimmed == "" {
-			continue
+func preferredMovieYearCandidate(model filenameSignalModel, preferFolder bool) *int {
+	if preferFolder {
+		folderSignal := scanrecognition.ParseFolderName(path.Base(strings.TrimSpace(model.RawPathData.Directory)))
+		if folderTitle := movieFolderTitleCandidate(model); folderTitle != "" && folderSignal.Year != nil {
+			return firstNonNilInt(folderSignal.Year, model.VideoSignal.Year, model.Identity.Year)
 		}
-		normalized := strings.ToLower(trimmed)
-		_, removed := removedValues[normalized]
-		items = append(items, filenameTitleToken{Value: trimmed, Kept: !removed && !suppressedFilenameProfileToken(trimmed)})
 	}
-	return items
+	return firstNonNilInt(model.VideoSignal.Year, model.Identity.Year)
 }
 
-func suppressedFilenameProfileToken(token string) bool {
-	trimmed := strings.TrimSpace(token)
-	if trimmed == "" {
-		return true
-	}
-	lower := strings.ToLower(trimmed)
-	if qualitySignalPattern.MatchString(trimmed) || audioChannelPattern.MatchString(lower) || scanNoisePattern.MatchString(trimmed) {
-		return true
-	}
-	if lower == "trailer" || lower == "sample" || lower == "preview" || lower == "featurette" || lower == "extra" || lower == "extras" || lower == "behind" || lower == "scenes" || lower == "pv" {
-		return true
-	}
-	return false
+func filenameSignalYear(model filenameSignalModel) *int {
+	return firstNonNilInt(model.VideoSignal.Year, model.Identity.Year)
+}
+
+func filenameSignalSeasonNumber(model filenameSignalModel) *int {
+	return firstNonNilInt(model.VideoSignal.Season, model.Identity.SeasonNumber)
+}
+
+func filenameSignalEpisodeNumber(model filenameSignalModel) *int {
+	return firstNonNilInt(model.VideoSignal.Episode, model.Identity.EpisodeNumber)
 }
 
 func (summary filenameEvidenceSummary) scanDecisionEvidence() scanDecisionEvidence {
@@ -344,7 +382,7 @@ func filenameEvidenceSummariesFromModel(model filenameSignalModel, rawTitle stri
 	if model.Identity.EpisodeNumber != nil || len(model.Identity.EpisodeNumbers) > 0 {
 		items = append(items, filenameEvidenceSummary{Kind: filenameSignalKindEpisodeMarker, Source: strings.TrimSpace(model.Identity.EpisodeSource), Value: rawTitle, Reason: filenameSignalReasonEpisodeMarker})
 	}
-	if !weakEpisodeNumberAllowed(rawTitle) {
+	if !scanrecognition.WeakEpisodeNumberAllowed(rawTitle) {
 		items = append(items, filenameEvidenceSummary{Kind: filenameSignalKindAntiMisclassification, Source: "filename", Value: rawTitle, Reason: filenameSignalReasonSuppressWeakEpisodeNumber})
 	}
 	for _, token := range model.TitleTokens {
