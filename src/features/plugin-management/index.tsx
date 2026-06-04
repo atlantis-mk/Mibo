@@ -827,7 +827,7 @@ function RemotePluginCard({
             onClick={onRefreshHealth}
           >
             <RefreshCwIcon className='size-4' />
-            刷新
+            刷新健康
           </Button>
           {provider.enabled ? (
             <Button

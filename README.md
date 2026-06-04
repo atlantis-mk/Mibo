@@ -17,6 +17,15 @@ pnpm install
 pnpm dev
 ```
 
+To start the Vite frontend and Go backend together for full-stack development:
+
+```bash
+pnpm dev:fullstack
+```
+
+The full-stack script starts the backend on `:8096` by default so it matches the
+Vite development proxy in `vite.config.ts`.
+
 Useful commands:
 
 ```bash

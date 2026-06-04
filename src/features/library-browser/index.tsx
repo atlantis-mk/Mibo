@@ -146,12 +146,23 @@ export default function LibraryBrowser({
   const pageStart = total === 0 ? 0 : (page - 1) * pageSize + 1
   const pageEnd = Math.min(total, page * pageSize)
   const previousCrumb = breadcrumbs[breadcrumbs.length - 2]
+  const hasActiveTitleSorting = filters.sort === 'title'
   const resetFilters = () => {
     onFiltersChange(
       createDefaultDiscoveryFilters({
         type: filters.type,
         organizingState: 'organized',
       }),
+      { resetPage: true }
+    )
+  }
+  const clearTitleSorting = () => {
+    onFiltersChange(
+      {
+        ...filters,
+        sort: 'recent',
+        sortDirection: 'desc',
+      },
       { resetPage: true }
     )
   }
@@ -211,6 +222,17 @@ export default function LibraryBrowser({
                 >
                   重置筛选
                 </Button>
+                {hasActiveTitleSorting ? (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    className='rounded-full'
+                    disabled={browseQuery.isFetching}
+                    onClick={clearTitleSorting}
+                  >
+                    取消标题排序
+                  </Button>
+                ) : null}
                 <LibraryBrowserDisplaySettingsDialog
                   settings={displaySettings}
                   onSettingsChange={setDisplaySettings}

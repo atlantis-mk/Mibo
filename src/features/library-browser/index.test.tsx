@@ -38,6 +38,31 @@ vi.mock('#/lib/mibo-query', () => ({
 }))
 
 vi.mock('#/components/media-poster-card', () => ({
+  DEFAULT_MEDIA_POSTER_DISPLAY_SETTINGS: {
+    imageType: 'primary',
+    cardSize: 'default',
+    fields: {
+      Name: true,
+      OriginalTitle: false,
+      SortName: false,
+      CommunityRating: true,
+      CriticRating: false,
+      OfficialRating: false,
+      ProductionYear: true,
+      PremiereDate: false,
+      Runtime: true,
+      Genres: false,
+      Director: false,
+      Tags: false,
+      Studios: false,
+      Tagline: false,
+      Overview: false,
+      DatePlayed: false,
+      Played: false,
+      DateCreated: false,
+      IsFavorite: false,
+    },
+  },
   MediaPosterCard: ({ item }: { item: { title: string } }) => (
     <div data-testid='media-card'>{item.title}</div>
   ),
