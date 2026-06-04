@@ -1,20 +1,36 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2Icon, PencilIcon, PlusIcon, ShieldIcon, Trash2Icon } from 'lucide-react'
+import {
+  Loader2Icon,
+  PencilIcon,
+  PlusIcon,
+  ShieldIcon,
+  Trash2Icon,
+} from 'lucide-react'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import type {
   AdminRole,
   CreateAdminRoleInput,
   LibraryAccessTag,
 } from '@/lib/mibo-api'
-import {
-  createAuthedMiboApi,
-  miboQueryKeys,
-} from '@/lib/mibo-query'
-import { toast } from 'sonner'
+import { createAuthedMiboApi, miboQueryKeys } from '@/lib/mibo-query'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
 type RoleDraft = CreateAdminRoleInput
@@ -59,8 +75,12 @@ export function RoleManagementPanel() {
       toast.success('角色已创建。')
       setDraft(EMPTY_ROLE_DRAFT)
       setIsCreateOpen(false)
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'roles', queryToken] })
-      await queryClient.invalidateQueries({ queryKey: miboQueryKeys.adminUsers(queryToken) })
+      await queryClient.invalidateQueries({
+        queryKey: ['admin', 'roles', queryToken],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.adminUsers(queryToken),
+      })
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : '创建角色失败。')
@@ -79,8 +99,12 @@ export function RoleManagementPanel() {
     onSuccess: async () => {
       toast.success('角色已更新。')
       setEditingRole(null)
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'roles', queryToken] })
-      await queryClient.invalidateQueries({ queryKey: miboQueryKeys.adminUsers(queryToken) })
+      await queryClient.invalidateQueries({
+        queryKey: ['admin', 'roles', queryToken],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.adminUsers(queryToken),
+      })
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : '更新角色失败。')
@@ -95,8 +119,12 @@ export function RoleManagementPanel() {
     onSuccess: async () => {
       toast.success('角色已删除。')
       setDeleteTarget(null)
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'roles', queryToken] })
-      await queryClient.invalidateQueries({ queryKey: miboQueryKeys.adminUsers(queryToken) })
+      await queryClient.invalidateQueries({
+        queryKey: ['admin', 'roles', queryToken],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: miboQueryKeys.adminUsers(queryToken),
+      })
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : '删除角色失败。')
@@ -142,32 +170,50 @@ export function RoleManagementPanel() {
         </CardHeader>
         <CardContent className='space-y-3'>
           {!isAdmin ? (
-            <div className='text-sm text-muted-foreground'>当前账号无权限查看角色管理。</div>
+            <div className='text-sm text-muted-foreground'>
+              当前账号无权限查看角色管理。
+            </div>
           ) : rolesQuery.isLoading ? (
             <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-              <Loader2Icon className='size-4 animate-spin' />加载中...
+              <Loader2Icon className='size-4 animate-spin' />
+              加载中...
             </div>
           ) : roles.length === 0 ? (
             <div className='text-sm text-muted-foreground'>暂无角色。</div>
           ) : (
             roles.map((role) => (
-              <div key={role.id} className='flex items-center justify-between rounded-2xl border border-border/60 bg-background/70 px-4 py-3'>
+              <div
+                key={role.id}
+                className='flex items-center justify-between rounded-2xl border border-border/60 bg-background/70 px-4 py-3'
+              >
                 <div>
                   <div className='font-medium'>{role.name}</div>
-                  <div className='text-xs text-muted-foreground'>ID #{role.id}</div>
+                  <div className='text-xs text-muted-foreground'>
+                    ID #{role.id}
+                  </div>
                   <div className='mt-1 text-xs text-muted-foreground'>
-                    允许: {(role.allow_library_tags ?? []).join(', ') || '未配置'}
+                    允许:{' '}
+                    {(role.allow_library_tags ?? []).join(', ') || '未配置'}
                   </div>
                   <div className='text-xs text-muted-foreground'>
-                    拒绝: {(role.deny_library_tags ?? []).join(', ') || '未配置'}
+                    拒绝:{' '}
+                    {(role.deny_library_tags ?? []).join(', ') || '未配置'}
                   </div>
                 </div>
                 <div className='flex items-center gap-2'>
-                  <Button variant='outline' size='sm' onClick={() => setEditingRole(role)}>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => setEditingRole(role)}
+                  >
                     <PencilIcon className='size-4' />
                     编辑
                   </Button>
-                  <Button variant='destructive' size='sm' onClick={() => setDeleteTarget(role)}>
+                  <Button
+                    variant='destructive'
+                    size='sm'
+                    onClick={() => setDeleteTarget(role)}
+                  >
                     <Trash2Icon className='size-4' />
                     删除
                   </Button>
@@ -200,7 +246,9 @@ export function RoleManagementPanel() {
         draft={editingRole ?? EMPTY_ROLE_DRAFT}
         availableAccessTags={availableAccessTags}
         onDraftChange={(nextDraft) =>
-          setEditingRole((current) => (current ? { ...current, ...nextDraft } : current))
+          setEditingRole((current) =>
+            current ? { ...current, ...nextDraft } : current
+          )
         }
         onSubmit={() => updateRoleMutation.mutate()}
         isSubmitting={updateRoleMutation.isPending}
@@ -279,9 +327,13 @@ function RoleEditorDialog({
             }
           />
           <DialogFooter>
-            <Button variant='outline' onClick={() => onOpenChange(false)}>取消</Button>
+            <Button variant='outline' onClick={() => onOpenChange(false)}>
+              取消
+            </Button>
             <Button onClick={onSubmit} disabled={isSubmitting}>
-              {isSubmitting ? <Loader2Icon className='size-4 animate-spin' /> : null}
+              {isSubmitting ? (
+                <Loader2Icon className='size-4 animate-spin' />
+              ) : null}
               保存
             </Button>
           </DialogFooter>
@@ -362,12 +414,22 @@ function ConfirmDeleteDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>删除角色</DialogTitle>
-          <DialogDescription>确定删除 {roleName} 吗？如果已有用户使用，会被拒绝。</DialogDescription>
+          <DialogDescription>
+            确定删除 {roleName} 吗？如果已有用户使用，会被拒绝。
+          </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>取消</Button>
-          <Button variant='destructive' onClick={onConfirm} disabled={isSubmitting}>
-            {isSubmitting ? <Loader2Icon className='size-4 animate-spin' /> : null}
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+          <Button
+            variant='destructive'
+            onClick={onConfirm}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <Loader2Icon className='size-4 animate-spin' />
+            ) : null}
             删除
           </Button>
         </DialogFooter>

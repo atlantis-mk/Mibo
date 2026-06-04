@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import {
   AlertTriangleIcon,
   ArrowUpRightIcon,
@@ -177,7 +177,9 @@ export default function OperationsCenter({
                   </div>
                 </div>
                 <div className='flex items-center gap-2 self-start'>
-                  <StatusBadge status={overviewQuery.data?.status ?? 'healthy'} />
+                  <StatusBadge
+                    status={overviewQuery.data?.status ?? 'healthy'}
+                  />
                   <Badge variant='outline' className='rounded-full px-3 py-1'>
                     {activeTasks.length} 项待处理
                   </Badge>
@@ -376,7 +378,9 @@ export default function OperationsCenter({
                         }
                         lockedActionIds={lockedActionIds}
                         interactive={interactive}
-                        onExecute={(actionId) => actionMutation.mutate(actionId)}
+                        onExecute={(actionId) =>
+                          actionMutation.mutate(actionId)
+                        }
                         onOpenMetadataReview={() => setMetadataReviewTask(task)}
                       />
                     ))}
@@ -584,7 +588,9 @@ function TaskCard({
             ) : null}
             {task.recommended_actions.map((action) => (
               <TaskActionButton
-                key={action.id ?? `${action.type}-${action.href ?? action.label}`}
+                key={
+                  action.id ?? `${action.type}-${action.href ?? action.label}`
+                }
                 action={action}
                 isAdmin={isAdmin}
                 isPending={pendingActionId === action.id}

@@ -261,7 +261,9 @@ function SeasonSelectorCard({
 }) {
   const seasonName = season.name?.trim() || `第 ${season.season_number} 季`
   const episodeCountLabel = `共 ${season.episodes.length} 集`
-  const seasonMeta = [season.runtime_seconds ? formatRuntime(season.runtime_seconds) : '']
+  const seasonMeta = [
+    season.runtime_seconds ? formatRuntime(season.runtime_seconds) : '',
+  ]
     .filter(Boolean)
     .join(' · ')
 
@@ -305,7 +307,9 @@ function SeasonSelectorCard({
                 </div>
               </div>
               {seasonMeta ? (
-                <div className='text-sm text-muted-foreground'>{seasonMeta}</div>
+                <div className='text-sm text-muted-foreground'>
+                  {seasonMeta}
+                </div>
               ) : null}
             </div>
             {season.overview ? (

@@ -13,7 +13,9 @@ import type { User } from '@/lib/mibo-api'
 import { getVisibleSettingsSections } from '@/features/settings/sections'
 import { type NavGroup, type SidebarData } from '../types'
 
-export function getSettingsNavGroups(user?: Pick<User, 'role'> | null): NavGroup[] {
+export function getSettingsNavGroups(
+  user?: Pick<User, 'role'> | null
+): NavGroup[] {
   return [
     {
       title: '返回应用',
@@ -25,26 +27,31 @@ export function getSettingsNavGroups(user?: Pick<User, 'role'> | null): NavGroup
         },
       ],
     },
-    ...getVisibleSettingsSections(user).reduce<NavGroup[]>((groups, section) => {
-      const currentGroup = groups.find((group) => group.title === section.group)
-      const item = {
-        title: section.title,
-        url: section.to,
-        icon: section.icon,
-        matchPrefix: section.matchPrefix,
-      }
+    ...getVisibleSettingsSections(user).reduce<NavGroup[]>(
+      (groups, section) => {
+        const currentGroup = groups.find(
+          (group) => group.title === section.group
+        )
+        const item = {
+          title: section.title,
+          url: section.to,
+          icon: section.icon,
+          matchPrefix: section.matchPrefix,
+        }
 
-      if (currentGroup) {
-        currentGroup.items.push(item)
+        if (currentGroup) {
+          currentGroup.items.push(item)
+          return groups
+        }
+
+        groups.push({
+          title: section.group,
+          items: [item],
+        })
         return groups
-      }
-
-      groups.push({
-        title: section.group,
-        items: [item],
-      })
-      return groups
-    }, []),
+      },
+      []
+    ),
   ]
 }
 

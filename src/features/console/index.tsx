@@ -33,17 +33,12 @@ import {
   miboQueryKeys,
 } from '@/lib/mibo-query'
 import { cn } from '@/lib/utils'
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 
 const consoleRouteTargets = [
   '/settings/console',
@@ -205,7 +200,9 @@ export default function ConsolePage({
                 </p>
               </div>
               {!isRestarting ? (
-                <Button onClick={() => void summaryQuery.refetch()}>重试</Button>
+                <Button onClick={() => void summaryQuery.refetch()}>
+                  重试
+                </Button>
               ) : null}
             </CardContent>
           </Card>
@@ -546,11 +543,9 @@ function SystemSnapshot({ summary }: { summary: ConsoleSummary }) {
             </div>
           ) : (
             <div className='grid gap-3 sm:grid-cols-2'>
-              {modules
-                .slice(0, 4)
-                .map((module) => (
-                  <ModuleRow key={module.name} module={module} />
-                ))}
+              {modules.slice(0, 4).map((module) => (
+                <ModuleRow key={module.name} module={module} />
+              ))}
             </div>
           )}
         </div>
@@ -571,7 +566,7 @@ function MetricGrid({ summary }: { summary: ConsoleSummary }) {
   ] as const
 
   return (
-    <section className='grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-7'>
+    <section className='grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7'>
       {metrics.map(([label, value, Icon]) => (
         <Card
           key={label}
@@ -685,11 +680,7 @@ function QuickActions({
   )
 }
 
-function SideColumn({
-  activity,
-}: {
-  activity: ConsoleActivityEvent[]
-}) {
+function SideColumn({ activity }: { activity: ConsoleActivityEvent[] }) {
   return <ActivityTimeline events={activity} />
 }
 

@@ -154,7 +154,11 @@ export default function SearchPage({
   const submitSearch = () => {
     void navigate({
       to: '/search',
-      search: { q: trimmedInputQuery || undefined, type: filters.type, page: 1 },
+      search: {
+        q: trimmedInputQuery || undefined,
+        type: filters.type,
+        page: 1,
+      },
       replace: true,
     })
   }

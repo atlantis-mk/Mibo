@@ -110,7 +110,9 @@ function PluginConfigurationFieldControl({
       })}
       {description ? <FieldDescription>{description}</FieldDescription> : null}
       {field.type === 'secret' && secretConfigured ? (
-        <FieldDescription>已配置的密钥不会回显，留空即可保持现有值。</FieldDescription>
+        <FieldDescription>
+          已配置的密钥不会回显，留空即可保持现有值。
+        </FieldDescription>
       ) : null}
     </Field>
   )
@@ -171,7 +173,9 @@ function renderFieldControl({
           value={numberInputValue(value)}
           disabled={disabled}
           placeholder={placeholder}
-          onChange={(event) => onChange(parseOptionalNumber(event.target.value))}
+          onChange={(event) =>
+            onChange(parseOptionalNumber(event.target.value))
+          }
         />
       )
     case 'secret':
@@ -180,7 +184,9 @@ function renderFieldControl({
           type='password'
           value={secretConfigured ? '' : stringValue(value)}
           disabled={disabled}
-          placeholder={placeholder || (secretConfigured ? '输入新值以替换' : '')}
+          placeholder={
+            placeholder || (secretConfigured ? '输入新值以替换' : '')
+          }
           onChange={(event) => onChange(event.target.value)}
         />
       )

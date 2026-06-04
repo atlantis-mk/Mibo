@@ -44,7 +44,10 @@ describe('mibo operations issue api', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const api = createMiboApi({ baseUrl: 'http://localhost:3000', token: 'abc' })
+    const api = createMiboApi({
+      baseUrl: 'http://localhost:3000',
+      token: 'abc',
+    })
     const result = await api.listOperationsIssues({
       page: 2,
       page_size: 10,
@@ -87,7 +90,10 @@ describe('mibo operations issue api', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const api = createMiboApi({ baseUrl: 'http://localhost:3000', token: 'abc' })
+    const api = createMiboApi({
+      baseUrl: 'http://localhost:3000',
+      token: 'abc',
+    })
     const result = await api.executeOperationsIssueAction(42, {
       action_key: 'issue_exclude',
       reason: 'other',

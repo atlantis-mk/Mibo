@@ -69,7 +69,11 @@ export function getSetupStage(args: {
   if (waitingForRestart || databaseState.restart_required) {
     return 'restart'
   }
-  if (!databaseState.edit_locked && !databaseState.initialization_locked && !formMatchesActive) {
+  if (
+    !databaseState.edit_locked &&
+    !databaseState.initialization_locked &&
+    !formMatchesActive
+  ) {
     return 'database'
   }
   if (setupStatus.has_users) {

@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
-import { canAccessSettingsPath } from '@/features/settings/sections'
 import SettingsLayout from '@/features/settings'
+import { canAccessSettingsPath } from '@/features/settings/sections'
 
 export const Route = createFileRoute('/_authenticated/settings')({
   beforeLoad: ({ location }) => {

@@ -1,9 +1,9 @@
 import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { ChevronLeft, Home } from 'lucide-react'
-import type { User } from '@/lib/mibo-api'
 import { useAuthStore } from '@/stores/auth-store'
-import { ConfigDrawer } from '@/components/config-drawer'
+import type { User } from '@/lib/mibo-api'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+import { ConfigDrawer } from '@/components/config-drawer'
 import { getSettingsNavGroups, sidebarData } from './data/sidebar-data'
 
 type MobileShellMeta = {
@@ -39,7 +39,7 @@ export function MobileShellControls() {
 
   return (
     <>
-      <div className='fixed inset-x-0 top-0 z-40 border-b border-border/60 bg-background/82 supports-[backdrop-filter]:bg-background/72 backdrop-blur-xl md:hidden'>
+      <div className='fixed inset-x-0 top-0 z-40 border-b border-border/60 bg-background/82 backdrop-blur-xl supports-[backdrop-filter]:bg-background/72 md:hidden'>
         <div className='px-4 pt-[max(env(safe-area-inset-top),0.75rem)] pb-3'>
           <div className='flex items-center gap-3'>
             <SidebarTrigger className='size-10 shrink-0 rounded-2xl border border-border/70 bg-background/90 shadow-sm backdrop-blur transition-colors hover:bg-accent/70' />
@@ -138,10 +138,13 @@ function getMobileShellMeta(
   }
 
   const navMatch = [...sidebarData.navGroups, ...getSettingsNavGroups(user)]
-    .flatMap((group) => group.items.map((item) => ({ group: group.title, item })))
-    .find(({ item }) =>
-      ('url' in item && pathname === item.url) ||
-      (!!item.matchPrefix && pathname.startsWith(item.matchPrefix))
+    .flatMap((group) =>
+      group.items.map((item) => ({ group: group.title, item }))
+    )
+    .find(
+      ({ item }) =>
+        ('url' in item && pathname === item.url) ||
+        (!!item.matchPrefix && pathname.startsWith(item.matchPrefix))
     )
 
   if (navMatch) {

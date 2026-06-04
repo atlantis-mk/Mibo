@@ -7,8 +7,9 @@ import LibraryBrowser from './index'
 const browseLibraryHierarchy = vi.fn()
 
 vi.mock('#/stores/auth-store', () => ({
-  useAuthStore: (selector: (state: { auth: { accessToken: string } }) => unknown) =>
-    selector({ auth: { accessToken: 'test-token' } }),
+  useAuthStore: (
+    selector: (state: { auth: { accessToken: string } }) => unknown
+  ) => selector({ auth: { accessToken: 'test-token' } }),
 }))
 
 vi.mock('#/lib/mibo-query', () => ({
@@ -23,7 +24,16 @@ vi.mock('#/lib/mibo-query', () => ({
       filters: unknown,
       page: number,
       pageSize: number
-    ) => ['library', 'hierarchy', token, libraryId, path, filters, page, pageSize],
+    ) => [
+      'library',
+      'hierarchy',
+      token,
+      libraryId,
+      path,
+      filters,
+      page,
+      pageSize,
+    ],
   },
 }))
 

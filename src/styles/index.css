@@ -136,11 +136,7 @@
 
 .tech-surface {
   background:
-    radial-gradient(
-      circle at 8% 4%,
-      rgb(212 162 76 / 0.14),
-      transparent 28rem
-    ),
+    radial-gradient(circle at 8% 4%, rgb(212 162 76 / 0.14), transparent 28rem),
     radial-gradient(
       circle at 86% 94%,
       rgb(95 108 142 / 0.18),

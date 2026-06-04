@@ -71,8 +71,7 @@ export function buildStorageProviderOptions(
     ...pluginProviderInstances
       .filter(
         (provider) =>
-          provider.enabled &&
-          provider.capabilities.includes('storage.resolve')
+          provider.enabled && provider.capabilities.includes('storage.resolve')
       )
       .map((provider) => ({
         value: `plugin:${provider.id}`,
@@ -119,9 +118,8 @@ export function SourceForm({
     pluginProviderInstances
   )
   const providerOption =
-    storageProviderOptions.find(
-      (option) => option.value === draft.provider
-    ) ?? storageProviderOptions[0]
+    storageProviderOptions.find((option) => option.value === draft.provider) ??
+    storageProviderOptions[0]
   const selectedPluginProvider = providerOption?.pluginProvider ?? null
   const derivedLocalSourceName = deriveLocalSourceName(draft.rootPath)
   const [isOpenListConnectionVerified, setIsOpenListConnectionVerified] =
@@ -301,7 +299,7 @@ export function SourceForm({
               ? '请先完成 OpenList 连接测试，测试成功后才能浏览和选择路径。'
               : !selectedPluginProvider && draft.provider.startsWith('plugin:')
                 ? '请先选择一个可用的插件实例。'
-              : undefined
+                : undefined
           }
         />
       </section>

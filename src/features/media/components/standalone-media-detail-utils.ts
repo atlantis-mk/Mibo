@@ -395,19 +395,10 @@ type ResourceVariantInput = {
 
 export function formatResourceVariantLabel(
   resource?:
-    | Pick<
-        MediaResourceDetail,
-        | 'id'
-        | 'file_name'
-        | 'token_title'
-        | 'edition'
-      >
+    | Pick<MediaResourceDetail, 'id' | 'file_name' | 'token_title' | 'edition'>
     | Pick<
         MetadataResourceDetail,
-        | 'id'
-        | 'file_name'
-        | 'token_title'
-        | 'edition'
+        'id' | 'file_name' | 'token_title' | 'edition'
       >
 ) {
   if (!resource) return ''

@@ -30,10 +30,6 @@ import {
   type SetupDatabaseState,
   type SetupStatus,
 } from '@/lib/mibo-api'
-import {
-  createSetupDatabaseForm,
-  setupDatabaseFormMatchesState,
-} from '@/features/setup/state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,7 +42,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Separator } from '@/components/ui/separator'
 import {
   Select,
   SelectContent,
@@ -54,6 +49,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
+import {
+  createSetupDatabaseForm,
+  setupDatabaseFormMatchesState,
+} from '@/features/setup/state'
 
 const setupApi = () => createMiboApi({ baseUrl: getApiBaseUrl() })
 
@@ -81,9 +81,9 @@ export function SetupPage() {
     ssl_mode: 'disable',
   })
   const [databaseFormDirty, setDatabaseFormDirty] = useState(false)
-  const [validatedFingerprint, setValidatedFingerprint] = useState<string | null>(
-    null
-  )
+  const [validatedFingerprint, setValidatedFingerprint] = useState<
+    string | null
+  >(null)
   const [isResolvingAccountStep, setIsResolvingAccountStep] = useState(false)
   const [waitingForRestart, setWaitingForRestart] = useState(false)
   const hydratedFingerprintRef = useRef<string>('')
@@ -267,7 +267,9 @@ export function SetupPage() {
           <Card className='border-emerald-500/15 bg-card/85 backdrop-blur'>
             <CardHeader>
               <CardTitle className='text-base'>初始化进度</CardTitle>
-              <CardDescription>只有完成上一步，才能进入下一步。</CardDescription>
+              <CardDescription>
+                只有完成上一步，才能进入下一步。
+              </CardDescription>
             </CardHeader>
             <CardContent className='space-y-4 text-sm'>
               <StepRow
@@ -289,7 +291,10 @@ export function SetupPage() {
                 done={setupStatus.has_users}
               />
               <Separator />
-              <StatusRow label='当前数据库' value={databaseState.active_driver} />
+              <StatusRow
+                label='当前数据库'
+                value={databaseState.active_driver}
+              />
               <StatusRow
                 label='数据库来源'
                 value={databaseSourceLabel(databaseState.active_source)}
@@ -302,7 +307,8 @@ export function SetupPage() {
           </Card>
 
           <div className='space-y-6'>
-            {(databaseState.edit_locked || databaseState.initialization_locked) && (
+            {(databaseState.edit_locked ||
+              databaseState.initialization_locked) && (
               <Alert>
                 <Lock className='size-4' />
                 <AlertTitle>数据库配置当前为只读</AlertTitle>
@@ -335,7 +341,8 @@ export function SetupPage() {
                     <ShieldCheck className='size-4' />
                     <AlertTitle>下一步将填写数据库信息</AlertTitle>
                     <AlertDescription>
-                      SQLite 会填写数据文件路径，Postgres 和 MySQL 会填写连接地址、端口和账号信息。第二步会直接按这里选择的数据库类型进行测试。
+                      SQLite 会填写数据文件路径，Postgres 和 MySQL
+                      会填写连接地址、端口和账号信息。第二步会直接按这里选择的数据库类型进行测试。
                     </AlertDescription>
                   </Alert>
 
@@ -544,7 +551,9 @@ export function SetupPage() {
                     </Alert>
                   ) : null}
 
-                  {databaseFormDirty && !formMatchesActive && !waitingForRestart ? (
+                  {databaseFormDirty &&
+                  !formMatchesActive &&
+                  !waitingForRestart ? (
                     <Alert>
                       <ServerCrash className='size-4' />
                       <AlertTitle>数据库配置尚未生效</AlertTitle>
@@ -567,7 +576,9 @@ export function SetupPage() {
                     <div className='flex flex-wrap items-center gap-3'>
                       <Button
                         variant='outline'
-                        disabled={!canEditDatabase || validateMutation.isPending}
+                        disabled={
+                          !canEditDatabase || validateMutation.isPending
+                        }
                         onClick={() => validateMutation.mutate()}
                       >
                         {validateMutation.isPending ? (
@@ -644,7 +655,9 @@ export function SetupPage() {
                         <FieldBlock label='用户名'>
                           <Input
                             value={username}
-                            onChange={(event) => setUsername(event.target.value)}
+                            onChange={(event) =>
+                              setUsername(event.target.value)
+                            }
                             disabled={registerMutation.isPending}
                           />
                         </FieldBlock>
@@ -652,7 +665,9 @@ export function SetupPage() {
                           <Input
                             value={password}
                             type='password'
-                            onChange={(event) => setPassword(event.target.value)}
+                            onChange={(event) =>
+                              setPassword(event.target.value)
+                            }
                             disabled={registerMutation.isPending}
                           />
                         </FieldBlock>
@@ -691,7 +706,9 @@ export function SetupPage() {
                       {!setupStatus.has_users ? (
                         <Button
                           onClick={() => registerMutation.mutate()}
-                          disabled={registerMutation.isPending || isCheckingAccounts}
+                          disabled={
+                            registerMutation.isPending || isCheckingAccounts
+                          }
                         >
                           {registerMutation.isPending ? (
                             <Loader2 className='size-4 animate-spin' />

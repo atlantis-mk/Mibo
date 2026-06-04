@@ -13,10 +13,7 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar'
 import { ConfigDrawer } from '@/components/config-drawer'
-import {
-  getSettingsNavGroups,
-  sidebarData,
-} from './data/sidebar-data'
+import { getSettingsNavGroups, sidebarData } from './data/sidebar-data'
 import { NavGroup } from './nav-group'
 import { NavUser } from './nav-user'
 import { SidebarEdgeTrigger } from './sidebar-edge-trigger'

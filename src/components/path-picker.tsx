@@ -59,25 +59,25 @@ export function PathPicker({
 
   const loadPath = useCallback(
     async (targetPath?: string, options?: BrowseOptions) => {
-    const browsePath = browseRef.current
-    if (!browsePath) {
-      setBrowserState(null)
-      return
-    }
-
-    setIsLoading(true)
-    setErrorMessage(null)
-    try {
-      const result = await browsePath(targetPath, options)
-      setBrowserState(result)
-      if (selectCurrentOnBrowse) {
-        onValueChangeRef.current(result.current_path)
+      const browsePath = browseRef.current
+      if (!browsePath) {
+        setBrowserState(null)
+        return
       }
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '无法浏览路径')
-    } finally {
-      setIsLoading(false)
-    }
+
+      setIsLoading(true)
+      setErrorMessage(null)
+      try {
+        const result = await browsePath(targetPath, options)
+        setBrowserState(result)
+        if (selectCurrentOnBrowse) {
+          onValueChangeRef.current(result.current_path)
+        }
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : '无法浏览路径')
+      } finally {
+        setIsLoading(false)
+      }
     },
     [selectCurrentOnBrowse]
   )
