@@ -5,7 +5,7 @@
 *.local
 
 # Logs and runtime output
-logs/
+/logs/
 *.log
 *.pid
 npm-debug.log*
