@@ -121,9 +121,11 @@ jobs:
         env:
           MIBO_SERVER_TOKEN: ${{ secrets.MIBO_SERVER_TOKEN }}
         run: |
-          if [ -n "$MIBO_SERVER_TOKEN" ]; then
-            git config --global url."https://x-access-token:${MIBO_SERVER_TOKEN}@github.com/".insteadOf "https://github.com/"
+          if [ -z "$MIBO_SERVER_TOKEN" ]; then
+            echo "MIBO_SERVER_TOKEN is required to clone the private mibo-server submodule." >&2
+            exit 1
           fi
+          git config --global url."https://x-access-token:${MIBO_SERVER_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Checkout backend submodule
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
