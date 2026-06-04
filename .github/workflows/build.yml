@@ -207,10 +207,18 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -eu
+          notes_file="$(mktemp)"
+          gh api "repos/${GH_REPO}/releases/generate-notes" \
+            -f tag_name="$RELEASE_TAG" \
+            --jq .body > "$notes_file"
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes-file "$notes_file"
             gh release upload "$RELEASE_TAG" release-assets/*.tar.gz --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/*.tar.gz \
               --title "$RELEASE_TAG" \
-              --notes "Release $RELEASE_TAG"
+              --notes-file "$notes_file"
           fi
