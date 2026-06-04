@@ -1,0 +1,13 @@
+.git
+.opencode
+.agents
+OpenList
+node_modules
+dist
+build
+mibo-server/bin
+mibo-server/data
+mibo-server/tmp
+mibo-server/internal/webui/dist
+**/.DS_Store
+**/node_modules

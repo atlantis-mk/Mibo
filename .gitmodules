@@ -1,0 +1,4 @@
+[submodule "mibo-server"]
+	path = mibo-server
+	url = https://github.com/atlantis-mk/mibo-server.git
+	branch = main

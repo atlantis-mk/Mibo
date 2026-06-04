@@ -1,0 +1,182 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Build version label
+        required: false
+        type: string
+      target:
+        description: Build target
+        required: true
+        type: choice
+        default: All
+        options:
+          - All
+          - Linux
+          - macOS
+          - Windows
+      upload-artifact:
+        description: Upload built artifacts
+        required: true
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.target }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          pnpm config set dangerously-allow-all-builds true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: VITE_API_BASE_URL= pnpm exec vite build --outDir dist
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: mibo-frontend-dist
+          path: dist/
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    needs:
+      - frontend
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            family: Linux
+            goos: linux
+            goarch: amd64
+            binary: mibo-server
+          - name: linux-arm64
+            family: Linux
+            goos: linux
+            goarch: arm64
+            binary: mibo-server
+          - name: macos-amd64
+            family: macOS
+            goos: darwin
+            goarch: amd64
+            binary: mibo-server
+          - name: macos-arm64
+            family: macOS
+            goos: darwin
+            goarch: arm64
+            binary: mibo-server
+          - name: windows-amd64
+            family: Windows
+            goos: windows
+            goarch: amd64
+            binary: mibo-server.exe
+          - name: windows-arm64
+            family: Windows
+            goos: windows
+            goarch: arm64
+            binary: mibo-server.exe
+
+    steps:
+      - name: Skip unrelated target
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target != 'All' && inputs.target != matrix.family }}
+        run: |
+          echo "Skipping ${{ matrix.name }} because target is ${{ inputs.target }}."
+
+      - name: Checkout frontend
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Configure private submodule token
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        env:
+          MIBO_SERVER_TOKEN: ${{ secrets.MIBO_SERVER_TOKEN }}
+        run: |
+          if [ -n "$MIBO_SERVER_TOKEN" ]; then
+            git config --global url."https://x-access-token:${MIBO_SERVER_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+      - name: Checkout backend submodule
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        run: git submodule update --init --recursive -- mibo-server
+
+      - name: Download frontend dist
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        uses: actions/download-artifact@v4
+        with:
+          name: mibo-frontend-dist
+          path: mibo-server/internal/webui/dist
+
+      - name: Setup Go
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: mibo-server/go.sum
+
+      - name: Build binary
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          mkdir -p build/package
+          cd mibo-server
+          go build -trimpath -ldflags="-s -w" -o "../build/package/${{ matrix.binary }}" ./cmd/mibo-media-server
+
+      - name: Package archive
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}
+        run: |
+          set -eu
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then
+            version="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "$version" ]; then
+            version="${GITHUB_SHA}"
+          fi
+          version="${version#v}"
+          package_name="mibo-server-${version}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          printf '%s\n' "$version" > build/package/VERSION
+          tar -C build/package -czf "build/${package_name}.tar.gz" .
+
+      - name: Upload artifact
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family) && (github.event_name != 'workflow_dispatch' || inputs.upload-artifact) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mibo-${{ matrix.name }}
+          path: build/mibo-server-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
