@@ -349,3 +349,13 @@ pnpm test
 - [Library Visibility Rollout](docs/library-visibility-rollout.md)
 - [Metadata Scope Roots](docs/metadata-scope-roots.md)
 - [Backend README](mibo-server/README.md)
+
+## License
+
+This project is source-available, but not open source.
+
+The code is licensed under the PolyForm Noncommercial License 1.0.0.
+
+Non-commercial use is allowed. Commercial use is not permitted without prior written permission from the copyright holder.
+
+For commercial licensing, contact: atlanxg@gmail.com.
