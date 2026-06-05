@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -6,6 +7,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react'
+import { flushSync } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -86,27 +88,72 @@ export function SetupPage() {
   >(null)
   const [isResolvingAccountStep, setIsResolvingAccountStep] = useState(false)
   const [waitingForRestart, setWaitingForRestart] = useState(false)
+  const accountCheckTimeoutRef = useRef<number | null>(null)
   const hydratedFingerprintRef = useRef<string>('')
 
   const setupStatusQuery = useQuery({
     queryKey: ['setup', 'status'],
     queryFn: () => setupApi().getSetupStatus(),
     refetchInterval: waitingForRestart ? 1500 : 5000,
+    refetchOnMount: 'always',
     retry: false,
+    staleTime: 0,
   })
 
   const databaseStateQuery = useQuery({
     queryKey: ['setup', 'database'],
     queryFn: () => setupApi().getSetupDatabaseState(),
     refetchInterval: waitingForRestart ? 1500 : 5000,
+    refetchOnMount: 'always',
     retry: false,
+    staleTime: 0,
   })
 
-  const setupStatus = setupStatusQuery.data ?? emptySetupStatus
-  const databaseState = databaseStateQuery.data ?? emptySetupDatabaseState
+  const setupStatus =
+    setupStatusQuery.isFetchedAfterMount && setupStatusQuery.data
+      ? setupStatusQuery.data
+      : emptySetupStatus
+  const databaseState =
+    databaseStateQuery.isFetchedAfterMount && databaseStateQuery.data
+      ? databaseStateQuery.data
+      : emptySetupDatabaseState
   const formMatchesActive = setupDatabaseFormMatchesState(
     databaseForm,
     databaseState
+  )
+  const beginAccountCheckTransition = useCallback(() => {
+    if (accountCheckTimeoutRef.current !== null) {
+      window.clearTimeout(accountCheckTimeoutRef.current)
+    }
+    setCurrentStep(3)
+    setIsResolvingAccountStep(true)
+    accountCheckTimeoutRef.current = window.setTimeout(() => {
+      setIsResolvingAccountStep(false)
+      accountCheckTimeoutRef.current = null
+    }, 500)
+  }, [])
+  const resolveAccountStep = useCallback(
+    async (options?: { flush?: boolean; refreshDatabase?: boolean }) => {
+      if (options?.flush) {
+        flushSync(() => {
+          beginAccountCheckTransition()
+        })
+      } else {
+        beginAccountCheckTransition()
+      }
+      try {
+        await Promise.all([
+          delay(500),
+          queryClient.refetchQueries({ queryKey: ['setup', 'status'] }),
+          options?.refreshDatabase
+            ? queryClient.refetchQueries({ queryKey: ['setup', 'database'] })
+            : Promise.resolve(),
+        ])
+      } finally {
+        setIsResolvingAccountStep(false)
+      }
+    },
+    [beginAccountCheckTransition, queryClient]
   )
 
   useEffect(() => {
@@ -126,23 +173,37 @@ export function SetupPage() {
   }, [databaseStateQuery.data])
 
   useEffect(() => {
+    return () => {
+      if (accountCheckTimeoutRef.current !== null) {
+        window.clearTimeout(accountCheckTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (
       waitingForRestart &&
       databaseStateQuery.data &&
       !databaseStateQuery.data.restart_required
     ) {
       setWaitingForRestart(false)
-      setIsResolvingAccountStep(false)
-      setCurrentStep(3)
+      void resolveAccountStep({ refreshDatabase: true })
       toast.success('服务已恢复，当前数据库配置已经生效')
     }
-  }, [databaseStateQuery.data, waitingForRestart])
+  }, [databaseStateQuery.data, resolveAccountStep, waitingForRestart])
 
   useEffect(() => {
-    if (setupStatus.has_users) {
-      setCurrentStep(3)
+    if (!setupStatusQuery.isFetchedAfterMount) return
+
+    if (setupStatus.has_users && currentStep !== 3) {
+      beginAccountCheckTransition()
     }
-  }, [setupStatus.has_users])
+  }, [
+    currentStep,
+    setupStatus.has_users,
+    setupStatusQuery.isFetchedAfterMount,
+    beginAccountCheckTransition,
+  ])
 
   useEffect(() => {
     if (setupStatus.can_enter_app && accessToken && user) {
@@ -198,11 +259,7 @@ export function SetupPage() {
 
       setIsResolvingAccountStep(true)
       try {
-        await Promise.all([
-          queryClient.refetchQueries({ queryKey: ['setup', 'database'] }),
-          queryClient.refetchQueries({ queryKey: ['setup', 'status'] }),
-        ])
-        setCurrentStep(3)
+        await resolveAccountStep({ refreshDatabase: true })
       } finally {
         setIsResolvingAccountStep(false)
       }
@@ -238,7 +295,14 @@ export function SetupPage() {
     validatedFingerprint !== null && validatedFingerprint === formFingerprint
   const draftMatchesSelection =
     selectedDriver === databaseState.draft_connection.driver
-  const isCheckingAccounts = currentStep === 3 && isResolvingAccountStep
+  const isRefreshingSetupStatus =
+    setupStatusQuery.isFetching && !setupStatusQuery.isFetchedAfterMount
+  const isCheckingAccounts =
+    currentStep === 3 &&
+    (isResolvingAccountStep ||
+      !formMatchesActive ||
+      setupStatusQuery.isPending ||
+      isRefreshingSetupStatus)
   const canContinueWithCurrentConfig =
     formMatchesActive && !databaseState.restart_required && !databaseFormDirty
   const canSaveAndContinue =
@@ -594,7 +658,7 @@ export function SetupPage() {
                         }
                         onClick={() => {
                           if (canContinueWithCurrentConfig) {
-                            setCurrentStep(3)
+                            void resolveAccountStep({ flush: true })
                             return
                           }
                           applyMutation.mutate()
@@ -897,6 +961,10 @@ function databaseSourceLabel(source: SetupDatabaseState['active_source']) {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试'
+}
+
+function delay(durationMs: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, durationMs))
 }
 
 function updateDatabaseForm(

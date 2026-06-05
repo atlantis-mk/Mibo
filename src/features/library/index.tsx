@@ -47,7 +47,11 @@ import {
   type DiscoveryFilters,
 } from '#/features/discovery/controls'
 import type { CatalogListItem } from '#/lib/mibo-api'
-import { createAuthedMiboApi, miboQueryKeys } from '#/lib/mibo-query'
+import {
+  createAuthedMiboApi,
+  librariesQueryOptions,
+  miboQueryKeys,
+} from '#/lib/mibo-query'
 import { cn } from '#/lib/utils'
 import { useAuthStore } from '#/stores/auth-store'
 import { Settings2Icon } from 'lucide-react'
@@ -84,6 +88,10 @@ export default function LibraryDetail({
   const [displaySettings, setDisplaySettings] = useState(
     loadLibraryDisplaySettings
   )
+  const librariesQuery = useQuery({
+    ...librariesQueryOptions(token ?? 'guest'),
+    enabled: !!token,
+  })
 
   const browseQuery = useQuery({
     queryKey: miboQueryKeys.libraryBrowse(
@@ -99,6 +107,7 @@ export default function LibraryDetail({
       if (!token) throw new Error('当前未登录，无法加载内容库。')
       return createAuthedMiboApi(token).discoverMedia({
         q: filters.q.trim() || undefined,
+        library_id: filters.libraryId,
         type: filters.type === 'all' ? undefined : filters.type,
         genre: filters.genre.trim() || undefined,
         region: filters.region.trim() || undefined,
@@ -155,6 +164,9 @@ export default function LibraryDetail({
                 filters={filters}
                 showSearch
                 showType={false}
+                showLibrary
+                libraryOptions={librariesQuery.data ?? []}
+                libraryOptionsLoading={librariesQuery.isLoading}
                 showOrganizingState
                 onChange={(next) => onFiltersChange(next, { resetPage: true })}
               />

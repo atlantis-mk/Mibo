@@ -51,11 +51,14 @@ export function PathPicker({
   const [searchQuery, setSearchQuery] = useState('')
   const browseRef = useRef(browse)
   const onValueChangeRef = useRef(onValueChange)
+  const valueRef = useRef(value)
+  const canBrowse = browse !== null
 
   useEffect(() => {
     browseRef.current = browse
     onValueChangeRef.current = onValueChange
-  }, [browse, onValueChange])
+    valueRef.current = value
+  }, [browse, onValueChange, value])
 
   const loadPath = useCallback(
     async (targetPath?: string, options?: BrowseOptions) => {
@@ -70,7 +73,7 @@ export function PathPicker({
       try {
         const result = await browsePath(targetPath, options)
         setBrowserState(result)
-        if (selectCurrentOnBrowse) {
+        if (selectCurrentOnBrowse && result.current_path !== valueRef.current) {
           onValueChangeRef.current(result.current_path)
         }
       } catch (error) {
@@ -85,10 +88,10 @@ export function PathPicker({
   useEffect(() => {
     setBrowserState(null)
     setErrorMessage(null)
-    if (browse && ready) {
+    if (canBrowse && ready) {
       void loadPath(value.trim() || undefined)
     }
-  }, [browse, browseKey, loadPath, ready, value])
+  }, [browseKey, canBrowse, loadPath, ready, value])
 
   const isLocked = !ready || browse === null
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase()

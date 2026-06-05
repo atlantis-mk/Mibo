@@ -17,6 +17,9 @@ export const Route = createFileRoute('/_authenticated/library')({
   component: LibraryRoute,
   validateSearch: (search: Record<string, unknown>) => ({
     ...libraryFiltersToSearch(parseLibraryFiltersSearch(search)),
+    ...(normalizeLibraryIdSearch(search.libraryId) !== undefined
+      ? { libraryId: normalizeLibraryIdSearch(search.libraryId) }
+      : {}),
     ...(normalizeLibraryPageSearch(search.page) !== undefined
       ? { page: normalizeLibraryPageSearch(search.page) }
       : {}),
@@ -202,6 +205,17 @@ function normalizeLibraryPageSearch(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 }
 
+function normalizeLibraryIdSearch(value: unknown) {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number.parseInt(value, 10)
+        : Number.NaN
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 function normalizeLibraryPageSizeSearch(value: unknown) {
   const parsed =
     typeof value === 'number'
@@ -223,6 +237,7 @@ function parseLibraryFiltersSearch(search: Record<string, unknown>) {
     region: normalizeStringSearch(search.region),
     year: normalizeStringSearch(search.year),
     minRating: normalizeStringSearch(search.minRating),
+    libraryId: normalizeLibraryIdSearch(search.libraryId),
     watchedState: parseWatchedStateSearch(search.watchedState),
     organizingState:
       parseOrganizingStateSearch(search.organizingState) ?? 'organized',
@@ -239,6 +254,9 @@ function libraryFiltersToSearch(filters: DiscoveryFilters) {
     region: filters.region || undefined,
     year: filters.year || undefined,
     minRating: filters.minRating || undefined,
+    ...(filters.libraryId !== undefined
+      ? { libraryId: filters.libraryId }
+      : {}),
     watchedState:
       filters.watchedState === 'all' ? undefined : filters.watchedState,
     organizingState:
@@ -256,6 +274,7 @@ function filtersFromLibrarySearch(search: {
   region?: string
   year?: string
   minRating?: string
+  libraryId?: number
   watchedState?: DiscoveryFilters['watchedState']
   organizingState?: DiscoveryFilters['organizingState']
   sort?: DiscoveryFilters['sort']

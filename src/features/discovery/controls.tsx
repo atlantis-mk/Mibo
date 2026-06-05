@@ -1,6 +1,7 @@
 import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '#/components/ui/native-select'
+import type { Library } from '#/lib/mibo-api'
 
 export type DiscoverySort =
   | 'recent'
@@ -27,6 +28,7 @@ export type DiscoveryFilters = {
   region: string
   year: string
   minRating: string
+  libraryId?: number
   watchedState: 'all' | 'unwatched' | 'in_progress' | 'watched'
   organizingState: 'all' | 'organized' | 'unorganized'
   sort: DiscoverySort
@@ -37,6 +39,9 @@ type Props = {
   filters: DiscoveryFilters
   showSearch?: boolean
   showType?: boolean
+  showLibrary?: boolean
+  libraryOptions?: Library[]
+  libraryOptionsLoading?: boolean
   showOrganizingState?: boolean
   onChange: (next: DiscoveryFilters) => void
 }
@@ -45,6 +50,9 @@ export function DiscoveryControls({
   filters,
   showSearch = true,
   showType = true,
+  showLibrary = false,
+  libraryOptions = [],
+  libraryOptionsLoading = false,
   showOrganizingState = false,
   onChange,
 }: Props) {
@@ -80,6 +88,37 @@ export function DiscoveryControls({
             <NativeSelectOption value='all'>全部类型</NativeSelectOption>
             <NativeSelectOption value='movie'>电影</NativeSelectOption>
             <NativeSelectOption value='show'>剧集</NativeSelectOption>
+          </NativeSelect>
+        </Field>
+      ) : null}
+      {showLibrary ? (
+        <Field>
+          <FieldLabel htmlFor='library-source'>媒体库</FieldLabel>
+          <NativeSelect
+            id='library-source'
+            value={filters.libraryId ? String(filters.libraryId) : 'all'}
+            disabled={libraryOptionsLoading}
+            onChange={(event) => {
+              const nextLibraryId = Number.parseInt(event.target.value, 10)
+
+              onChange({
+                ...filters,
+                libraryId:
+                  Number.isFinite(nextLibraryId) && nextLibraryId > 0
+                    ? nextLibraryId
+                    : undefined,
+              })
+            }}
+            className='w-full'
+          >
+            <NativeSelectOption value='all'>
+              {libraryOptionsLoading ? '正在加载媒体库' : '全部媒体库'}
+            </NativeSelectOption>
+            {libraryOptions.map((library) => (
+              <NativeSelectOption key={library.id} value={String(library.id)}>
+                {library.name}
+              </NativeSelectOption>
+            ))}
           </NativeSelect>
         </Field>
       ) : null}
@@ -243,6 +282,7 @@ export function createDefaultDiscoveryFilters(
     region: initial?.region ?? '',
     year: initial?.year ?? '',
     minRating: initial?.minRating ?? '',
+    libraryId: initial?.libraryId,
     watchedState: initial?.watchedState ?? 'all',
     organizingState: initial?.organizingState ?? 'all',
     sort: initial?.sort ?? 'recent',
