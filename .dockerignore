@@ -2,6 +2,8 @@
 .opencode
 .agents
 OpenList
+Mibo-Docs
+demo-media
 node_modules
 dist
 build
