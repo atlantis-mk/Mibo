@@ -82,6 +82,15 @@ export default function ConsolePage({
     refetchInterval: isRestarting ? 3000 : false,
     retry: isRestarting ? 10 : undefined,
   })
+  const summary = summaryQuery.data
+  const restartAction =
+    summary?.quick_actions?.find((action) => action.id === 'restart') ?? null
+  const prepareUpdateAction =
+    summary?.quick_actions?.find((action) => action.id === 'prepare-update') ??
+    null
+  const applyUpdateAction =
+    summary?.quick_actions?.find((action) => action.id === 'apply-update') ??
+    null
   const actionMutation = useMutation({
     mutationFn: (action: ConsoleQuickAction) =>
       createAuthedMiboApi(queryToken).runConsoleAction(action.id),
@@ -100,6 +109,11 @@ export default function ConsolePage({
         await queryClient.invalidateQueries({
           queryKey: miboQueryKeys.consoleSummary(queryToken),
         })
+        if (applyUpdateAction) {
+          setPendingAction(applyUpdateAction)
+        } else {
+          toast.info('更新已暂存，请在版本更新卡片中点击“应用更新”。')
+        }
         return
       }
       if (action.id === 'apply-update') {
@@ -116,15 +130,6 @@ export default function ConsolePage({
     },
     onError: (error: Error) => toast.error(error.message),
   })
-  const summary = summaryQuery.data
-  const restartAction =
-    summary?.quick_actions?.find((action) => action.id === 'restart') ?? null
-  const prepareUpdateAction =
-    summary?.quick_actions?.find((action) => action.id === 'prepare-update') ??
-    null
-  const applyUpdateAction =
-    summary?.quick_actions?.find((action) => action.id === 'apply-update') ??
-    null
 
   useEffect(() => {
     if (!isRestarting || !summaryQuery.isSuccess) {
