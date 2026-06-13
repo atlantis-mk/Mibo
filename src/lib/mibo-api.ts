@@ -298,12 +298,32 @@ export type ConsoleStatus =
   | 'unavailable'
   | 'not_configured'
 
+export type ConsoleUpdateStatus =
+  | 'disabled'
+  | 'unknown'
+  | 'up_to_date'
+  | 'update_available'
+  | 'check_failed'
+
+export type ConsoleUpdateSummary = {
+  status: ConsoleUpdateStatus
+  current_version: string
+  latest_version?: string
+  release_url?: string
+  download_url?: string
+  asset_name?: string
+  checked_at?: string
+  message?: string
+  staged?: ConsolePrepareUpdateResult
+}
+
 export type ConsoleServerSummary = {
   name: string
   service: string
   status: ConsoleStatus
   version: string
-  update_status: string
+  update_status: ConsoleUpdateStatus
+  update: ConsoleUpdateSummary
   api_address: string
   port: number
   uptime_seconds: number
@@ -459,6 +479,29 @@ export type ConsoleActionResult = Record<string, unknown>
 
 export type ConsoleRestartActionResult = {
   status: 'restarting'
+  message: string
+}
+
+export type ConsolePrepareUpdateResult = {
+  status: 'staged'
+  current_version: string
+  latest_version: string
+  asset_name: string
+  download_url: string
+  staged_directory: string
+  staged_binary: string
+  sha256: string
+  message: string
+}
+
+export type ConsoleApplyUpdateResult = {
+  status: 'applied'
+  previous_binary: string
+  backup_binary: string
+  applied_binary: string
+  latest_version: string
+  sha256: string
+  restart_required: boolean
   message: string
 }
 
@@ -3206,18 +3249,22 @@ export function createMiboApi(options: ApiOptions) {
     runConsoleAction(actionId: string) {
       const actionEndpoints: Record<string, string> = {
         'scan-libraries': '/api/v1/admin/console/actions/scan-libraries',
+        'prepare-update': '/api/v1/admin/console/actions/prepare-update',
+        'apply-update': '/api/v1/admin/console/actions/apply-update',
         restart: '/api/v1/admin/console/actions/restart',
       }
       const endpoint = actionEndpoints[actionId]
       if (!endpoint) {
         throw new Error('unsupported console action')
       }
-      return request<ConsoleActionResult | ConsoleRestartActionResult>(
-        endpoint,
-        {
-          method: 'POST',
-        }
-      )
+      return request<
+        | ConsoleActionResult
+        | ConsoleApplyUpdateResult
+        | ConsolePrepareUpdateResult
+        | ConsoleRestartActionResult
+      >(endpoint, {
+        method: 'POST',
+      })
     },
     listAdminLogs() {
       return request<AdminLogFile[]>('/api/v1/admin/logs')

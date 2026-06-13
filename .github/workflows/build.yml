@@ -157,9 +157,21 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -eu
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then
+            version="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "$version" ]; then
+            version="${GITHUB_SHA}"
+          fi
+          version="${version#v}"
+          commit="${GITHUB_SHA}"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           mkdir -p build/package
           cd mibo-server
-          go build -trimpath -ldflags="-s -w" -o "../build/package/${{ matrix.binary }}" ./cmd/mibo-media-server
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/atlan/mibo-media-server/internal/version.Version=${version} -X github.com/atlan/mibo-media-server/internal/version.Commit=${commit} -X github.com/atlan/mibo-media-server/internal/version.Date=${built_at}" \
+            -o "../build/package/${{ matrix.binary }}" ./cmd/mibo-media-server
 
       - name: Package archive
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'All' || inputs.target == matrix.family }}

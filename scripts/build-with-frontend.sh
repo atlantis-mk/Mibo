@@ -28,6 +28,12 @@ fi
 
 printf 'Building backend binary...\n'
 mkdir -p "$(dirname -- "$OUTPUT_PATH")"
-(cd "$SERVER_DIR" && go build -o "$OUTPUT_PATH" ./cmd/mibo-media-server)
+version="${MIBO_VERSION:-$(git -C "$ROOT_DIR" describe --tags --always 2>/dev/null || printf dev)}"
+version="${version#v}"
+commit="${MIBO_COMMIT:-$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf unknown)}"
+built_at="${MIBO_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+(cd "$SERVER_DIR" && go build \
+	-ldflags="-X github.com/atlan/mibo-media-server/internal/version.Version=${version} -X github.com/atlan/mibo-media-server/internal/version.Commit=${commit} -X github.com/atlan/mibo-media-server/internal/version.Date=${built_at}" \
+	-o "$OUTPUT_PATH" ./cmd/mibo-media-server)
 
 printf 'Built %s\n' "$OUTPUT_PATH"
