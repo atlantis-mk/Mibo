@@ -98,6 +98,9 @@ export default function ConsolePage({
   const applyUpdateAction =
     summary?.quick_actions?.find((action) => action.id === 'apply-update') ??
     null
+  const refreshUpdateAction =
+    summary?.quick_actions?.find((action) => action.id === 'refresh-update') ??
+    null
   const actionMutation = useMutation({
     mutationFn: (action: ConsoleQuickAction) =>
       createAuthedMiboApi(queryToken).runConsoleAction(action.id),
@@ -107,6 +110,13 @@ export default function ConsolePage({
         setIsRestarting(true)
         setPendingAction(null)
         toast.success(restartResult.message)
+        return
+      }
+      if (action.id === 'refresh-update') {
+        await queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.consoleSummary(queryToken),
+        })
+        toast.success('更新状态已重新检查')
         return
       }
       if (action.id === 'prepare-update') {
@@ -308,6 +318,7 @@ export default function ConsolePage({
               summary={summary}
               username={user?.username}
               restartAction={restartAction}
+              refreshUpdateAction={refreshUpdateAction}
               prepareUpdateAction={prepareUpdateAction}
               applyUpdateAction={applyUpdateAction}
               onRunAction={runAction}
@@ -322,6 +333,7 @@ export default function ConsolePage({
               actions={(summary.quick_actions ?? []).filter(
                 (action) =>
                   action.id !== 'restart' &&
+                  action.id !== 'refresh-update' &&
                   action.id !== 'prepare-update' &&
                   action.id !== 'apply-update'
               )}
@@ -396,6 +408,9 @@ function confirmDialogDescription(
   if (action.id === 'restart') {
     return '服务器会优雅关闭当前实例并重新启动。执行后前端连接会短暂中断，控制台会自动尝试恢复。'
   }
+  if (action.id === 'refresh-update') {
+    return '将跳过本地缓存并重新请求 GitHub Release，刷新当前版本更新状态。'
+  }
   if (action.id === 'apply-update') {
     return '将备份当前二进制、用已暂存的新版本替换它，并启动更新 helper 在当前进程退出后自动拉起新版本。'
   }
@@ -410,6 +425,7 @@ function ConsoleHero({
   summary,
   username,
   restartAction,
+  refreshUpdateAction,
   prepareUpdateAction,
   applyUpdateAction,
   onRunAction,
@@ -418,6 +434,7 @@ function ConsoleHero({
   summary: ConsoleSummary
   username?: string
   restartAction: ConsoleQuickAction | null
+  refreshUpdateAction: ConsoleQuickAction | null
   prepareUpdateAction: ConsoleQuickAction | null
   applyUpdateAction: ConsoleQuickAction | null
   onRunAction: (action: ConsoleQuickAction) => void
@@ -556,6 +573,7 @@ function ConsoleHero({
 
           <UpdateCard
             summary={summary}
+            refreshUpdateAction={refreshUpdateAction}
             prepareUpdateAction={prepareUpdateAction}
             applyUpdateAction={applyUpdateAction}
             onRunAction={onRunAction}
@@ -595,12 +613,14 @@ function ConsoleHero({
 
 function UpdateCard({
   summary,
+  refreshUpdateAction,
   prepareUpdateAction,
   applyUpdateAction,
   onRunAction,
   isActionRunning,
 }: {
   summary: ConsoleSummary
+  refreshUpdateAction: ConsoleQuickAction | null
   prepareUpdateAction: ConsoleQuickAction | null
   applyUpdateAction: ConsoleQuickAction | null
   onRunAction: (action: ConsoleQuickAction) => void
@@ -620,6 +640,8 @@ function UpdateCard({
     !!update?.staged &&
     !!applyUpdateAction &&
     !applyUpdateAction.disabled
+  const canRefreshUpdate =
+    !!refreshUpdateAction && !refreshUpdateAction.disabled
 
   return (
     <div className='rounded-xl border border-border/60 bg-background/60 px-4 py-3'>
@@ -636,35 +658,46 @@ function UpdateCard({
             {detail}
           </p>
         </div>
-        {canApplyUpdate ? (
-          <Button
-            type='button'
-            size='xs'
-            variant='outline'
-            className='self-start'
-            disabled={isActionRunning}
-            onClick={() => onRunAction(applyUpdateAction)}
-          >
-            应用更新
-          </Button>
-        ) : canPrepareUpdate ? (
-          <Button
-            type='button'
-            size='xs'
-            variant='outline'
-            className='self-start'
-            disabled={isActionRunning}
-            onClick={() => onRunAction(prepareUpdateAction)}
-          >
-            准备更新
-          </Button>
-        ) : actionUrl ? (
-          <Button asChild size='xs' variant='outline' className='self-start'>
-            <a href={actionUrl} target='_blank' rel='noreferrer'>
-              查看 Release
-            </a>
-          </Button>
-        ) : null}
+        <div className='flex flex-wrap gap-2 self-start sm:justify-end'>
+          {canRefreshUpdate ? (
+            <Button
+              type='button'
+              size='xs'
+              variant='outline'
+              disabled={isActionRunning}
+              onClick={() => onRunAction(refreshUpdateAction)}
+            >
+              重新检查
+            </Button>
+          ) : null}
+          {canApplyUpdate ? (
+            <Button
+              type='button'
+              size='xs'
+              variant='outline'
+              disabled={isActionRunning}
+              onClick={() => onRunAction(applyUpdateAction)}
+            >
+              应用更新
+            </Button>
+          ) : canPrepareUpdate ? (
+            <Button
+              type='button'
+              size='xs'
+              variant='outline'
+              disabled={isActionRunning}
+              onClick={() => onRunAction(prepareUpdateAction)}
+            >
+              准备更新
+            </Button>
+          ) : actionUrl ? (
+            <Button asChild size='xs' variant='outline'>
+              <a href={actionUrl} target='_blank' rel='noreferrer'>
+                查看 Release
+              </a>
+            </Button>
+          ) : null}
+        </div>
       </div>
     </div>
   )

@@ -3251,6 +3251,7 @@ export function createMiboApi(options: ApiOptions) {
     runConsoleAction(actionId: string) {
       const actionEndpoints: Record<string, string> = {
         'scan-libraries': '/api/v1/admin/console/actions/scan-libraries',
+        'refresh-update': '/api/v1/admin/console/actions/refresh-update',
         'prepare-update': '/api/v1/admin/console/actions/prepare-update',
         'apply-update': '/api/v1/admin/console/actions/apply-update',
         restart: '/api/v1/admin/console/actions/restart',
