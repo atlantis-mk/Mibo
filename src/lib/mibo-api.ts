@@ -502,6 +502,8 @@ export type ConsoleApplyUpdateResult = {
   latest_version: string
   sha256: string
   restart_required: boolean
+  restart_scheduled: boolean
+  restart_helper_pid?: number
   message: string
 }
 

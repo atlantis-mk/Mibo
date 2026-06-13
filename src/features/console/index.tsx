@@ -56,6 +56,11 @@ const consoleRouteTargets = [
 
 type ConsoleRouteTarget = (typeof consoleRouteTargets)[number]
 
+type PendingConsoleAction = {
+  action: ConsoleQuickAction
+  reason?: 'manual' | 'update_available' | 'staged_update'
+}
+
 function isConsoleRouteTarget(route: string): route is ConsoleRouteTarget {
   return (consoleRouteTargets as readonly string[]).includes(route)
 }
@@ -72,7 +77,9 @@ export default function ConsolePage({
   const queryToken = token ?? 'guest'
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [pendingAction, setPendingAction] = useState<ConsoleQuickAction | null>(
+  const [pendingAction, setPendingAction] =
+    useState<PendingConsoleAction | null>(null)
+  const [promptedUpdateKey, setPromptedUpdateKey] = useState<string | null>(
     null
   )
   const [isRestarting, setIsRestarting] = useState(false)
@@ -110,7 +117,10 @@ export default function ConsolePage({
           queryKey: miboQueryKeys.consoleSummary(queryToken),
         })
         if (applyUpdateAction) {
-          setPendingAction(applyUpdateAction)
+          setPendingAction({
+            action: applyUpdateAction,
+            reason: 'staged_update',
+          })
         } else {
           toast.info('更新已暂存，请在版本更新卡片中点击“应用更新”。')
         }
@@ -118,7 +128,7 @@ export default function ConsolePage({
       }
       if (action.id === 'apply-update') {
         const updateResult = result as ConsoleApplyUpdateResult
-        setIsRestarting(updateResult.restart_required)
+        setIsRestarting(updateResult.restart_scheduled)
         setPendingAction(null)
         toast.success(updateResult.message)
         return
@@ -139,6 +149,49 @@ export default function ConsolePage({
     toast.success('服务器已重新连通')
   }, [isRestarting, summaryQuery.isSuccess])
 
+  useEffect(() => {
+    if (
+      !summary ||
+      pendingAction ||
+      actionMutation.isPending ||
+      isRestarting ||
+      summary.server.update_status !== 'update_available' ||
+      summary.server.update?.staged ||
+      !prepareUpdateAction ||
+      prepareUpdateAction.disabled
+    ) {
+      return
+    }
+
+    const currentVersion =
+      summary.server.update?.current_version || summary.server.version
+    const latestVersion = summary.server.update?.latest_version
+    const updateKey = [
+      currentVersion,
+      latestVersion,
+      summary.server.update?.asset_name,
+    ]
+      .filter(Boolean)
+      .join('->')
+
+    if (!updateKey || promptedUpdateKey === updateKey) {
+      return
+    }
+
+    setPromptedUpdateKey(updateKey)
+    setPendingAction({
+      action: prepareUpdateAction,
+      reason: 'update_available',
+    })
+  }, [
+    actionMutation.isPending,
+    isRestarting,
+    pendingAction,
+    prepareUpdateAction,
+    promptedUpdateKey,
+    summary,
+  ])
+
   const runAction = (action: ConsoleQuickAction) => {
     if (action.disabled) return
     if (action.kind === 'route' && action.route) {
@@ -151,11 +204,13 @@ export default function ConsolePage({
     }
     if (action.kind !== 'mutation') return
     if (action.confirm) {
-      setPendingAction(action)
+      setPendingAction({ action, reason: 'manual' })
       return
     }
     actionMutation.mutate(action)
   }
+
+  const pendingConsoleAction = pendingAction?.action ?? null
 
   return (
     <div
@@ -283,33 +338,72 @@ export default function ConsolePage({
             setPendingAction(null)
           }
         }}
-        title={pendingAction?.label ?? '确认执行'}
-        desc={
-          pendingAction?.id === 'restart'
-            ? '服务器会优雅关闭当前实例并重新启动。执行后前端连接会短暂中断，控制台会自动尝试恢复。'
-            : pendingAction?.id === 'apply-update'
-              ? '将备份当前二进制、用已暂存的新版本替换它，然后退出当前进程等待重新启动。'
-              : pendingAction?.id === 'prepare-update'
-                ? '将从 GitHub Release 下载匹配当前平台的新版本，校验后暂存到更新目录。'
-                : `确认执行“${pendingAction?.label ?? ''}”？`
-        }
+        title={confirmDialogTitle(pendingAction)}
+        desc={confirmDialogDescription(pendingAction, summary)}
         confirmText={
-          pendingAction?.id === 'restart'
+          pendingConsoleAction?.id === 'restart'
             ? '立即重启'
-            : pendingAction?.id === 'apply-update'
+            : pendingConsoleAction?.id === 'apply-update'
               ? '应用并退出'
-              : '继续'
+              : pendingAction?.reason === 'update_available'
+                ? '下载更新'
+                : '继续'
         }
         cancelBtnText='取消'
-        destructive={pendingAction?.risk === 'danger'}
+        destructive={pendingConsoleAction?.risk === 'danger'}
         isLoading={actionMutation.isPending}
         handleConfirm={() => {
-          if (!pendingAction) return
-          actionMutation.mutate(pendingAction)
+          if (!pendingConsoleAction) return
+          actionMutation.mutate(pendingConsoleAction)
         }}
       />
     </div>
   )
+}
+
+function confirmDialogTitle(pendingAction: PendingConsoleAction | null) {
+  if (pendingAction?.reason === 'update_available') {
+    return '发现新版本'
+  }
+  if (pendingAction?.reason === 'staged_update') {
+    return '更新已下载'
+  }
+  return pendingAction?.action.label ?? '确认执行'
+}
+
+function confirmDialogDescription(
+  pendingAction: PendingConsoleAction | null,
+  summary?: ConsoleSummary
+) {
+  const action = pendingAction?.action
+
+  if (pendingAction?.reason === 'update_available' && summary) {
+    const update = summary.server.update
+    const current =
+      update?.current_version || summary.server.version || '未知版本'
+    const latest = update?.latest_version || '未知版本'
+    return `当前 ${current}，发现新版本 ${latest}。确认后会从 GitHub Release 下载当前平台的发布资产并暂存，下载完成后再提示你应用更新。`
+  }
+
+  if (pendingAction?.reason === 'staged_update') {
+    return '新版本已下载并校验完成。应用更新会备份当前二进制、替换为已暂存的新版本，并启动更新 helper 在当前进程退出后自动拉起新版本。'
+  }
+
+  if (!action) {
+    return '确认执行该操作？'
+  }
+
+  if (action.id === 'restart') {
+    return '服务器会优雅关闭当前实例并重新启动。执行后前端连接会短暂中断，控制台会自动尝试恢复。'
+  }
+  if (action.id === 'apply-update') {
+    return '将备份当前二进制、用已暂存的新版本替换它，并启动更新 helper 在当前进程退出后自动拉起新版本。'
+  }
+  if (action.id === 'prepare-update') {
+    return '将从 GitHub Release 下载匹配当前平台的新版本，校验后暂存到更新目录。'
+  }
+
+  return `确认执行“${action.label}”？`
 }
 
 function ConsoleHero({
@@ -1102,7 +1196,7 @@ function updateDetail(summary: ConsoleSummary) {
 
   if (summary.server.update_status === 'update_available') {
     if (update?.staged) {
-      return `新版本 ${latest} 已暂存到 ${update.staged.staged_directory}。应用更新会备份当前二进制并退出当前进程，重新启动后加载新版本。`
+      return `新版本 ${latest} 已暂存到 ${update.staged.staged_directory}。应用更新会备份当前二进制，并启动更新 helper 在当前进程退出后自动拉起新版本。`
     }
     return `当前 ${current}，最新 ${latest}。${update?.asset_name ? `匹配资产：${update.asset_name}` : '未找到当前平台的发布资产，可查看 Release 页面。'}`
   }
