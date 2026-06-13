@@ -21,11 +21,14 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import {
   type ConsoleActivityEvent,
+  type ConsoleApplyUpdateResult,
   type ConsoleModuleStatus,
+  type ConsolePrepareUpdateResult,
   type ConsoleQuickAction,
   type ConsoleRestartActionResult,
   type ConsoleStatus,
   type ConsoleSummary,
+  type ConsoleUpdateStatus,
 } from '@/lib/mibo-api'
 import {
   consoleSummaryQueryOptions,
@@ -90,6 +93,22 @@ export default function ConsolePage({
         toast.success(restartResult.message)
         return
       }
+      if (action.id === 'prepare-update') {
+        const updateResult = result as ConsolePrepareUpdateResult
+        setPendingAction(null)
+        toast.success(updateResult.message)
+        await queryClient.invalidateQueries({
+          queryKey: miboQueryKeys.consoleSummary(queryToken),
+        })
+        return
+      }
+      if (action.id === 'apply-update') {
+        const updateResult = result as ConsoleApplyUpdateResult
+        setIsRestarting(updateResult.restart_required)
+        setPendingAction(null)
+        toast.success(updateResult.message)
+        return
+      }
       toast.success(`${action.label} 已完成`)
       await queryClient.invalidateQueries({
         queryKey: miboQueryKeys.consoleSummary(queryToken),
@@ -100,6 +119,12 @@ export default function ConsolePage({
   const summary = summaryQuery.data
   const restartAction =
     summary?.quick_actions?.find((action) => action.id === 'restart') ?? null
+  const prepareUpdateAction =
+    summary?.quick_actions?.find((action) => action.id === 'prepare-update') ??
+    null
+  const applyUpdateAction =
+    summary?.quick_actions?.find((action) => action.id === 'apply-update') ??
+    null
 
   useEffect(() => {
     if (!isRestarting || !summaryQuery.isSuccess) {
@@ -223,6 +248,8 @@ export default function ConsolePage({
               summary={summary}
               username={user?.username}
               restartAction={restartAction}
+              prepareUpdateAction={prepareUpdateAction}
+              applyUpdateAction={applyUpdateAction}
               onRunAction={runAction}
               isActionRunning={actionMutation.isPending || isRestarting}
             />
@@ -233,7 +260,10 @@ export default function ConsolePage({
             </section>
             <QuickActions
               actions={(summary.quick_actions ?? []).filter(
-                (action) => action.id !== 'restart'
+                (action) =>
+                  action.id !== 'restart' &&
+                  action.id !== 'prepare-update' &&
+                  action.id !== 'apply-update'
               )}
               isRunning={actionMutation.isPending}
               onRun={runAction}
@@ -252,9 +282,19 @@ export default function ConsolePage({
         desc={
           pendingAction?.id === 'restart'
             ? '服务器会优雅关闭当前实例并重新启动。执行后前端连接会短暂中断，控制台会自动尝试恢复。'
-            : `确认执行“${pendingAction?.label ?? ''}”？`
+            : pendingAction?.id === 'apply-update'
+              ? '将备份当前二进制、用已暂存的新版本替换它，并重启服务器。'
+              : pendingAction?.id === 'prepare-update'
+                ? '将从 GitHub Release 下载匹配当前平台的新版本，校验后暂存到更新目录。'
+                : `确认执行“${pendingAction?.label ?? ''}”？`
         }
-        confirmText={pendingAction?.id === 'restart' ? '立即重启' : '继续'}
+        confirmText={
+          pendingAction?.id === 'restart'
+            ? '立即重启'
+            : pendingAction?.id === 'apply-update'
+              ? '应用并重启'
+              : '继续'
+        }
         cancelBtnText='取消'
         destructive={pendingAction?.risk === 'danger'}
         isLoading={actionMutation.isPending}
@@ -271,12 +311,16 @@ function ConsoleHero({
   summary,
   username,
   restartAction,
+  prepareUpdateAction,
+  applyUpdateAction,
   onRunAction,
   isActionRunning,
 }: {
   summary: ConsoleSummary
   username?: string
   restartAction: ConsoleQuickAction | null
+  prepareUpdateAction: ConsoleQuickAction | null
+  applyUpdateAction: ConsoleQuickAction | null
   onRunAction: (action: ConsoleQuickAction) => void
   isActionRunning: boolean
 }) {
@@ -411,6 +455,14 @@ function ConsoleHero({
             </div>
           </div>
 
+          <UpdateCard
+            summary={summary}
+            prepareUpdateAction={prepareUpdateAction}
+            applyUpdateAction={applyUpdateAction}
+            onRunAction={onRunAction}
+            isActionRunning={isActionRunning}
+          />
+
           <div className='grid gap-2'>
             <h3 className='text-sm font-medium'>接入地址</h3>
             {accessAddresses.length === 0 ? (
@@ -439,6 +491,83 @@ function ConsoleHero({
         </CardContent>
       </Card>
     </section>
+  )
+}
+
+function UpdateCard({
+  summary,
+  prepareUpdateAction,
+  applyUpdateAction,
+  onRunAction,
+  isActionRunning,
+}: {
+  summary: ConsoleSummary
+  prepareUpdateAction: ConsoleQuickAction | null
+  applyUpdateAction: ConsoleQuickAction | null
+  onRunAction: (action: ConsoleQuickAction) => void
+  isActionRunning: boolean
+}) {
+  const update = summary.server.update
+  const actionUrl = update?.release_url
+  const title = updateTitle(summary.server.update_status)
+  const detail = updateDetail(summary)
+  const canPrepareUpdate =
+    summary.server.update_status === 'update_available' &&
+    !update?.staged &&
+    !!prepareUpdateAction &&
+    !prepareUpdateAction.disabled
+  const canApplyUpdate =
+    summary.server.update_status === 'update_available' &&
+    !!update?.staged &&
+    !!applyUpdateAction &&
+    !applyUpdateAction.disabled
+
+  return (
+    <div className='rounded-xl border border-border/60 bg-background/60 px-4 py-3'>
+      <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='min-w-0'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <p className='text-xs tracking-[0.14em] text-muted-foreground uppercase'>
+              版本更新
+            </p>
+            <UpdateStatusPill status={summary.server.update_status} />
+          </div>
+          <p className='mt-1 text-sm font-medium'>{title}</p>
+          <p className='mt-1 text-xs break-words text-muted-foreground'>
+            {detail}
+          </p>
+        </div>
+        {canApplyUpdate ? (
+          <Button
+            type='button'
+            size='xs'
+            variant='outline'
+            className='self-start'
+            disabled={isActionRunning}
+            onClick={() => onRunAction(applyUpdateAction)}
+          >
+            应用更新
+          </Button>
+        ) : canPrepareUpdate ? (
+          <Button
+            type='button'
+            size='xs'
+            variant='outline'
+            className='self-start'
+            disabled={isActionRunning}
+            onClick={() => onRunAction(prepareUpdateAction)}
+          >
+            准备更新
+          </Button>
+        ) : actionUrl ? (
+          <Button asChild size='xs' variant='outline' className='self-start'>
+            <a href={actionUrl} target='_blank' rel='noreferrer'>
+              查看 Release
+            </a>
+          </Button>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -838,6 +967,19 @@ function StatusPill({ status }: { status: ConsoleStatus | 'available' }) {
   )
 }
 
+function UpdateStatusPill({ status }: { status: ConsoleUpdateStatus }) {
+  return (
+    <span
+      className={cn(
+        'rounded-full px-2.5 py-1 text-[10px] font-medium whitespace-nowrap',
+        updateStatusClass(status)
+      )}
+    >
+      {updateStatusLabel(status)}
+    </span>
+  )
+}
+
 function SeverityIcon({
   severity,
 }: {
@@ -896,6 +1038,19 @@ function statusClass(status: string) {
   return 'bg-muted text-muted-foreground'
 }
 
+function updateStatusClass(status: ConsoleUpdateStatus) {
+  if (status === 'up_to_date') {
+    return 'bg-primary/10 text-primary'
+  }
+  if (status === 'update_available') {
+    return 'bg-amber-500/15 text-amber-200'
+  }
+  if (status === 'check_failed') {
+    return 'bg-destructive/10 text-destructive'
+  }
+  return 'bg-muted text-muted-foreground'
+}
+
 function statusLabel(status: string) {
   const labels: Record<string, string> = {
     ok: '正常',
@@ -908,6 +1063,54 @@ function statusLabel(status: string) {
   }
 
   return labels[status] ?? status
+}
+
+function updateStatusLabel(status: ConsoleUpdateStatus) {
+  const labels: Record<ConsoleUpdateStatus, string> = {
+    disabled: '未启用',
+    unknown: '未知',
+    up_to_date: '已是最新',
+    update_available: '有更新',
+    check_failed: '检查失败',
+  }
+
+  return labels[status] ?? status
+}
+
+function updateTitle(status: ConsoleUpdateStatus) {
+  const titles: Record<ConsoleUpdateStatus, string> = {
+    disabled: '更新检查未启用',
+    unknown: '暂时无法判断更新状态',
+    up_to_date: '当前版本已是最新',
+    update_available: '发现可用新版本',
+    check_failed: '更新检查失败',
+  }
+
+  return titles[status] ?? '更新状态未知'
+}
+
+function updateDetail(summary: ConsoleSummary) {
+  const update = summary.server.update
+  const current =
+    update?.current_version || summary.server.version || '未知版本'
+  const latest = update?.latest_version || '未知版本'
+
+  if (summary.server.update_status === 'update_available') {
+    if (update?.staged) {
+      return `新版本 ${latest} 已暂存到 ${update.staged.staged_directory}。应用更新会备份当前二进制并重启服务。`
+    }
+    return `当前 ${current}，最新 ${latest}。${update?.asset_name ? `匹配资产：${update.asset_name}` : '未找到当前平台的发布资产，可查看 Release 页面。'}`
+  }
+  if (summary.server.update_status === 'up_to_date') {
+    return `当前 ${current}，最新 ${latest}。`
+  }
+  if (summary.server.update_status === 'check_failed') {
+    return update?.message || '无法连接 GitHub Release 服务。'
+  }
+  if (summary.server.update_status === 'disabled') {
+    return '可通过服务端环境变量重新启用更新检查。'
+  }
+  return update?.message || `当前 ${current}，最新版本暂不可用。`
 }
 
 function formatDuration(seconds: number) {
