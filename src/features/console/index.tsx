@@ -283,7 +283,7 @@ export default function ConsolePage({
           pendingAction?.id === 'restart'
             ? '服务器会优雅关闭当前实例并重新启动。执行后前端连接会短暂中断，控制台会自动尝试恢复。'
             : pendingAction?.id === 'apply-update'
-              ? '将备份当前二进制、用已暂存的新版本替换它，并重启服务器。'
+              ? '将备份当前二进制、用已暂存的新版本替换它，然后退出当前进程等待重新启动。'
               : pendingAction?.id === 'prepare-update'
                 ? '将从 GitHub Release 下载匹配当前平台的新版本，校验后暂存到更新目录。'
                 : `确认执行“${pendingAction?.label ?? ''}”？`
@@ -292,7 +292,7 @@ export default function ConsolePage({
           pendingAction?.id === 'restart'
             ? '立即重启'
             : pendingAction?.id === 'apply-update'
-              ? '应用并重启'
+              ? '应用并退出'
               : '继续'
         }
         cancelBtnText='取消'
@@ -1097,7 +1097,7 @@ function updateDetail(summary: ConsoleSummary) {
 
   if (summary.server.update_status === 'update_available') {
     if (update?.staged) {
-      return `新版本 ${latest} 已暂存到 ${update.staged.staged_directory}。应用更新会备份当前二进制并重启服务。`
+      return `新版本 ${latest} 已暂存到 ${update.staged.staged_directory}。应用更新会备份当前二进制并退出当前进程，重新启动后加载新版本。`
     }
     return `当前 ${current}，最新 ${latest}。${update?.asset_name ? `匹配资产：${update.asset_name}` : '未找到当前平台的发布资产，可查看 Release 页面。'}`
   }
